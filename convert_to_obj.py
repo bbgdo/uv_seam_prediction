@@ -23,7 +23,7 @@ def reset_scene():
     bpy.ops.object.delete()
 
     for collection in [bpy.data.meshes, bpy.data.materials, bpy.data.textures, bpy.data.images, bpy.data.armatures,
-                       bpy.data.libraries]:
+                       bpy.data.libraries, bpy.data.lights, bpy.data.cameras]:
         for item in collection:
             try:
                 collection.remove(item)
@@ -155,6 +155,10 @@ def process_directory(input_path_arg):
         if import_file(full_path):
             bpy.ops.object.select_all(action='SELECT')
 
+            for obj in bpy.context.selected_objects:
+                if obj.type != 'MESH':
+                    obj.select_set(False)
+
             if bpy.context.selected_objects:
                 target_file = f"{filename_only}.obj"
                 out_path = get_unique_filepath(output_dir, target_file)
@@ -167,7 +171,7 @@ def process_directory(input_path_arg):
                     print(f"FAIL (Export): {e}")
                     fail_count += 1
             else:
-                print("FAIL (Empty scene)")
+                print("FAIL (No meshes found)")
                 fail_count += 1
         else:
             print("FAIL (Import)")
@@ -179,7 +183,6 @@ def process_directory(input_path_arg):
     print(f"Failed: {fail_count}")
 
 
-# blender -b --factory-startup -P convert_to_obj.py -- "D:\диплом4ік\BENCHMARKDATASET_mesh_files\Mesh_Files_Cleaned" > convert_to_obj_logs.txt
 if __name__ == "__main__":
     argv = sys.argv
     if "--" in argv:
