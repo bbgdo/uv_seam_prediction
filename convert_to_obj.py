@@ -182,7 +182,7 @@ def process_directory(input_path_arg):
     print(f"Copied (already OBJ): {copied_count}")
     print(f"Failed: {fail_count}")
 
-
+# blender -b --factory-startup -P convert_to_obj.py -- "D:\диплом4ік\BENCHMARKDATASET_mesh_files\Mesh_Files_Cleaned" > convert_to_obj_logs.txt
 if __name__ == "__main__":
     argv = sys.argv
     if "--" in argv:
