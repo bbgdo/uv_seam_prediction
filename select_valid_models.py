@@ -27,11 +27,11 @@ def clean_directory(target_folder, whitelist_file):
             if filename not in valid_files:
                 try:
                     os.remove(file_path)
-                    print(f"Видалено: {filename}")
+                    print(f"Removed: {filename}")
                 except Exception as e:
-                    print(f"Не вдалося видалити {filename}: {e}")
+                    print(f"Failed to remove {filename}: {e}")
             else:
-                print(f"Збережено: {filename}")
+                print(f"Kept: {filename}")
 
 
 if __name__ == "__main__":
