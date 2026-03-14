@@ -18,7 +18,7 @@ def clean_directory(target_folder, whitelist_file):
         print(f"Error: Dir {target_folder} is not found!")
         return
 
-    print(f"Staring to clear dir: {target_folder}")
+    print(f"Clearing: {target_folder}")
 
     for filename in os.listdir(folder_path):
         file_path = os.path.join(folder_path, filename)

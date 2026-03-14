@@ -45,7 +45,7 @@ def import_file(filepath):
     ext = os.path.splitext(filepath)[1].lower()
 
     if not os.path.exists(filepath):
-        print(f"!!! CRITICAL: File is not located: {filepath}")
+        print(f"CRITICAL: file not found: {filepath}")
         return False
 
     try:
@@ -67,18 +67,17 @@ def import_file(filepath):
                     found_objects = True
 
             if not found_objects:
-                print(f"!!! Alert: File {filepath} has no objects to import.")
+                print(f"WARN: no objects in {filepath}")
                 return False
         else:
             return False
         return True
     except Exception as e:
-        print(f"!!! Failed to import {os.path.basename(filepath)}: {e}")
+        print(f"FAIL: import {os.path.basename(filepath)}: {e}")
         return False
 
 
 def export_obj_modern(out_path):
-    # export blender > 4.0
     try:
         bpy.ops.wm.obj_export(
             filepath=out_path,
@@ -92,7 +91,7 @@ def export_obj_modern(out_path):
             up_axis='Y'
         )
     except AttributeError:
-        # export blender < 4.0
+        # legacy API (< 4.0)
         bpy.ops.export_scene.obj(
             filepath=out_path,
             **EXPORT_CONFIG
@@ -182,7 +181,8 @@ def process_directory(input_path_arg):
     print(f"Copied (already OBJ): {copied_count}")
     print(f"Failed: {fail_count}")
 
-# blender -b --factory-startup -P convert_to_obj.py -- "D:\диплом4ік\BENCHMARKDATASET_mesh_files\Mesh_Files_Cleaned" > convert_to_obj_logs.txt
+# blender -b --factory-startup -P convert_to_obj.py -- "path_to_meshes\Mesh_Files_Cleaned" > convert_to_obj_logs.txt
+
 if __name__ == "__main__":
     argv = sys.argv
     if "--" in argv:
