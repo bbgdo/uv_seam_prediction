@@ -10,8 +10,6 @@ writes predicted seam edge indices (0-based into the unique-edge list) to
 """
 
 import sys
-import os
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -70,11 +68,11 @@ def main() -> None:
     data_path, weights_path, threshold_str, output_path = sys.argv[1:]
     threshold = float(threshold_str)
 
-    npz       = np.load(data_path)
-    x         = torch.from_numpy(npz['x'])
+    npz = np.load(data_path)
+    x = torch.from_numpy(npz['x'])
     edge_index = torch.from_numpy(npz['edge_index'])
-    edge_attr  = torch.from_numpy(npz['edge_attr'])
-    n_unique   = int(npz['n_unique'])
+    edge_attr = torch.from_numpy(npz['edge_attr'])
+    n_unique = int(npz['n_unique'])
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -86,7 +84,7 @@ def main() -> None:
     with torch.no_grad():
         logits = model(x.to(device), edge_index.to(device), edge_attr.to(device))
 
-    seam_mask    = torch.sigmoid(logits[:n_unique]) >= threshold
+    seam_mask = torch.sigmoid(logits[:n_unique]) >= threshold
     seam_indices = seam_mask.nonzero(as_tuple=True)[0].tolist()
 
     with open(output_path, 'w') as f:

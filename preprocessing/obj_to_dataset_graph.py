@@ -85,16 +85,30 @@ def _compute_dihedral_angles(
     edge_to_faces: dict,
 ) -> np.ndarray:
     face_normals = mesh.face_normals
-    angles = np.full(len(edges), np.pi, dtype=np.float32)
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    angles = np.zeros(len(edges), dtype=np.float32)
 
     for idx, (vi, vj) in enumerate(edges):
         key = (min(vi, vj), max(vi, vj))
         face_list = edge_to_faces.get(key, [])
-        if len(face_list) >= 2:
-            n0 = face_normals[face_list[0]]
-            n1 = face_normals[face_list[1]]
-            cos_a = np.clip(np.dot(n0, n1), -1.0, 1.0)
-            angles[idx] = float(np.arccos(cos_a))
+        if len(face_list) < 2:
+            angles[idx] = 0.0
+            continue
+
+        n0 = face_normals[face_list[0]].astype(np.float64)
+        n1 = face_normals[face_list[1]].astype(np.float64)
+
+        cos_a = np.clip(np.dot(n0, n1), -1.0, 1.0)
+        unsigned_angle = np.arccos(cos_a)
+
+        edge_dir = vertices[vj] - vertices[vi]
+        edge_norm = np.linalg.norm(edge_dir)
+        if edge_norm > 1e-8:
+            edge_dir /= edge_norm
+            cross = np.cross(n0, n1)
+            angles[idx] = float(unsigned_angle * np.sign(np.dot(cross, edge_dir) + 1e-12))
+        else:
+            angles[idx] = float(unsigned_angle)
 
     return angles
 
