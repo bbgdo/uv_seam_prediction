@@ -48,7 +48,6 @@ def normalize_objects():
     if not selected_objects:
         return False
 
-    # global bounding box across all selected objects
     min_v = mathutils.Vector((float('inf'), float('inf'), float('inf')))
     max_v = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
 

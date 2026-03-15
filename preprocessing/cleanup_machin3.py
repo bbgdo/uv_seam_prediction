@@ -48,7 +48,6 @@ def robust_cleanup_and_triangulate():
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
 
-    # cleanup
     bpy.ops.mesh.remove_doubles(threshold=0.0001)
     bpy.ops.mesh.delete_loose()
     bpy.ops.mesh.dissolve_degenerate(threshold=0.0001)
