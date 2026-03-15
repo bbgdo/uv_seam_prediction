@@ -1,4 +1,5 @@
 .venv/
 *.pt
+*.pth
 .idea/
 .claude/
