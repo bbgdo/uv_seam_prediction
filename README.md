@@ -1,5 +1,7 @@
 # UV Seam Predictor — ML Pipeline
 
+> ! outdated info and code. to be updated
+
 An end-to-end pipeline for automatically placing UV seams on 3D meshes using a Graph Neural Network (GraphSAGE), deployed as a Blender add-on.
 
 ## Overview
