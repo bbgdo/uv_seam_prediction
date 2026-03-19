@@ -1,8 +1,6 @@
 # UV Seam Predictor — ML Pipeline
 
-> ! outdated info and code. to be updated
-
-An end-to-end pipeline for automatically placing UV seams on 3D meshes using a Graph Neural Network (GraphSAGE), deployed as a Blender add-on.
+An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks (GraphSAGE and GATv2), deployed as a Blender add-on.
 
 ## Overview
 
@@ -13,10 +11,12 @@ UV seam placement is a tedious manual task in 3D modeling. This project frames i
 ```
 dataset_py_utils/
 ├── preprocessing/           # Mesh cleanup, feature engineering, augmentation,
-│                               and OBJ → PyG graph conversion
-├── models/                  # GNN architecture and training logic
-│   ├── graphsage/           # GraphSAGE model + training script
-│   └── utils/               # Dataset loading, splitting, and metrics
+│                               graph conversion, and dual graph construction
+├── models/                  # GNN architectures, training, and experiment logging
+│   ├── graphsage/           # GraphSAGE edge classifier (original graph)
+│   ├── gatv2/               # GATv2 node classifier (dual graph)
+│   └── utils/               # Dataset loading, metrics, logging, comparison
+├── runs/                    # Experiment outputs (JSON logs, plots, checkpoints)
 └── blender_bridge/          # Blender add-on for running inference
 ```
 
@@ -25,12 +25,18 @@ dataset_py_utils/
 ```
 Raw 3D files
     → [preprocessing]           cleanup, format conversion, scale normalization
-    → [obj_to_dataset_graph.py] build graph dataset (dataset.pt)
-    → [models/graphsage/train.py] train GNN
-    → [blender_bridge]          load weights, run inference inside Blender
+    → [augment_meshes.py]       data augmentation (Gaussian vertex perturbation)
+    → [obj_to_dataset_graph.py] build original graph dataset (dataset.pt)
+    → [build_dual_graph.py]     build dual graph dataset (dataset_dual.pt)
+    → [models/graphsage/train.py] train GraphSAGE on original graph
+    → [models/gatv2/train.py]     train GATv2 on dual graph
+    → [models/utils/comparison.py] compare experiments
+    → [blender_bridge]            load weights, run inference inside Blender
 ```
 
-## Graph Representation
+## Graph Representations
+
+### Original graph (for GraphSAGE)
 
 Each mesh becomes a directed graph stored as a PyTorch Geometric `Data` object:
 
@@ -40,6 +46,17 @@ Each mesh becomes a directed graph stored as a PyTorch Geometric `Data` object:
 | `edge_index` | `[2, 2E]` | all edges stored both directions |
 | `edge_attr` | `[2E, 11]` | 11-dim feature vector (see below) |
 | `y` | `[2E]` | 1 = seam, 0 = not a seam |
+| `faces` | `[F, 3]` | triangle face indices (used for dual graph construction) |
+
+### Dual graph (for GATv2)
+
+Edge classification is reframed as node classification. Each original edge becomes a dual node; two dual nodes are connected if their original edges share a face.
+
+| Tensor | Shape | Description |
+|---|---|---|
+| `x` | `[E, 11]` | original edge features become dual node features |
+| `edge_index` | `[2, D]` | face-adjacency connectivity |
+| `y` | `[E]` | seam labels per dual node |
 
 <details>
 <summary>Click to expand: Building the dataset</summary>
@@ -88,9 +105,31 @@ python preprocessing/augment_meshes.py ./3d-objs --copies 3 --noise 0.05
 
 </details>
 
+## Experiment Logging
+
+Training runs produce structured outputs in `runs/<experiment_name>/`:
+
+| File | Description |
+|---|---|
+| `config.json` | Hyperparameters and dataset stats |
+| `metrics.json` | Per-epoch train/val loss, F1, precision, recall, LR |
+| `summary.json` | Best epoch, test metrics, timing |
+| `loss_curves.png` | Train/val loss over epochs |
+| `f1_curves.png` | Train/val F1 with best epoch marker |
+| `precision_recall_curves.png` | Val precision vs recall over epochs |
+| `lr_schedule.png` | Learning rate schedule (log scale) |
+| `class_balance.png` | Seam vs non-seam counts per split |
+| `best_model.pth` | Best model checkpoint (by val F1) |
+
+Compare experiments:
+```bash
+python models/utils/comparison.py runs/graphsage_001 runs/gatv2_001
+```
+Generates `comparison_f1.png` (overlaid F1 curves) and `comparison_table.png` (test results table).
+
 ## Requirements
 
 - Python 3.10+
-- `torch`, `torch-geometric`, `trimesh`, `scipy`
+- `torch`, `torch-geometric`, `trimesh`, `scipy`, `matplotlib`
 - Blender 4.5 LTS (might work with Blender 4.0+) (for preprocessing scripts and the add-on)
 - Optional: `pyembree` (faster AO raycasting; falls back to normal-based approximation without it)

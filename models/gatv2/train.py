@@ -7,23 +7,22 @@ from pathlib import Path
 import torch
 from torch_geometric.data import Data
 
-# allow running as a script from any cwd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from models.graphsage.model import UVSeamGNN
+from models.gatv2.model import DualGATv2
 from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.metrics import edge_f1
 
 
 def _run_epoch(
-    model: UVSeamGNN,
+    model: DualGATv2,
     graphs: list[Data],
     criterion: torch.nn.Module,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
 ) -> tuple[float, dict]:
-    """Single pass over a list of graphs. Returns (mean_loss, mean_metrics)."""
+    """Single pass over dual graphs. Returns (mean_loss, mean_metrics)."""
     training = optimizer is not None
     model.train(training)
 
@@ -35,10 +34,9 @@ def _run_epoch(
         for data in graphs:
             x = data.x.to(device)
             edge_index = data.edge_index.to(device)
-            edge_attr = data.edge_attr.to(device)
             y = data.y.to(device)
 
-            logits = model(x, edge_index, edge_attr)
+            logits = model(x, edge_index)
             loss = criterion(logits, y)
 
             if training:
@@ -50,9 +48,7 @@ def _run_epoch(
             all_logits.append(logits.detach().cpu())
             all_labels.append(y.cpu())
 
-            # explicitly free GPU tensors — Python's GC isn't eager enough
-            # and activations accumulate across graph iterations
-            del x, edge_index, edge_attr, y, logits, loss
+            del x, edge_index, y, logits, loss
             torch.cuda.empty_cache()
 
     mean_loss = total_loss / len(graphs)
@@ -66,13 +62,6 @@ def main(args: argparse.Namespace) -> None:
 
     dataset = load_dataset(args.dataset)
 
-    if args.max_edges:
-        before = len(dataset)
-        dataset = [d for d in dataset if d.edge_index.shape[1] <= args.max_edges]
-        skipped = before - len(dataset)
-        if skipped:
-            print(f"skipped {skipped} graph(s) exceeding --max-edges {args.max_edges}")
-
     train, val, test = split_dataset(dataset, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
     print(f"split — train: {len(train)}, val: {len(val)}, test: {len(test)}")
 
@@ -81,16 +70,15 @@ def main(args: argparse.Namespace) -> None:
 
     criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    model = UVSeamGNN(
-        node_in_dim=args.node_dim,
-        edge_in_dim=args.edge_dim,
+    model = DualGATv2(
+        in_dim=args.in_dim,
         hidden_dim=args.hidden,
+        heads=args.heads,
+        num_layers=args.num_layers,
         dropout=args.dropout,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-
-    # halve LR if val F1 stagnates for 5 epochs
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=5
     )
@@ -98,10 +86,11 @@ def main(args: argparse.Namespace) -> None:
     logger = ExperimentLogger(
         run_dir=args.run_dir,
         config={
-            'model': 'GraphSAGE',
-            'node_in_dim': args.node_dim,
-            'edge_in_dim': args.edge_dim,
+            'model': 'GATv2',
+            'in_dim': args.in_dim,
             'hidden_dim': args.hidden,
+            'heads': args.heads,
+            'num_layers': args.num_layers,
             'dropout': args.dropout,
             'lr': args.lr,
             'patience': args.patience,
@@ -177,21 +166,20 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Train UV-seam GNN (GraphSAGE).")
+    parser = argparse.ArgumentParser(description="Train GATv2 on dual graph for UV-seam prediction.")
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    parser.add_argument('--dataset', default='dataset.pt', help='path to dataset.pt')
-    parser.add_argument('--run-dir', default=f'runs/graphsage_{timestamp}', help='experiment output dir')
+    parser.add_argument('--dataset', default='dataset_dual.pt', help='path to dual dataset')
+    parser.add_argument('--run-dir', default=f'runs/gatv2_{timestamp}', help='experiment output dir')
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--hidden', type=int, default=128)
+    parser.add_argument('--lr', type=float, default=5e-4)
+    parser.add_argument('--hidden', type=int, default=64)
+    parser.add_argument('--heads', type=int, default=8)
+    parser.add_argument('--num-layers', type=int, default=3)
     parser.add_argument('--dropout', type=float, default=0.3)
     parser.add_argument('--patience', type=int, default=15, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
-    parser.add_argument('--node-dim', type=int, default=6, help='node feature dim (default: 6)')
-    parser.add_argument('--edge-dim', type=int, default=11, help='edge feature dim (default: 11)')
-    parser.add_argument('--max-edges', type=int, default=2_000_000,
-                        help='skip graphs with more directed edges than this (default: 2M)')
+    parser.add_argument('--in-dim', type=int, default=11, help='dual node feature dim (default: 11)')
 
     main(parser.parse_args())

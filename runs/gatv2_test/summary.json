@@ -1,0 +1,19 @@
+{
+  "model": "GATv2",
+  "best_epoch": 3,
+  "best_val_f1": 0.03754940711462451,
+  "best_val_precision": 0.6785714285714286,
+  "best_val_recall": 0.019308943089430895,
+  "test_f1": 0.029197080291970802,
+  "test_precision": 0.7096774193548387,
+  "test_recall": 0.014905149051490514,
+  "test_accuracy": 0.9393826393204889,
+  "total_epochs": 5,
+  "total_time_s": 34.1,
+  "dataset_stats": {
+    "train_graphs": 2,
+    "val_graphs": 1,
+    "test_graphs": 1,
+    "pos_weight": 15.3516263961792
+  }
+}

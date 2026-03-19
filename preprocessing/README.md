@@ -129,7 +129,7 @@ AO uses raycasting (pyembree > ray_triangle) when available, otherwise falls bac
 
 ### 7. `obj_to_dataset_graph.py` — Graph Dataset Builder
 
-Converts `.obj` meshes into PyG `Data` objects with the full 11-dim edge feature vector. Seam labels are derived from UV coordinate splits across adjacent faces.
+Converts `.obj` meshes into PyG `Data` objects with the full 11-dim edge feature vector and face indices. Seam labels are derived from UV coordinate splits across adjacent faces.
 
 ```bash
 python obj_to_dataset_graph.py ./3d-objs --max-meshes 50 --save
@@ -140,3 +140,18 @@ python obj_to_dataset_graph.py ./3d-objs --max-meshes 50 --save
 | `mesh_dir` | `./meshes` | Directory with `.obj` files |
 | `--max-meshes` | 5 | Max meshes to process |
 | `--save` | off | Save dataset as `dataset.pt` |
+
+---
+
+### 8. `build_dual_graph.py` — Dual Graph Construction
+
+Converts the original graph dataset into a dual (line) graph for GATv2 training. Each original edge becomes a dual node, with dual edges connecting edges that share a face.
+
+```bash
+python build_dual_graph.py --input dataset.pt --output dataset_dual.pt
+```
+
+| Flag | Description |
+|---|---|
+| `--input` | Path to original `dataset.pt` |
+| `--output` | Path to save dual dataset |

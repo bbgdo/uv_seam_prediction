@@ -86,6 +86,7 @@ def process_mesh(file_path: str | Path) -> Data | None:
       edge_index: [2, 2*E]  undirected edges stored both directions
       edge_attr:  [2*E, 11] 11-dim feature vector per edge
       y:          [2*E]     1.0 = seam, 0.0 = not a seam
+      faces:      [F, 3]    triangle face indices (for dual graph construction)
     """
     file_path = Path(file_path)
 
@@ -103,6 +104,7 @@ def process_mesh(file_path: str | Path) -> Data | None:
 
     vertices = np.asarray(mesh.vertices, dtype=np.float32)
     vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
 
     seam_map = _detect_seam_edges(mesh)
     edge_features, unique_edges, edge_to_faces = compute_edge_features(mesh)
@@ -131,6 +133,7 @@ def process_mesh(file_path: str | Path) -> Data | None:
         y=y,
         num_nodes=len(vertices),
     )
+    data.faces = torch.from_numpy(faces)
     data.file_path = str(file_path)
     return data
 
@@ -223,7 +226,7 @@ if __name__ == "__main__":
     if args.save and dataset:
         out_path = Path("../dataset.pt")
         torch.save(dataset, out_path)
-        print(f"dataset saved → {out_path.resolve()}  ({len(dataset)} graphs)")
+        print(f"dataset saved -> {out_path.resolve()}  ({len(dataset)} graphs)")
 
     if outliers:
         print(f"\n{'!'*60}")

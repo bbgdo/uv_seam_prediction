@@ -1,7 +1,11 @@
+import sys
 from pathlib import Path
 
 import torch
 from torch_geometric.data import Data
+
+# allow imports from project root
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 def load_dataset(path: str | Path) -> list[Data]:
@@ -39,6 +43,13 @@ def split_dataset(
     train = shuffled[n_test + n_val:]
 
     return train, val, test
+
+
+def load_dual_dataset(path: str | Path) -> list[Data]:
+    """Load original dataset and convert each graph to dual representation."""
+    from preprocessing.build_dual_graph import build_dual_graph_data
+    original = load_dataset(path)
+    return [build_dual_graph_data(d) for d in original]
 
 
 def compute_pos_weight(dataset: list[Data]) -> torch.Tensor:

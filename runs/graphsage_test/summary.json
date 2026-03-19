@@ -1,0 +1,19 @@
+{
+  "model": "GraphSAGE",
+  "best_epoch": 5,
+  "best_val_f1": 0.17394492049672367,
+  "best_val_precision": 0.10057760585024642,
+  "best_val_recall": 0.6429539295392954,
+  "test_f1": 0.17638376383763837,
+  "test_precision": 0.10209312259718069,
+  "test_recall": 0.6476964769647696,
+  "test_accuracy": 0.6300807955251709,
+  "total_epochs": 5,
+  "total_time_s": 5.1,
+  "dataset_stats": {
+    "train_graphs": 2,
+    "val_graphs": 1,
+    "test_graphs": 1,
+    "pos_weight": 15.3516263961792
+  }
+}
