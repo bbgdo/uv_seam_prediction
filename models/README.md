@@ -2,12 +2,10 @@
 
 GNN model and training utilities for UV seam edge classification.
 
-> **Note:** The current architecture and training script are an MVP and will be rewritten. **It is more like a placeholder, not a final design.**
->
 > #### TODO:
-> - [ ] New metrics based on "A Dataset and Benchmark for Mesh Parameterization" paper.
-> - [ ] features like simmetry, placement of seams in crease or on sharp edges, etc.
-> - [ ] GAT, MPNN, MeshCNN
+> - [ ] New metrics based on "A Dataset and Benchmark for Mesh Parameterization" paper
+> - [ ] GAT, GraphSAGE, MeshCNN architectures
+> - [ ] Connectivity loss for topologically valid seam loops
 ---
 
 ## Architecture — `graphsage/model.py`
@@ -18,18 +16,18 @@ GNN model and training utilities for UV seam edge classification.
 <summary>Click to expand: Architecture details</summary>
 
 **Forward pass:**
-1. Two `SAGEConv` layers encode node features into hidden embeddings `h`.
+1. Three `SAGEConv` layers encode node features into hidden embeddings. The 3rd layer has a residual connection from the 2nd layer output.
 2. For each directed edge `(i→j)`, build the representation: `[h_i || h_j || edge_attr]`.
 3. A 3-layer MLP maps this concatenation to a single raw logit.
 
-The edge MLP runs in chunks (`chunk_size=100_000`) to avoid OOM on large meshes — materialising the full `[E, 260]` tensor at once can exceed VRAM for high-poly models.
+The edge MLP runs in chunks (`chunk_size=100_000`) to avoid OOM on large meshes.
 
 **Default hyperparameters:**
 
 | Parameter | Default | Notes |
 |---|---|---|
 | `node_in_dim` | 6 | xyz + normals |
-| `edge_in_dim` | 4 | length, dihedral, Δnorm, dot_norm |
+| `edge_in_dim` | 11 | 11-dim feature vector (see `preprocessing/compute_features.py`) |
 | `hidden_dim` | 128 | SAGEConv output dim |
 | `dropout` | 0.3 | applied after each conv and in MLP |
 

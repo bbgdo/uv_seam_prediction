@@ -1,6 +1,6 @@
 # Preprocessing
 
-Blender scripts that turn raw downloaded mesh files into a clean, normalized `.obj` dataset ready for graph conversion. Run these in order.
+Blender scripts that turn raw downloaded mesh files into a clean, normalized `.obj` dataset ready for graph conversion, plus feature engineering and data augmentation tools.
 
 ---
 
@@ -72,3 +72,71 @@ blender -b --factory-startup -P normalize_scale.py -- "path/to/Mesh_Files_machin
 ```
 
 </details>
+
+---
+
+### 5. `augment_meshes.py` — Data Augmentation
+
+Creates augmented copies of `.obj` files by adding Gaussian noise to vertex positions. Face connectivity, UV coordinates, and normals are preserved — only vertex XYZ changes. Uses text-level OBJ manipulation to guarantee UV preservation.
+
+```bash
+python augment_meshes.py ./3d-objs --copies 3 --noise 0.05
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `mesh_dir` | (required) | Directory containing `.obj` files |
+| `--copies` | 3 | Number of augmented copies per mesh |
+| `--noise` | 0.05 | Noise magnitude as fraction of bounding box diagonal |
+| `--seed` | 42 | Random seed |
+
+Already-augmented files (matching `*_aug*.obj`) are skipped on re-runs.
+
+---
+
+### 6. `compute_features.py` — Edge Feature Engineering
+
+Computes 11 edge-level features from a `trimesh.Trimesh` object. Each feature function is standalone and testable. Used by `obj_to_dataset_graph.py` but can also run standalone for inspection:
+
+```bash
+python compute_features.py path/to/mesh.obj
+```
+
+Prints per-feature statistics (min, max, mean, std) and checks for NaN/Inf.
+
+<details>
+<summary>Click to expand: Feature list</summary>
+
+| # | Feature | Range | Description |
+|---|---------|-------|-------------|
+| 0 | `edge_length` | [0, 1] | Normalized by max edge length per mesh |
+| 1 | `signed_dihedral` | [-1, 1] | Dihedral angle / pi (positive = convex) |
+| 2 | `sharpness` | [0, 1] | abs(signed_dihedral) |
+| 3 | `concavity` | [-1, 1] | Signed sharpness |
+| 4 | `delta_normal` | [0, 1] | Vertex normal difference magnitude / 2 |
+| 5 | `dot_normal` | [-1, 1] | Dot product of endpoint vertex normals |
+| 6 | `gauss_curv_mean` | [-1, 1] | Mean Gaussian curvature (angle defect, z-score normalized) |
+| 7 | `gauss_curv_diff` | [0, 2] | Absolute curvature difference at endpoints |
+| 8 | `ao_mean` | [0, 1] | Mean ambient occlusion at endpoints |
+| 9 | `ao_diff` | [0, 1] | AO difference at endpoints |
+| 10 | `symmetry_dist` | [0, 1] | Edge midpoint distance to symmetry plane |
+
+AO uses raycasting (pyembree > ray_triangle) when available, otherwise falls back to a normal-based approximation. Symmetry detection uses `scipy.spatial.cKDTree` for mirror-vertex matching.
+
+</details>
+
+---
+
+### 7. `obj_to_dataset_graph.py` — Graph Dataset Builder
+
+Converts `.obj` meshes into PyG `Data` objects with the full 11-dim edge feature vector. Seam labels are derived from UV coordinate splits across adjacent faces.
+
+```bash
+python obj_to_dataset_graph.py ./3d-objs --max-meshes 50 --save
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `mesh_dir` | `./meshes` | Directory with `.obj` files |
+| `--max-meshes` | 5 | Max meshes to process |
+| `--save` | off | Save dataset as `dataset.pt` |

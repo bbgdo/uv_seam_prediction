@@ -7,15 +7,15 @@ class UVSeamGNN(nn.Module):
     def __init__(
         self,
         node_in_dim: int = 6,
-        edge_in_dim: int = 4,
+        edge_in_dim: int = 11,
         hidden_dim: int = 128,
         dropout: float = 0.3,
     ):
         super().__init__()
         self.conv1 = SAGEConv(node_in_dim, hidden_dim)
         self.conv2 = SAGEConv(hidden_dim, hidden_dim)
+        self.conv3 = SAGEConv(hidden_dim, hidden_dim)
 
-        # edge representation: [h_i || h_j || edge_attr] → logit
         edge_repr_dim = hidden_dim * 2 + edge_in_dim
         self.edge_mlp = nn.Sequential(
             nn.Linear(edge_repr_dim, hidden_dim),
@@ -39,12 +39,13 @@ class UVSeamGNN(nn.Module):
     ) -> torch.Tensor:             # [E] logits
         h = self.act(self.conv1(x, edge_index))
         h = self.dropout(h)
-        h = self.act(self.conv2(h, edge_index))
+        h2 = self.act(self.conv2(h, edge_index))
+        h2 = self.dropout(h2)
+        h3 = self.act(self.conv3(h2, edge_index)) + h2  # residual
+        h = self.dropout(h3)
 
         src, dst = edge_index[0], edge_index[1]
 
-        # chunked MLP to avoid OOM on large meshes — materialising [E, 260] all at once
-        # can exceed VRAM for high-poly models
         chunks = []
         for i in range(0, src.shape[0], chunk_size):
             s = src[i:i + chunk_size]

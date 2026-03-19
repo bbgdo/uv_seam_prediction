@@ -22,13 +22,14 @@ class UVSeamGNN(nn.Module):
     def __init__(
         self,
         node_in_dim: int   = 6,
-        edge_in_dim: int   = 4,
+        edge_in_dim: int   = 11,
         hidden_dim:  int   = 128,
         dropout:     float = 0.3,
     ):
         super().__init__()
         self.conv1 = SAGEConv(node_in_dim, hidden_dim)
         self.conv2 = SAGEConv(hidden_dim,  hidden_dim)
+        self.conv3 = SAGEConv(hidden_dim,  hidden_dim)
 
         edge_repr_dim = hidden_dim * 2 + edge_in_dim
         self.edge_mlp = nn.Sequential(
@@ -46,7 +47,10 @@ class UVSeamGNN(nn.Module):
     def forward(self, x, edge_index, edge_attr, chunk_size: int = 100_000):
         h = self.act(self.conv1(x, edge_index))
         h = self.dropout(h)
-        h = self.act(self.conv2(h, edge_index))
+        h2 = self.act(self.conv2(h, edge_index))
+        h2 = self.dropout(h2)
+        h3 = self.act(self.conv3(h2, edge_index)) + h2  # residual
+        h = self.dropout(h3)
 
         src, dst = edge_index[0], edge_index[1]
         chunks = []

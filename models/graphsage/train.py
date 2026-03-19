@@ -144,7 +144,7 @@ if __name__ == '__main__':
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--node-dim', type=int, default=6, help='node feature dim (default: 6)')
-    parser.add_argument('--edge-dim', type=int, default=4, help='edge feature dim (default: 4)')
+    parser.add_argument('--edge-dim', type=int, default=11, help='edge feature dim (default: 11)')
     parser.add_argument('--max-edges', type=int, default=2_000_000,
                         help='skip graphs with more directed edges than this (default: 2M)')
 

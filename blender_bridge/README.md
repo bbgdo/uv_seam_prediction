@@ -44,7 +44,7 @@ See `INSTALL.md` for troubleshooting common setup issues.
 
 ### `run_inference.py` — Inference Worker
 
-Standalone script that runs as the external subprocess. It intentionally embeds its own copy of `UVSeamGNN` so it works from any installation path without requiring the project root on `PYTHONPATH`.
+Standalone script that runs as the external subprocess. It embeds its own copy of `UVSeamGNN` (3 SAGEConv layers with residual, `edge_in_dim=11`) so it works from any installation path without requiring the project root on `PYTHONPATH`.
 
 ```
 python run_inference.py <data.npz> <weights.pth> <threshold> <output.txt>

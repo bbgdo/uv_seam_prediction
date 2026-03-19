@@ -7,12 +7,11 @@ import torch
 from torch_geometric.data import Data
 
 warnings.filterwarnings("ignore", category=UserWarning)
-import trimesh  # noqa: E402  (import after warning filter)
+import trimesh  # noqa: E402
 
-
-def _safe_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    norms = np.linalg.norm(v, axis=-1, keepdims=True)
-    return v / np.where(norms < eps, eps, norms)
+# support running both as `python preprocessing/obj_to_dataset_graph.py` and as a module
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compute_features import compute_edge_features
 
 
 def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
@@ -79,53 +78,18 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
     return seam_map
 
 
-def _compute_dihedral_angles(
-    mesh: trimesh.Trimesh,
-    edges: np.ndarray,
-    edge_to_faces: dict,
-) -> np.ndarray:
-    face_normals = mesh.face_normals
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    angles = np.zeros(len(edges), dtype=np.float32)
-
-    for idx, (vi, vj) in enumerate(edges):
-        key = (min(vi, vj), max(vi, vj))
-        face_list = edge_to_faces.get(key, [])
-        if len(face_list) < 2:
-            angles[idx] = 0.0
-            continue
-
-        n0 = face_normals[face_list[0]].astype(np.float64)
-        n1 = face_normals[face_list[1]].astype(np.float64)
-
-        cos_a = np.clip(np.dot(n0, n1), -1.0, 1.0)
-        unsigned_angle = np.arccos(cos_a)
-
-        edge_dir = vertices[vj] - vertices[vi]
-        edge_norm = np.linalg.norm(edge_dir)
-        if edge_norm > 1e-8:
-            edge_dir /= edge_norm
-            cross = np.cross(n0, n1)
-            angles[idx] = float(unsigned_angle * np.sign(np.dot(cross, edge_dir) + 1e-12))
-        else:
-            angles[idx] = float(unsigned_angle)
-
-    return angles
-
-
 def process_mesh(file_path: str | Path) -> Data | None:
     """Load an .obj file and return a PyG Data object, or None on failure.
 
     Graph schema:
-      x:          [N, 6]   vertex coords + normals
-      edge_index: [2, 2*E] undirected edges stored both directions
-      edge_attr:  [2*E, 4] length | dihedral | Δnormal | dot_normal
-      y:          [2*E]    1.0 = seam, 0.0 = not a seam
+      x:          [N, 6]    vertex coords + normals
+      edge_index: [2, 2*E]  undirected edges stored both directions
+      edge_attr:  [2*E, 11] 11-dim feature vector per edge
+      y:          [2*E]     1.0 = seam, 0.0 = not a seam
     """
     file_path = Path(file_path)
 
     try:
-        # process=False keeps raw face-vertex attributes (needed for UV)
         mesh = trimesh.load(str(file_path), process=False, force="mesh")
         if not isinstance(mesh, trimesh.Trimesh):
             print(f"  [skip] {file_path.name}: not a single Trimesh object.")
@@ -139,47 +103,14 @@ def process_mesh(file_path: str | Path) -> Data | None:
 
     vertices = np.asarray(mesh.vertices, dtype=np.float32)
     vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
-    faces = np.asarray(mesh.faces, dtype=np.int64)
 
     seam_map = _detect_seam_edges(mesh)
-
-    unique_edges_set: set[tuple] = set()
-    edge_to_faces: dict[tuple, list] = {}
-
-    for f_idx, face in enumerate(faces):
-        for k in range(3):
-            vi = int(face[k])
-            vj = int(face[(k + 1) % 3])
-            key = (min(vi, vj), max(vi, vj))
-            unique_edges_set.add(key)
-            edge_to_faces.setdefault(key, []).append(f_idx)
-
-    # sort for determinism
-    unique_edges = np.array(sorted(unique_edges_set), dtype=np.int64)
-    num_unique = len(unique_edges)
+    edge_features, unique_edges, edge_to_faces = compute_edge_features(mesh)
 
     x = torch.from_numpy(np.concatenate([vertices, vert_nrms], axis=1))
 
     vi_idx = unique_edges[:, 0]
     vj_idx = unique_edges[:, 1]
-
-    edge_vec = vertices[vj_idx] - vertices[vi_idx]
-    edge_length = np.linalg.norm(edge_vec, axis=1, keepdims=True).astype(np.float32)
-
-    dihedral = _compute_dihedral_angles(mesh, unique_edges, edge_to_faces)[:, None]
-
-    # ||n_vi - n_vj|| — how much the surface bends at this edge
-    delta_nrm = np.linalg.norm(
-        vert_nrms[vi_idx] - vert_nrms[vj_idx], axis=1, keepdims=True
-    ).astype(np.float32)
-
-    # complementary curvature signal
-    dot_nrm = np.einsum(
-        "ij,ij->i", _safe_normalize(vert_nrms[vi_idx]),
-                    _safe_normalize(vert_nrms[vj_idx])
-    ).astype(np.float32)[:, None]
-
-    edge_attr_np = np.concatenate([edge_length, dihedral, delta_nrm, dot_nrm], axis=1)
 
     labels = np.array(
         [1.0 if seam_map.get((int(e[0]), int(e[1])), False) else 0.0 for e in unique_edges],
@@ -190,7 +121,7 @@ def process_mesh(file_path: str | Path) -> Data | None:
     src = np.concatenate([vi_idx, vj_idx])
     dst = np.concatenate([vj_idx, vi_idx])
     edge_index = torch.from_numpy(np.stack([src, dst], axis=0).astype(np.int64))
-    edge_attr = torch.from_numpy(np.tile(edge_attr_np, (2, 1)))
+    edge_attr = torch.from_numpy(np.tile(edge_features, (2, 1)))
     y = torch.from_numpy(np.tile(labels, 2))
 
     data = Data(
@@ -218,11 +149,16 @@ def print_stats(data: Data, file_name: str) -> None:
     print(f"  nodes         : {data.num_nodes}")
     print(f"  unique edges  : {num_unique_edges}")
     print(f"  directed edges: {num_edges}  (both directions)")
-    print(f"  edge features : {data.edge_attr.shape[1]}  [length | dihedral | Δnorm | dot_norm]")
+    print(f"  edge features : {data.edge_attr.shape[1]}  (11-dim feature vector)")
     print(f"  --- class balance ---")
     print(f"  seam  (1): {num_seams:>8d}  ({seam_pct:.2f}%)")
     print(f"  other (0): {num_nonseams:>8d}  ({100 - seam_pct:.2f}%)")
     print(f"  pos_weight: {pos_weight:.4f}")
+
+    # sample feature vector
+    sample_idx = min(5, data.edge_attr.shape[0] - 1)
+    sample = data.edge_attr[sample_idx].numpy()
+    print(f"  sample edge_attr[{sample_idx}]: [{', '.join(f'{v:.4f}' for v in sample)}]")
     print(f"{'='*60}")
 
 

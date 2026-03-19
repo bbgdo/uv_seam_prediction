@@ -10,11 +10,11 @@ UV seam placement is a tedious manual task in 3D modeling. This project frames i
 
 ```
 dataset_py_utils/
-├── preprocessing/           # Blender scripts that clean and prepare raw mesh data 
-│                               and converts OBJ meshes into a PyG graph dataset
+├── preprocessing/           # Mesh cleanup, feature engineering, augmentation,
+│                               and OBJ → PyG graph conversion
 ├── models/                  # GNN architecture and training logic
-│   ├── graphsage/           # GraphSAGE model + training script (placeholder)
-│   └── utils/               # Dataset loading, splitting, and metrics (placeholder)
+│   ├── graphsage/           # GraphSAGE model + training script
+│   └── utils/               # Dataset loading, splitting, and metrics
 └── blender_bridge/          # Blender add-on for running inference
 ```
 
@@ -36,7 +36,7 @@ Each mesh becomes a directed graph stored as a PyTorch Geometric `Data` object:
 |---|---|---|
 | `x` | `[N, 6]` | vertex coords + normals |
 | `edge_index` | `[2, 2E]` | all edges stored both directions |
-| `edge_attr` | `[2E, 4]` | length, dihedral angle, Δnormal, dot(normals) |
+| `edge_attr` | `[2E, 11]` | 11-dim feature vector (see below) |
 | `y` | `[2E]` | 1 = seam, 0 = not a seam |
 
 <details>
@@ -54,8 +54,41 @@ Seam detection works on actual UV data when present — an edge is a seam if eit
 
 </details>
 
+<details>
+<summary>Click to expand: Edge features (11-dim)</summary>
+
+| # | Feature | Range | Description |
+|---|---------|-------|-------------|
+| 0 | `edge_length` | [0, 1] | Euclidean distance, normalized by max edge length per mesh |
+| 1 | `signed_dihedral` | [-1, 1] | Dihedral angle / pi. Positive = convex, negative = concave |
+| 2 | `sharpness` | [0, 1] | abs(signed_dihedral). 0 = flat, 1 = knife-edge |
+| 3 | `concavity` | [-1, 1] | Same as signed_dihedral (signed sharpness) |
+| 4 | `delta_normal` | [0, 1] | Vertex normal difference magnitude / 2 |
+| 5 | `dot_normal` | [-1, 1] | Dot product of endpoint vertex normals |
+| 6 | `gauss_curv_mean` | [-1, 1] | Mean Gaussian curvature of endpoints (z-score normalized) |
+| 7 | `gauss_curv_diff` | [0, 2] | Absolute difference in Gaussian curvature between endpoints |
+| 8 | `ao_mean` | [0, 1] | Mean ambient occlusion of endpoints |
+| 9 | `ao_diff` | [0, 1] | Absolute AO difference between endpoints |
+| 10 | `symmetry_dist` | [0, 1] | Edge midpoint distance to detected symmetry plane |
+
+Feature computation is implemented in `preprocessing/compute_features.py`.
+
+</details>
+
+<details>
+<summary>Click to expand: Data augmentation</summary>
+
+`preprocessing/augment_meshes.py` creates augmented copies of meshes by adding Gaussian noise to vertex positions while preserving topology, face connectivity, and UV coordinates. This multiplies the dataset size without requiring additional manual UV unwraps.
+
+```bash
+python preprocessing/augment_meshes.py ./3d-objs --copies 3 --noise 0.05
+```
+
+</details>
+
 ## Requirements
 
 - Python 3.10+
-- `torch`, `torch-geometric`, `trimesh`
+- `torch`, `torch-geometric`, `trimesh`, `scipy`
 - Blender 4.5 LTS (might work with Blender 4.0+) (for preprocessing scripts and the add-on)
+- Optional: `pyembree` (faster AO raycasting; falls back to normal-based approximation without it)
