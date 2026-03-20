@@ -3,7 +3,7 @@ from __future__ import annotations
 bl_info = {
     'name': 'UV Seam Predictor',
     'author': 'UV Seam GNN Pipeline',
-    'version': (0, 4, 0),
+    'version': (0, 5, 0),
     'blender': (4, 0, 0),
     'location': 'View3D › N-panel › UV Seam GNN',
     'description': 'Auto-mark UV seams via an external GNN inference process.',
@@ -17,21 +17,21 @@ import tempfile
 
 import bpy
 import numpy as np
-from bpy.props import FloatProperty, StringProperty
+from bpy.props import EnumProperty, FloatProperty, StringProperty
 from bpy.types import Operator, Panel
 
 _ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 _INFERENCE_PY = os.path.join(_ADDON_DIR, 'run_inference.py')
 
 
-def _mesh_to_arrays(obj) -> tuple[np.ndarray, np.ndarray, np.ndarray, list]:
-    """Extract graph arrays from a Blender mesh without importing torch.
+def _mesh_to_arrays(obj) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Extract raw mesh geometry from a Blender mesh without importing torch.
 
-    Returns (x, edge_index, edge_attr, unique_edges) where:
-      x            [N, 6]   vertex positions + normals
-      edge_index   [2, 2*E] bidirectional
-      edge_attr    [2*E, 4] [length, dihedral≈π, delta_normal, dot_normal]
-      unique_edges           list of (vi, vj) pairs (length E)
+    Returns:
+      vertices     [N, 3] float32  vertex positions
+      normals      [N, 3] float32  vertex normals
+      faces        [F, 3] int64    triangulated face vertex indices
+      unique_edges [E, 2] int64    undirected edges (vi < vj)
     """
     import bmesh
 
@@ -44,44 +44,29 @@ def _mesh_to_arrays(obj) -> tuple[np.ndarray, np.ndarray, np.ndarray, list]:
     bmesh.ops.triangulate(bm, faces=bm.faces)
     bm.verts.ensure_lookup_table()
     bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
 
-    verts = np.array(
-        [[v.co.x, v.co.y, v.co.z, v.normal.x, v.normal.y, v.normal.z]
-         for v in bm.verts],
-        dtype=np.float32,
+    vertices = np.array(
+        [[v.co.x, v.co.y, v.co.z] for v in bm.verts], dtype=np.float32
     )
-
-    unique_edges = [(e.verts[0].index, e.verts[1].index) for e in bm.edges]
-    vi_arr = np.array([vi for vi, _ in unique_edges], dtype=np.int64)
-    vj_arr = np.array([vj for _, vj in unique_edges], dtype=np.int64)
-
-    edge_index = np.array(
-        [np.concatenate([vi_arr, vj_arr]),
-         np.concatenate([vj_arr, vi_arr])],
+    normals = np.array(
+        [[v.normal.x, v.normal.y, v.normal.z] for v in bm.verts], dtype=np.float32
+    )
+    faces = np.array(
+        [[f.verts[0].index, f.verts[1].index, f.verts[2].index] for f in bm.faces],
         dtype=np.int64,
     )
-
-    edge_vec = verts[vj_arr, :3] - verts[vi_arr, :3]
-    edge_len = np.linalg.norm(edge_vec, axis=1, keepdims=True).astype(np.float32)
-    dihedral = np.full((len(unique_edges), 1), np.pi, dtype=np.float32)
-
-    ni, nj = verts[vi_arr, 3:], verts[vj_arr, 3:]
-    delta_nrm = np.linalg.norm(ni - nj, axis=1, keepdims=True).astype(np.float32)
-
-    eps = 1e-8
-    ni_hat = ni / np.linalg.norm(ni, axis=1, keepdims=True).clip(min=eps)
-    nj_hat = nj / np.linalg.norm(nj, axis=1, keepdims=True).clip(min=eps)
-    dot_nrm = np.einsum('ij,ij->i', ni_hat, nj_hat).astype(np.float32)[:, None]
-
-    edge_attr = np.tile(
-        np.concatenate([edge_len, dihedral, delta_nrm, dot_nrm], axis=1),
-        (2, 1),
+    unique_edges = np.array(
+        [(min(e.verts[0].index, e.verts[1].index),
+          max(e.verts[0].index, e.verts[1].index))
+         for e in bm.edges],
+        dtype=np.int64,
     )
 
     bm.free()
     eval_obj.to_mesh_clear()
 
-    return verts, edge_index, edge_attr, unique_edges
+    return vertices, normals, faces, unique_edges
 
 
 class UVSeamGNNProperties(bpy.types.PropertyGroup):
@@ -99,6 +84,15 @@ class UVSeamGNNProperties(bpy.types.PropertyGroup):
         description='Path to best_model.pth',
         default='',
         subtype='FILE_PATH',
+    )
+    model_type: EnumProperty(
+        name='Model',
+        description='GNN architecture of the loaded weights',
+        items=[
+            ('graphsage', 'DualGraphSAGE', 'GraphSAGE on the dual graph (default)'),
+            ('gatv2', 'DualGATv2', 'GATv2 with multi-head attention on the dual graph'),
+        ],
+        default='graphsage',
     )
     threshold: FloatProperty(
         name='Threshold',
@@ -152,11 +146,11 @@ class OBJECT_OT_predict_uv_seams(Operator):
             self.report({'ERROR'}, 'Select a mesh object.')
             return {'CANCELLED'}
 
-        # build graph arrays inside Blender (numpy only — no torch needed here)
+        # extract raw mesh geometry (numpy only — no torch needed here)
         try:
-            verts, edge_index, edge_attr, unique_edges = _mesh_to_arrays(obj)
+            vertices, normals, faces, unique_edges = _mesh_to_arrays(obj)
         except Exception as exc:
-            self.report({'ERROR'}, f'Graph build failed: {exc}')
+            self.report({'ERROR'}, f'Mesh extraction failed: {exc}')
             return {'CANCELLED'}
 
         # communicate with the inference subprocess via temp files
@@ -166,10 +160,10 @@ class OBJECT_OT_predict_uv_seams(Operator):
 
             np.savez(
                 data_path,
-                x=verts,
-                edge_index=edge_index,
-                edge_attr=edge_attr,
-                n_unique=np.array(len(unique_edges)),
+                vertices=vertices,
+                normals=normals,
+                faces=faces,
+                unique_edges=unique_edges,
             )
 
             cmd = [
@@ -179,6 +173,7 @@ class OBJECT_OT_predict_uv_seams(Operator):
                 weights_path,
                 str(props.threshold),
                 output_path,
+                '--model-type', props.model_type,
             ]
 
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -215,7 +210,7 @@ class OBJECT_OT_predict_uv_seams(Operator):
         for k in seam_indices:
             if k >= len(unique_edges):
                 continue
-            vi, vj = unique_edges[k]
+            vi, vj = int(unique_edges[k, 0]), int(unique_edges[k, 1])
             key = (min(vi, vj), max(vi, vj))
             if (idx := edge_key_to_idx.get(key)) is not None:
                 mesh.edges[idx].use_seam = True
@@ -242,6 +237,7 @@ class VIEW3D_PT_uv_seam_gnn(Panel):
 
         layout.separator()
         layout.prop(props, 'weights_path')
+        layout.prop(props, 'model_type')
         layout.prop(props, 'threshold', slider=True)
         layout.separator()
         layout.operator('object.predict_uv_seams', icon='UV')

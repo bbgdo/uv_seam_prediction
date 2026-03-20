@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from models.graphsage.model import DualGraphSAGE
 from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
+from models.utils.losses import seam_loss_with_connectivity
 from models.utils.metrics import edge_f1
 
 
@@ -21,6 +22,8 @@ def _run_epoch(
     criterion: torch.nn.Module,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
+    lambda_conn: float = 0.0,
+    pos_weight: torch.Tensor | None = None,
 ) -> tuple[float, dict]:
     """Single pass over dual graphs. Returns (mean_loss, mean_metrics)."""
     training = optimizer is not None
@@ -37,7 +40,11 @@ def _run_epoch(
             y = data.y.to(device)
 
             logits = model(x, edge_index)
-            loss = criterion(logits, y)
+
+            if training and lambda_conn > 0.0 and pos_weight is not None:
+                loss = seam_loss_with_connectivity(logits, y, edge_index, pos_weight, lambda_conn)
+            else:
+                loss = criterion(logits, y)
 
             if training:
                 optimizer.zero_grad()
@@ -85,12 +92,13 @@ def main(args: argparse.Namespace) -> None:
     logger = ExperimentLogger(
         run_dir=args.run_dir,
         config={
-            'model': 'DualGraphSAGE',
+            'model': 'GraphSAGE-Original',
             'in_dim': args.in_dim,
             'hidden_dim': args.hidden,
             'num_layers': args.num_layers,
             'dropout': args.dropout,
             'lr': args.lr,
+            'lambda_conn': args.lambda_conn,
             'patience': args.patience,
             'dataset': args.dataset,
             'train_graphs': len(train),
@@ -108,7 +116,9 @@ def main(args: argparse.Namespace) -> None:
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
-        train_loss, train_m = _run_epoch(model, train, criterion, device, optimizer)
+        train_loss, train_m = _run_epoch(
+            model, train, criterion, device, optimizer, args.lambda_conn, pos_weight
+        )
         val_loss, val_m = _run_epoch(model, val, criterion, device)
         epoch_time = time.time() - t0
 
@@ -174,6 +184,8 @@ if __name__ == '__main__':
     parser.add_argument('--hidden', type=int, default=128)
     parser.add_argument('--num-layers', type=int, default=3)
     parser.add_argument('--dropout', type=float, default=0.3)
+    parser.add_argument('--lambda-conn', type=float, default=0.0,
+                        help='connectivity penalty weight (0 = disabled, try 0.1)')
     parser.add_argument('--patience', type=int, default=15, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)

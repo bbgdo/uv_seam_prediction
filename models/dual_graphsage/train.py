@@ -9,7 +9,7 @@ from torch_geometric.data import Data
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from models.gatv2.model import DualGATv2
+from models.dual_graphsage.model import DualGraphSAGE
 from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.losses import seam_loss_with_connectivity
@@ -17,7 +17,7 @@ from models.utils.metrics import edge_f1
 
 
 def _run_epoch(
-    model: DualGATv2,
+    model: DualGraphSAGE,
     graphs: list[Data],
     criterion: torch.nn.Module,
     device: torch.device,
@@ -77,10 +77,9 @@ def main(args: argparse.Namespace) -> None:
 
     criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    model = DualGATv2(
+    model = DualGraphSAGE(
         in_dim=args.in_dim,
         hidden_dim=args.hidden,
-        heads=args.heads,
         num_layers=args.num_layers,
         dropout=args.dropout,
     ).to(device)
@@ -93,10 +92,9 @@ def main(args: argparse.Namespace) -> None:
     logger = ExperimentLogger(
         run_dir=args.run_dir,
         config={
-            'model': 'GATv2',
+            'model': 'DualGraphSAGE',
             'in_dim': args.in_dim,
             'hidden_dim': args.hidden,
-            'heads': args.heads,
             'num_layers': args.num_layers,
             'dropout': args.dropout,
             'lr': args.lr,
@@ -176,15 +174,14 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Train GATv2 on dual graph for UV-seam prediction.")
+    parser = argparse.ArgumentParser(description="Train DualGraphSAGE on dual graph for UV-seam prediction.")
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     parser.add_argument('--dataset', default='dataset_dual.pt', help='path to dual dataset')
-    parser.add_argument('--run-dir', default=f'runs/gatv2_{timestamp}', help='experiment output dir')
+    parser.add_argument('--run-dir', default=f'runs/dual_graphsage_{timestamp}', help='experiment output dir')
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=5e-4)
-    parser.add_argument('--hidden', type=int, default=64)
-    parser.add_argument('--heads', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--hidden', type=int, default=128)
     parser.add_argument('--num-layers', type=int, default=3)
     parser.add_argument('--dropout', type=float, default=0.3)
     parser.add_argument('--lambda-conn', type=float, default=0.0,

@@ -13,9 +13,9 @@ dataset_py_utils/
 ├── preprocessing/           # Mesh cleanup, feature engineering, augmentation,
 │                               graph conversion, and dual graph construction
 ├── models/                  # GNN architectures, training, and experiment logging
-│   ├── graphsage/           # GraphSAGE edge classifier (original graph)
 │   ├── gatv2/               # GATv2 node classifier (dual graph)
-│   └── utils/               # Dataset loading, metrics, logging, comparison
+│   ├── dual_graphsage/      # GraphSAGE node classifier (dual graph, for fair comparison)
+│   └── utils/               # Dataset loading, metrics, losses, post-processing, logging
 ├── runs/                    # Experiment outputs (JSON logs, plots, checkpoints)
 └── blender_bridge/          # Blender add-on for running inference
 ```
@@ -24,14 +24,16 @@ dataset_py_utils/
 
 ```
 Raw 3D files
-    → [preprocessing]           cleanup, format conversion, scale normalization
-    → [augment_meshes.py]       data augmentation (Gaussian vertex perturbation)
-    → [obj_to_dataset_graph.py] build original graph dataset (dataset.pt)
-    → [build_dual_graph.py]     build dual graph dataset (dataset_dual.pt)
-    → [models/graphsage/train.py] train GraphSAGE on original graph
-    → [models/gatv2/train.py]     train GATv2 on dual graph
-    → [models/utils/comparison.py] compare experiments
-    → [blender_bridge]            load weights, run inference inside Blender
+    → [preprocessing]                   cleanup, format conversion, scale normalization
+    → [augment_meshes.py]               data augmentation (Gaussian vertex perturbation)
+    → [obj_to_dataset_graph.py]         build original graph dataset (dataset.pt)
+    → [build_dual_graph.py]             build dual graph dataset (dataset_dual.pt)
+    → [models/graphsage/train.py]       train GraphSAGE on original graph
+    → [models/gatv2/train.py]           train GATv2 on dual graph
+    → [models/dual_graphsage/train.py]  train DualGraphSAGE on dual graph
+    → [models/utils/postprocess.py]     evaluate post-processing (threshold, clean, stitch)
+    → [models/utils/comparison.py]      compare experiments
+    → [blender_bridge]                  load weights, run inference inside Blender
 ```
 
 ## Graph Representations
@@ -48,7 +50,7 @@ Each mesh becomes a directed graph stored as a PyTorch Geometric `Data` object:
 | `y` | `[2E]` | 1 = seam, 0 = not a seam |
 | `faces` | `[F, 3]` | triangle face indices (used for dual graph construction) |
 
-### Dual graph (for GATv2)
+### Dual graph (for GATv2 and DualGraphSAGE)
 
 Edge classification is reframed as node classification. Each original edge becomes a dual node; two dual nodes are connected if their original edges share a face.
 
@@ -123,9 +125,32 @@ Training runs produce structured outputs in `runs/<experiment_name>/`:
 
 Compare experiments:
 ```bash
-python models/utils/comparison.py runs/graphsage_001 runs/gatv2_001
+python models/utils/comparison.py runs/graphsage_001 runs/gatv2_001 runs/dual_graphsage_001
 ```
 Generates `comparison_f1.png` (overlaid F1 curves) and `comparison_table.png` (test results table).
+
+## Training Options
+
+### Connectivity loss (`--lambda-conn`)
+
+All three training scripts accept `--lambda-conn` (default `0.0`). When set, a differentiable penalty is added to the BCE loss that discourages isolated seam predictions on the dual graph — dual nodes with high seam probability but low-probability neighbors are penalized.
+
+```bash
+python models/dual_graphsage/train.py --dataset dataset_dual.pt --lambda-conn 0.1
+```
+
+### Post-processing
+
+`models/utils/postprocess.py` applies inference-time cleanup to raw model probabilities:
+1. **Threshold + clean** — removes disconnected seam components smaller than `--min-component` edges.
+2. **Stitch gaps** — greedily bridges small gaps between disconnected seam components.
+
+```bash
+python models/utils/postprocess.py \
+    --dataset dataset.pt --dual-dataset dataset_dual.pt \
+    --weights runs/dual_graphsage_001/best_model.pth \
+    --threshold 0.5 --min-component 3 --max-gap 3
+```
 
 ## Requirements
 
