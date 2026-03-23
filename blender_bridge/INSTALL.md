@@ -45,7 +45,7 @@ Common locations:
 
 ### Step 3 — run inference
 
-1. Set **Weights** to `models/graphsage/best_model.pth`.
+1. Set **Weights** to the `best_model.pth` from your training run (e.g. `runs/dual_graphsage_001/best_model.pth`).
 2. Select a mesh object.
 3. Adjust **Threshold** (default 0.5).
 4. Click **Auto-Mark UV Seams**.

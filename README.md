@@ -1,6 +1,6 @@
 # UV Seam Predictor — ML Pipeline
 
-An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks (GraphSAGE and GATv2), deployed as a Blender add-on.
+An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks (DualGraphSAGE and DualGATv2 on the dual graph), deployed as a Blender add-on.
 
 ## Overview
 
@@ -14,8 +14,9 @@ dataset_py_utils/
 │                               graph conversion, and dual graph construction
 ├── models/                  # GNN architectures, training, and experiment logging
 │   ├── gatv2/               # GATv2 node classifier (dual graph)
-│   ├── dual_graphsage/      # GraphSAGE node classifier (dual graph, for fair comparison)
+│   ├── graphsage/           # GraphSAGE node classifier (dual graph, for fair comparison)
 │   └── utils/               # Dataset loading, metrics, losses, post-processing, logging
+├── evaluation/              # UV-level evaluation: unwrap quality metrics + comparison plots
 ├── runs/                    # Experiment outputs (JSON logs, plots, checkpoints)
 └── blender_bridge/          # Blender add-on for running inference
 ```
@@ -24,23 +25,22 @@ dataset_py_utils/
 
 ```
 Raw 3D files
-    → [preprocessing]                   cleanup, format conversion, scale normalization
-    → [augment_meshes.py]               data augmentation (Gaussian vertex perturbation)
-    → [obj_to_dataset_graph.py]         build original graph dataset (dataset.pt)
-    → [build_dual_graph.py]             build dual graph dataset (dataset_dual.pt)
-    → [models/graphsage/train.py]       train GraphSAGE on original graph
-    → [models/gatv2/train.py]           train GATv2 on dual graph
-    → [models/dual_graphsage/train.py]  train DualGraphSAGE on dual graph
-    → [models/utils/postprocess.py]     evaluate post-processing (threshold, clean, stitch)
-    → [models/utils/comparison.py]      compare experiments
-    → [blender_bridge]                  load weights, run inference inside Blender
+    → [preprocessing]                    cleanup, format conversion, scale normalization
+    → [augment_meshes.py]                data augmentation (Gaussian vertex perturbation)
+    → [obj_to_dataset_graph.py]          build original graph dataset (dataset.pt)
+    → [build_dual_graph.py]              build dual graph dataset (dataset_dual.pt)
+    → [models/graphsage/train.py]        train GraphSAGE on dual graph
+    → [models/gatv2/train.py]            train GATv2 on dual graph
+    → [evaluation/run_evaluation.py]     UV-level evaluation (unwrap + metrics)
+    → [evaluation/compare_models.py]     cross-model comparison tables + plots
+    → [blender_bridge]                   load weights, run inference inside Blender
 ```
 
-## Graph Representations
+## Graph Representation
 
-### Original graph (for GraphSAGE)
+### Dataset format (`dataset.pt`)
 
-Each mesh becomes a directed graph stored as a PyTorch Geometric `Data` object:
+Each mesh is stored as a PyTorch Geometric `Data` object (original graph, used for feature engineering):
 
 | Tensor | Shape | Description |
 |---|---|---|
@@ -48,9 +48,11 @@ Each mesh becomes a directed graph stored as a PyTorch Geometric `Data` object:
 | `edge_index` | `[2, 2E]` | all edges stored both directions |
 | `edge_attr` | `[2E, 11]` | 11-dim feature vector (see below) |
 | `y` | `[2E]` | 1 = seam, 0 = not a seam |
-| `faces` | `[F, 3]` | triangle face indices (used for dual graph construction) |
+| `faces` | `[F, 3]` | triangle face indices |
 
-### Dual graph (for GATv2 and DualGraphSAGE)
+### Dual graph (`dataset_dual.pt`)
+
+Edge classification is reframed as node classification on the dual (line) graph.
 
 Edge classification is reframed as node classification. Each original edge becomes a dual node; two dual nodes are connected if their original edges share a face.
 
