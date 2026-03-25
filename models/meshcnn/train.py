@@ -1,3 +1,13 @@
+"""
+Train MeshCNNClassifier on dataset_meshcnn.pt for UV seam prediction.
+
+Usage:
+    python models/meshcnn/train.py \\
+        --dataset dataset_meshcnn.pt \\
+        --run-dir runs/meshcnn_001 \\
+        --epochs 100 --hidden 64 --num-layers 4
+"""
+
 import argparse
 import sys
 import time
@@ -9,15 +19,23 @@ from torch_geometric.data import Data
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from models.graphsage.model import DualGraphSAGE
+from models.meshcnn.model import MeshCNNClassifier
 from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.losses import seam_loss_with_connectivity
 from models.utils.metrics import edge_f1
 
 
+def _neighbors_to_edge_index(neighbors: torch.Tensor) -> torch.Tensor:
+    """Convert [E, 4] neighbor indices to [2, D] edge_index for connectivity loss."""
+    E = neighbors.shape[0]
+    valid = neighbors >= 0                                    # [E, 4]
+    src_idx = torch.arange(E, device=neighbors.device).unsqueeze(1).expand_as(neighbors)
+    return torch.stack([src_idx[valid], neighbors[valid]], dim=0)  # [2, D]
+
+
 def _run_epoch(
-    model: DualGraphSAGE,
+    model: MeshCNNClassifier,
     graphs: list[Data],
     criterion: torch.nn.Module,
     device: torch.device,
@@ -25,7 +43,7 @@ def _run_epoch(
     lambda_conn: float = 0.0,
     pos_weight: torch.Tensor | None = None,
 ) -> tuple[float, dict]:
-    """Single pass over dual graphs. Returns (mean_loss, mean_metrics)."""
+    """Single pass over all graphs. Returns (mean_loss, mean_metrics)."""
     training = optimizer is not None
     model.train(training)
 
@@ -36,13 +54,17 @@ def _run_epoch(
     with ctx:
         for data in graphs:
             x = data.x.to(device)
-            edge_index = data.edge_index.to(device)
+            neighbors = data.edge_neighbors.to(device)
             y = data.y.to(device)
 
-            logits = model(x, edge_index)
+            logits = model(x, neighbors)
 
             if training and lambda_conn > 0.0 and pos_weight is not None:
-                loss = seam_loss_with_connectivity(logits, y, edge_index, pos_weight, lambda_conn)
+                # build edge_index from neighbor structure for connectivity penalty
+                edge_index = _neighbors_to_edge_index(neighbors)
+                loss = seam_loss_with_connectivity(
+                    logits, y, edge_index, pos_weight.to(device), lambda_conn
+                )
             else:
                 loss = criterion(logits, y)
 
@@ -55,7 +77,7 @@ def _run_epoch(
             all_logits.append(logits.detach().cpu())
             all_labels.append(y.cpu())
 
-            del x, edge_index, y, logits, loss
+            del x, neighbors, y, logits, loss
             torch.cuda.empty_cache()
 
     mean_loss = total_loss / len(graphs)
@@ -65,21 +87,26 @@ def _run_epoch(
 
 def main(args: argparse.Namespace) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"device: {device}")
+    print(f'device: {device}')
 
     dataset = load_dataset(args.dataset)
-
     train, val, test = split_dataset(dataset, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
-    print(f"split — train: {len(train)}, val: {len(val)}, test: {len(test)}")
+    print(f'split — train: {len(train)}, val: {len(val)}, test: {len(test)}')
 
     pos_weight = compute_pos_weight(train).to(device)
-    print(f"pos_weight: {pos_weight.item():.4f}")
+    print(f'pos_weight: {pos_weight.item():.4f}')
 
     criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    model = DualGraphSAGE(
-        in_dim=args.in_dim,
-        hidden_dim=args.hidden,
+    # auto-detect feature dim from data if not overridden
+    detected_in = dataset[0].x.shape[1]
+    if args.in_channels != detected_in:
+        print(f'[info] detected in_channels={detected_in} from dataset (overriding --in-channels {args.in_channels})')
+        args.in_channels = detected_in
+
+    model = MeshCNNClassifier(
+        in_channels=args.in_channels,
+        hidden_channels=args.hidden,
         num_layers=args.num_layers,
         dropout=args.dropout,
     ).to(device)
@@ -92,9 +119,9 @@ def main(args: argparse.Namespace) -> None:
     logger = ExperimentLogger(
         run_dir=args.run_dir,
         config={
-            'model': 'GraphSAGE-Original',
-            'in_dim': args.in_dim,
-            'hidden_dim': args.hidden,
+            'model': 'MeshCNN',
+            'in_channels': args.in_channels,
+            'hidden_channels': args.hidden,
             'num_layers': args.num_layers,
             'dropout': args.dropout,
             'lr': args.lr,
@@ -140,11 +167,11 @@ def main(args: argparse.Namespace) -> None:
         )
 
         print(
-            f"epoch {epoch:03d} | "
-            f"train loss {train_loss:.4f}  f1 {train_m['f1']:.4f} | "
-            f"val loss {val_loss:.4f}  f1 {val_m['f1']:.4f}  "
-            f"prec {val_m['precision']:.4f}  rec {val_m['recall']:.4f}  "
-            f"[{epoch_time:.1f}s]"
+            f'epoch {epoch:03d} | '
+            f'train loss {train_loss:.4f}  f1 {train_m["f1"]:.4f} | '
+            f'val loss {val_loss:.4f}  f1 {val_m["f1"]:.4f}  '
+            f'prec {val_m["precision"]:.4f}  rec {val_m["recall"]:.4f}  '
+            f'[{epoch_time:.1f}s]'
         )
 
         if val_m['f1'] > best_val_f1:
@@ -152,20 +179,20 @@ def main(args: argparse.Namespace) -> None:
             best_epoch = epoch
             patience_ctr = 0
             torch.save(model.state_dict(), save_path)
-            print(f"  -> saved best model (val F1 = {best_val_f1:.4f})")
+            print(f'  -> saved best model (val F1 = {best_val_f1:.4f})')
         else:
             patience_ctr += 1
             if patience_ctr >= args.patience:
-                print(f"early stopping at epoch {epoch} (no improvement for {args.patience} epochs).")
+                print(f'early stopping at epoch {epoch} (no improvement for {args.patience} epochs).')
                 break
 
-    print(f"\nloading best weights from {save_path}")
-    model.load_state_dict(torch.load(save_path, map_location=device))
+    print(f'\nloading best weights from {save_path}')
+    model.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
     test_loss, test_m = _run_epoch(model, test, criterion, device)
     print(
-        f"test | loss {test_loss:.4f}  f1 {test_m['f1']:.4f}  "
-        f"prec {test_m['precision']:.4f}  rec {test_m['recall']:.4f}  "
-        f"acc {test_m['accuracy']:.4f}"
+        f'test | loss {test_loss:.4f}  f1 {test_m["f1"]:.4f}  '
+        f'prec {test_m["precision"]:.4f}  rec {test_m["recall"]:.4f}  '
+        f'acc {test_m["accuracy"]:.4f}'
     )
 
     logger.finalize(test_metrics=test_m, best_epoch=best_epoch)
@@ -174,21 +201,23 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Train DualGraphSAGE on dual graph for UV-seam prediction.")
-
+    parser = argparse.ArgumentParser(
+        description='Train MeshCNN on mesh edge neighborhoods for UV seam prediction.'
+    )
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    parser.add_argument('--dataset', default='dataset_dual.pt', help='path to dual dataset')
-    parser.add_argument('--run-dir', default=f'runs/dual_graphsage_{timestamp}', help='experiment output dir')
+
+    parser.add_argument('--dataset', default='dataset_meshcnn.pt')
+    parser.add_argument('--run-dir', default=f'runs/meshcnn_{timestamp}')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--hidden', type=int, default=128)
-    parser.add_argument('--num-layers', type=int, default=3)
+    parser.add_argument('--hidden', type=int, default=64)
+    parser.add_argument('--num-layers', type=int, default=4)
+    parser.add_argument('--in-channels', type=int, default=11)
     parser.add_argument('--dropout', type=float, default=0.3)
     parser.add_argument('--lambda-conn', type=float, default=0.0,
                         help='connectivity penalty weight (0 = disabled, try 0.1)')
-    parser.add_argument('--patience', type=int, default=15, help='early-stop patience')
+    parser.add_argument('--patience', type=int, default=15)
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
-    parser.add_argument('--in-dim', type=int, default=11, help='dual node feature dim (default: 11)')
 
     main(parser.parse_args())

@@ -91,6 +91,7 @@ class UVSeamGNNProperties(bpy.types.PropertyGroup):
         items=[
             ('graphsage', 'DualGraphSAGE', 'GraphSAGE on the dual graph (default)'),
             ('gatv2', 'DualGATv2', 'GATv2 with multi-head attention on the dual graph'),
+            ('meshcnn', 'MeshCNN', 'MeshCNN edge convolution on original mesh topology'),
         ],
         default='graphsage',
     )

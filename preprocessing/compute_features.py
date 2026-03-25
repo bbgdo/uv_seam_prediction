@@ -120,7 +120,7 @@ def compute_dot_normal(mesh: trimesh.Trimesh, unique_edges: np.ndarray) -> np.nd
 
 
 def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
-    """Discrete Gaussian curvature via angle defect method.
+    """Discrete Gaussian curvature via angle defect method (vectorized).
 
     K_v = 2pi - sum(incident face angles at v) for interior vertices
     K_v = pi - sum(incident face angles at v) for boundary vertices
@@ -129,42 +129,42 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(vertices)
 
-    angle_sum = np.zeros(n_verts, dtype=np.float64)
+    # vectorized angle computation: one entry per (face, corner)
+    v0, v1, v2 = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
 
-    for face in faces:
-        v0, v1, v2 = vertices[face[0]], vertices[face[1]], vertices[face[2]]
-        edges = [
-            (v1 - v0, v2 - v0),  # angle at vertex 0
-            (v0 - v1, v2 - v1),  # angle at vertex 1
-            (v0 - v2, v1 - v2),  # angle at vertex 2
-        ]
-        for local_idx, (e_a, e_b) in enumerate(edges):
-            norm_a = np.linalg.norm(e_a)
-            norm_b = np.linalg.norm(e_b)
-            if norm_a < 1e-12 or norm_b < 1e-12:
-                continue
-            cos_angle = np.clip(np.dot(e_a, e_b) / (norm_a * norm_b), -1.0, 1.0)
-            angle_sum[face[local_idx]] += np.arccos(cos_angle)
+    def _corner_angles(ea: np.ndarray, eb: np.ndarray) -> np.ndarray:
+        na = np.linalg.norm(ea, axis=1)
+        nb = np.linalg.norm(eb, axis=1)
+        cos_a = np.einsum('ij,ij->i', ea, eb) / (na * nb + 1e-12)
+        return np.arccos(np.clip(cos_a, -1.0, 1.0))
 
-    # detect boundary vertices
-    boundary_verts = set()
-    edge_face_count: dict[tuple, int] = {}
-    for face in faces:
-        for k in range(3):
-            key = (min(face[k], face[(k + 1) % 3]), max(face[k], face[(k + 1) % 3]))
-            edge_face_count[key] = edge_face_count.get(key, 0) + 1
-    for (vi, vj), count in edge_face_count.items():
-        if count == 1:
-            boundary_verts.add(vi)
-            boundary_verts.add(vj)
+    angles_v0 = _corner_angles(v1 - v0, v2 - v0)  # [F]
+    angles_v1 = _corner_angles(v0 - v1, v2 - v1)  # [F]
+    angles_v2 = _corner_angles(v0 - v2, v1 - v2)  # [F]
 
-    curvatures = np.zeros(n_verts, dtype=np.float64)
-    for v_idx in range(n_verts):
-        if v_idx in boundary_verts:
-            curvatures[v_idx] = np.pi - angle_sum[v_idx]
-        else:
-            curvatures[v_idx] = 2.0 * np.pi - angle_sum[v_idx]
+    angle_sum = (
+        np.bincount(faces[:, 0], weights=angles_v0, minlength=n_verts)
+        + np.bincount(faces[:, 1], weights=angles_v1, minlength=n_verts)
+        + np.bincount(faces[:, 2], weights=angles_v2, minlength=n_verts)
+    )
 
+    # detect boundary vertices via edge face count
+    edges_all = np.concatenate([
+        faces[:, [0, 1]],
+        faces[:, [1, 2]],
+        faces[:, [2, 0]],
+    ], axis=0)  # [3F, 2]
+    edges_sorted = np.sort(edges_all, axis=1)
+    encoded = edges_sorted[:, 0] * n_verts + edges_sorted[:, 1]
+    unique_enc, counts = np.unique(encoded, return_counts=True)
+    boundary_enc = unique_enc[counts == 1]
+    boundary_vi = (boundary_enc // n_verts).astype(np.int64)
+    boundary_vj = (boundary_enc % n_verts).astype(np.int64)
+    is_boundary = np.zeros(n_verts, dtype=bool)
+    is_boundary[boundary_vi] = True
+    is_boundary[boundary_vj] = True
+
+    curvatures = np.where(is_boundary, np.pi - angle_sum, 2.0 * np.pi - angle_sum)
     return curvatures.astype(np.float32)
 
 
@@ -300,7 +300,10 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
 
 def _ao_normal_approximation(mesh: trimesh.Trimesh) -> np.ndarray:
     """Crude AO proxy: for each vertex, check how many nearby vertices
-    have normals pointing toward it (suggesting occlusion)."""
+    have normals pointing toward it (suggesting occlusion).
+
+    Uses k-NN (k=16) instead of radius search for fully vectorized computation.
+    """
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
     n_verts = len(vertices)
@@ -308,28 +311,23 @@ def _ao_normal_approximation(mesh: trimesh.Trimesh) -> np.ndarray:
     if cKDTree is None:
         return np.full(n_verts, 0.5, dtype=np.float32)
 
-    bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])
-    radius = bbox_diag * 0.1
+    k = min(16, n_verts - 1)
+    if k < 1:
+        return np.full(n_verts, 0.5, dtype=np.float32)
 
     tree = cKDTree(vertices)
-    ao = np.zeros(n_verts, dtype=np.float32)
+    # single vectorized batch query — avoids O(N) Python loop
+    _, indices = tree.query(vertices, k=k + 1)  # [N, k+1], col 0 is self
+    nb_idx = indices[:, 1:]  # [N, k]
 
-    for i in range(n_verts):
-        neighbors = tree.query_ball_point(vertices[i], radius)
-        if len(neighbors) <= 1:
-            continue
-        neighbor_idx = [n for n in neighbors if n != i]
-        if not neighbor_idx:
-            continue
-        # direction from neighbor to vertex
-        dirs = vertices[i] - vertices[neighbor_idx]
-        dirs_norm = dirs / (np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12)
-        # how much does neighbor's normal point toward this vertex?
-        n_nbr = normals[neighbor_idx]
-        alignment = np.einsum('ij,ij->i', n_nbr, dirs_norm)
-        ao[i] = np.clip(np.mean(np.maximum(alignment, 0)), 0, 1)
+    # directions from each neighbor to each vertex: [N, k, 3]
+    dirs = vertices[:, None, :] - vertices[nb_idx]
+    dirs = dirs / (np.linalg.norm(dirs, axis=2, keepdims=True) + 1e-12)
 
-    return ao
+    # alignment of neighbor normals with direction toward vertex
+    n_nbr = normals[nb_idx]  # [N, k, 3]
+    alignment = np.einsum('nki,nki->nk', n_nbr, dirs)  # [N, k]
+    return np.clip(np.mean(np.maximum(alignment, 0), axis=1), 0, 1).astype(np.float32)
 
 
 def compute_ao_features(

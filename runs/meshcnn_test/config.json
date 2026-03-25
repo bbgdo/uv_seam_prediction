@@ -1,0 +1,15 @@
+{
+  "model": "MeshCNN",
+  "in_channels": 11,
+  "hidden_channels": 64,
+  "num_layers": 4,
+  "dropout": 0.3,
+  "lr": 0.001,
+  "lambda_conn": 0.0,
+  "patience": 15,
+  "dataset": "dataset_meshcnn_test.pt",
+  "train_graphs": 2,
+  "val_graphs": 1,
+  "test_graphs": 1,
+  "pos_weight": 15.3516263961792
+}

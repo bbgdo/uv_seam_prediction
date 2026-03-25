@@ -1,6 +1,6 @@
 # UV Seam Predictor — ML Pipeline
 
-An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks (DualGraphSAGE and DualGATv2 on the dual graph), deployed as a Blender add-on.
+An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks, deployed as a Blender add-on. Three architectures are compared: DualGraphSAGE, DualGATv2 (both on the dual graph), and MeshCNN (fixed 4-neighbor edge convolution on the original mesh).
 
 ## Overview
 
@@ -13,8 +13,9 @@ dataset_py_utils/
 ├── preprocessing/           # Mesh cleanup, feature engineering, augmentation,
 │                               graph conversion, and dual graph construction
 ├── models/                  # GNN architectures, training, and experiment logging
-│   ├── gatv2/               # GATv2 node classifier (dual graph)
-│   ├── graphsage/           # GraphSAGE node classifier (dual graph, for fair comparison)
+│   ├── dual_graphsage/      # DualGraphSAGE node classifier (dual graph)
+│   ├── gatv2/               # DualGATv2 node classifier (dual graph)
+│   ├── meshcnn/             # MeshCNN edge classifier (original mesh, fixed 4-neighbor conv)
 │   └── utils/               # Dataset loading, metrics, losses, post-processing, logging
 ├── evaluation/              # UV-level evaluation: unwrap quality metrics + comparison plots
 ├── runs/                    # Experiment outputs (JSON logs, plots, checkpoints)
@@ -27,13 +28,15 @@ dataset_py_utils/
 Raw 3D files
     → [preprocessing]                    cleanup, format conversion, scale normalization
     → [augment_meshes.py]                data augmentation (Gaussian vertex perturbation)
-    → [obj_to_dataset_graph.py]          build original graph dataset (dataset.pt)
-    → [build_dual_graph.py]              build dual graph dataset (dataset_dual.pt)
-    → [models/graphsage/train.py]        train GraphSAGE on dual graph
-    → [models/gatv2/train.py]            train GATv2 on dual graph
-    → [evaluation/run_evaluation.py]     UV-level evaluation (unwrap + metrics)
-    → [evaluation/compare_models.py]     cross-model comparison tables + plots
-    → [blender_bridge]                   load weights, run inference inside Blender
+    → [obj_to_dataset_graph.py]              build original graph dataset (dataset.pt)
+    → [build_dual_graph.py]                  build dual graph dataset (dataset_dual.pt)
+    → [build_meshcnn_data.py]                build MeshCNN dataset (dataset_meshcnn.pt)
+    → [models/dual_graphsage/train.py]       train DualGraphSAGE on dual graph
+    → [models/gatv2/train.py]                train DualGATv2 on dual graph
+    → [models/meshcnn/train.py]              train MeshCNN on original mesh
+    → [evaluation/run_evaluation.py]         UV-level evaluation (unwrap + metrics)
+    → [evaluation/compare_models.py]         cross-model comparison tables + plots
+    → [blender_bridge]                       load weights, run inference inside Blender
 ```
 
 ## Graph Representation
@@ -109,6 +112,24 @@ python preprocessing/augment_meshes.py ./3d-objs --copies 3 --noise 0.05
 
 </details>
 
+### MeshCNN dataset (`dataset_meshcnn.pt`)
+
+MeshCNN operates on original mesh topology using a fixed 4-neighbor structure. Run `preprocessing/build_meshcnn_data.py` to convert `dataset.pt`:
+
+```bash
+python preprocessing/build_meshcnn_data.py --input dataset.pt --output dataset_meshcnn.pt
+```
+
+| Tensor | Shape | Description |
+|---|---|---|
+| `x` | `[E, 11]` | 11-dim edge features (same as `dataset.pt`) |
+| `edge_neighbors` | `[E, 4]` | 4 neighboring edge indices per edge (-1 = boundary) |
+| `y` | `[E]` | seam labels |
+
+Interior edges have all 4 neighbors; boundary edges have -1 in positions 2–3.
+
+---
+
 ## Experiment Logging
 
 Training runs produce structured outputs in `runs/<experiment_name>/`:
@@ -127,7 +148,7 @@ Training runs produce structured outputs in `runs/<experiment_name>/`:
 
 Compare experiments:
 ```bash
-python models/utils/comparison.py runs/graphsage_001 runs/gatv2_001 runs/dual_graphsage_001
+python models/utils/comparison.py runs/dual_graphsage_001 runs/gatv2_001 runs/meshcnn_001
 ```
 Generates `comparison_f1.png` (overlaid F1 curves) and `comparison_table.png` (test results table).
 

@@ -3,7 +3,7 @@ Standalone UV seam inference worker — runs in an external Python process.
 
 Usage:
     python run_inference.py <data.npz> <weights.pth> <threshold> <output.txt>
-                           [--model-type graphsage|gatv2]
+                           [--model-type graphsage|gatv2|meshcnn]
                            [--min-component N]
                            [--max-gap N]
 
@@ -361,6 +361,95 @@ class DualGATv2(nn.Module):
         return self.classifier(x).squeeze(-1)
 
 
+class _MeshConvLayer(nn.Module):
+    """MeshConv: edge conv with fixed 4-neighbor topology (embedded, self-contained)."""
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.fc = nn.Linear(5 * in_channels, out_channels)
+
+    def forward(self, x: torch.Tensor, neighbors: torch.Tensor) -> torch.Tensor:
+        E, C = x.shape
+        x_padded = torch.cat([x, x.new_zeros(1, C)], dim=0)
+        safe_nb = neighbors.clamp(min=0)
+        nb_feats = x_padded[safe_nb]
+        nb_feats = nb_feats.masked_fill((neighbors < 0).unsqueeze(-1), 0.0)
+        pair1, _ = torch.sort(nb_feats[:, 0:2, :], dim=1)
+        pair2, _ = torch.sort(nb_feats[:, 2:4, :], dim=1)
+        combined = torch.cat([x, pair1.reshape(E, 2 * C), pair2.reshape(E, 2 * C)], dim=1)
+        return self.fc(combined)
+
+
+class MeshCNNClassifier(nn.Module):
+    def __init__(self, in_channels=11, hidden_channels=64, num_layers=4, dropout=0.3):
+        super().__init__()
+        self.dropout = dropout
+        self.convs = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.convs.append(_MeshConvLayer(in_channels, hidden_channels))
+        self.norms.append(nn.LayerNorm(hidden_channels))
+        for _ in range(num_layers - 1):
+            self.convs.append(_MeshConvLayer(hidden_channels, hidden_channels))
+            self.norms.append(nn.LayerNorm(hidden_channels))
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_channels, hidden_channels // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_channels // 2, 1),
+        )
+
+    def forward(self, x: torch.Tensor, neighbors: torch.Tensor) -> torch.Tensor:
+        for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
+            h = conv(x, neighbors)
+            h = norm(h)
+            h = F.relu(h)
+            h = F.dropout(h, p=self.dropout, training=self.training)
+            if i > 0 and h.shape == x.shape:
+                h = h + x
+            x = h
+        return self.classifier(x).squeeze(-1)
+
+
+# ─── MeshCNN neighbor builder ─────────────────────────────────────────────────
+
+def build_edge_neighbors(faces: np.ndarray, unique_edges: np.ndarray) -> torch.Tensor:
+    """Build [E, 4] neighbor index tensor for MeshConv from raw face/edge arrays."""
+    src = unique_edges[:, 0]
+    dst = unique_edges[:, 1]
+    num_unique = len(unique_edges)
+
+    edge_key_to_idx: dict = {
+        (int(vi), int(vj)): idx for idx, (vi, vj) in enumerate(unique_edges)
+    }
+
+    edge_to_faces: dict = {}
+    for f_idx, face in enumerate(faces):
+        for k in range(3):
+            vi, vj = int(face[k]), int(face[(k + 1) % 3])
+            key = (min(vi, vj), max(vi, vj))
+            eidx = edge_key_to_idx.get(key, -1)
+            if eidx >= 0:
+                edge_to_faces.setdefault(eidx, []).append(f_idx)
+
+    neighbors = np.full((num_unique, 4), -1, dtype=np.int64)
+    for edge_idx in range(num_unique):
+        a, b = int(src[edge_idx]), int(dst[edge_idx])
+        opp_verts: list = []
+        for f_idx in edge_to_faces.get(edge_idx, [])[:2]:
+            opp = {int(v) for v in faces[f_idx]} - {a, b}
+            if opp:
+                opp_verts.append(next(iter(opp)))
+        if len(opp_verts) >= 1:
+            c = opp_verts[0]
+            neighbors[edge_idx, 0] = edge_key_to_idx.get((min(a, c), max(a, c)), -1)
+            neighbors[edge_idx, 1] = edge_key_to_idx.get((min(c, b), max(c, b)), -1)
+        if len(opp_verts) >= 2:
+            d = opp_verts[1]
+            neighbors[edge_idx, 2] = edge_key_to_idx.get((min(b, d), max(b, d)), -1)
+            neighbors[edge_idx, 3] = edge_key_to_idx.get((min(d, a), max(d, a)), -1)
+
+    return torch.from_numpy(neighbors)
+
+
 # ─── Post-processing ─────────────────────────────────────────────────────────
 
 def _seam_component_labels(mask: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
@@ -502,7 +591,8 @@ def main() -> None:
     parser.add_argument('weights_pth', help='Path to best_model.pth')
     parser.add_argument('threshold', type=float, help='Sigmoid threshold (0-1)')
     parser.add_argument('output_txt', help='Path to write seam edge indices')
-    parser.add_argument('--model-type', default='graphsage', choices=['graphsage', 'gatv2'],
+    parser.add_argument('--model-type', default='graphsage',
+                        choices=['graphsage', 'gatv2', 'meshcnn'],
                         help='Model architecture (default: graphsage)')
     parser.add_argument('--min-component', type=int, default=3,
                         help='Min seam component size to keep (default: 3)')
@@ -524,17 +614,21 @@ def main() -> None:
     print('[UV Seam GNN] computing edge features...')
     features = compute_edge_features(vertices, normals, faces, unique_edges)  # [E, 11]
 
-    print('[UV Seam GNN] building dual graph...')
-    edge_index = build_dual_edge_index(faces, unique_edges)  # [2, D]
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     x = torch.from_numpy(features).float().to(device)
-    edge_index = edge_index.to(device)
 
-    if args.model_type == 'graphsage':
-        model = DualGraphSAGE().to(device)
-    else:
+    if args.model_type == 'meshcnn':
+        print('[UV Seam GNN] building mesh neighbor structure...')
+        graph_input = build_edge_neighbors(faces, unique_edges).to(device)
+        model = MeshCNNClassifier().to(device)
+    elif args.model_type == 'gatv2':
+        print('[UV Seam GNN] building dual graph...')
+        graph_input = build_dual_edge_index(faces, unique_edges).to(device)
         model = DualGATv2().to(device)
+    else:
+        print('[UV Seam GNN] building dual graph...')
+        graph_input = build_dual_edge_index(faces, unique_edges).to(device)
+        model = DualGraphSAGE().to(device)
 
     state = torch.load(args.weights_pth, map_location=device, weights_only=True)
     model.load_state_dict(state)
@@ -542,7 +636,7 @@ def main() -> None:
 
     print(f'[UV Seam GNN] running {args.model_type} inference...')
     with torch.no_grad():
-        logits = model(x, edge_index)
+        logits = model(x, graph_input)
     probs = torch.sigmoid(logits).cpu().numpy()
 
     print('[UV Seam GNN] post-processing...')
