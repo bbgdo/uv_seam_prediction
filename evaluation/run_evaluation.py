@@ -60,6 +60,9 @@ def _load_model(weights_path: str, model_type: str, device: torch.device):
     elif model_type == 'gatv2':
         from models.gatv2.model import DualGATv2
         model = DualGATv2().to(device)
+    elif model_type == 'meshcnn':
+        from models.meshcnn.model import MeshCNNClassifier
+        model = MeshCNNClassifier().to(device)
     else:
         raise ValueError(f'Unknown model type: {model_type!r}')
 
@@ -72,49 +75,67 @@ def _load_model(weights_path: str, model_type: str, device: torch.device):
 def _infer_seam_indices(
     mesh_path: str,
     model,
+    model_type: str,
     device: torch.device,
     threshold: float,
     min_component: int,
     max_gap: int,
-) -> list[int]:
+) -> tuple[list[int], np.ndarray]:
     """Run inference on a single .obj and return post-processed seam edge indices."""
     mesh = trimesh.load(str(mesh_path), process=False, force='mesh')
     features, unique_edges, _ = compute_edge_features(mesh)
-
-    # build dual graph on the fly using a dummy Data object
-    from torch_geometric.data import Data
-    import torch as th
-
-    n_verts = len(mesh.vertices)
-    edge_index_fwd = th.from_numpy(
-        np.stack([unique_edges[:, 0], unique_edges[:, 1]], axis=0)
-    ).long()
-    edge_index_bwd = th.from_numpy(
-        np.stack([unique_edges[:, 1], unique_edges[:, 0]], axis=0)
-    ).long()
-    full_edge_index = th.cat([edge_index_fwd, edge_index_bwd], dim=1)
-
     faces = np.asarray(mesh.faces, dtype=np.int64)
-    data = Data(
-        x=th.zeros(n_verts, 6),  # dummy node features (not used by dual model)
-        edge_index=full_edge_index,
-        edge_attr=th.from_numpy(features).float(),
-        y=th.zeros(len(unique_edges) * 2),
-        faces=th.from_numpy(faces),
-    )
-    data.file_path = str(mesh_path)
 
-    dual_data = build_dual_graph_data(data)
+    if model_type == 'meshcnn':
+        from preprocessing.build_meshcnn_data import build_edge_neighbors
+        src = unique_edges[:, 0]
+        dst = unique_edges[:, 1]
+        edge_key_to_idx = {
+            (int(min(src[i], dst[i])), int(max(src[i], dst[i]))): i
+            for i in range(len(unique_edges))
+        }
+        neighbors = build_edge_neighbors(src, dst, faces, edge_key_to_idx)
+        x = torch.from_numpy(features).float().to(device)
+        nb = torch.from_numpy(neighbors).long().to(device)
+        with torch.no_grad():
+            logits = model(x, nb)
+    else:
+        # dual graph path (graphsage / gatv2)
+        from torch_geometric.data import Data
+        n_verts = len(mesh.vertices)
+        edge_index_fwd = torch.from_numpy(
+            np.stack([unique_edges[:, 0], unique_edges[:, 1]], axis=0)
+        ).long()
+        edge_index_bwd = torch.from_numpy(
+            np.stack([unique_edges[:, 1], unique_edges[:, 0]], axis=0)
+        ).long()
+        full_edge_index = torch.cat([edge_index_fwd, edge_index_bwd], dim=1)
+        data = Data(
+            x=torch.zeros(n_verts, 6),
+            edge_index=full_edge_index,
+            edge_attr=torch.from_numpy(features).float(),
+            y=torch.zeros(len(unique_edges) * 2),
+            faces=torch.from_numpy(faces),
+        )
+        data.file_path = str(mesh_path)
+        dual_data = build_dual_graph_data(data)
+        x = dual_data.x.to(device)
+        ei = dual_data.edge_index.to(device)
+        with torch.no_grad():
+            logits = model(x, ei)
 
-    x = dual_data.x.to(device)
-    ei = dual_data.edge_index.to(device)
-
-    with torch.no_grad():
-        logits = model(x, ei)
     probs = torch.sigmoid(logits).cpu().numpy()
 
+    # build edge_to_faces for gap stitching
+    edge_to_faces: dict = {}
+    for f_idx, face in enumerate(faces):
+        for k in range(3):
+            vi, vj = int(face[k]), int(face[(k + 1) % 3])
+            key = (min(vi, vj), max(vi, vj))
+            edge_to_faces.setdefault(key, []).append(f_idx)
+
     mask = threshold_and_clean(probs, unique_edges, threshold, min_component)
-    mask = stitch_seam_gaps(probs, mask, unique_edges, max_gap)
+    mask = stitch_seam_gaps(probs, mask, unique_edges, edge_to_faces, max_gap)
 
     return np.where(mask)[0].tolist(), unique_edges
 
@@ -351,7 +372,7 @@ def main() -> None:
     parser.add_argument('--dual-dataset', default='dataset_dual.pt',
                         help='Path to dual graph dataset (for reference, not loaded here)')
     parser.add_argument('--weights', required=True, help='Path to best_model.pth')
-    parser.add_argument('--model-type', required=True, choices=['graphsage', 'gatv2'])
+    parser.add_argument('--model-type', required=True, choices=['graphsage', 'gatv2', 'meshcnn'])
     parser.add_argument('--blender-exe', default='blender',
                         help='Blender executable path (default: blender)')
     parser.add_argument('--output-dir', required=True,
@@ -413,7 +434,7 @@ def main() -> None:
             # ── Inference ────────────────────────────────────────────────────
             try:
                 seam_indices, unique_edges = _infer_seam_indices(
-                    str(mesh_path), model, device,
+                    str(mesh_path), model, args.model_type, device,
                     args.threshold, args.min_component, args.max_gap,
                 )
                 print(f'  inference: {len(seam_indices)} seam edges predicted')

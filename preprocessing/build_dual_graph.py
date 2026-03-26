@@ -67,12 +67,14 @@ def build_dual_graph_data(original_data: Data) -> Data:
     dual_x = original_data.edge_attr[:num_unique]
     dual_y = original_data.y[:num_unique]
 
-    return Data(
+    dual = Data(
         x=dual_x,
         edge_index=torch.from_numpy(dual_edges),
         y=dual_y,
         num_nodes=num_unique,
     )
+    dual.file_path = getattr(original_data, 'file_path', '')
+    return dual
 
 
 if __name__ == '__main__':

@@ -28,19 +28,39 @@ def split_dataset(
     test_ratio: float = 0.10,
     seed: int = 42,
 ) -> tuple[list[Data], list[Data], list[Data]]:
-    """Train/val/test split. Returns (train, val, test)."""
-    import random
-    rng = random.Random(seed)
-    shuffled = dataset[:]
-    rng.shuffle(shuffled)
+    """Train/val/test split grouped by base mesh to prevent augmentation leakage.
 
-    n = len(shuffled)
+    Augmented copies (e.g. mesh_A_aug1.obj, mesh_A_aug2.obj) are always kept
+    in the same split as their base mesh (mesh_A.obj).
+    """
+    import random
+    import re
+
+    def _base_name(d: Data) -> str:
+        name = Path(getattr(d, 'file_path', '')).stem
+        return re.sub(r'_aug\d+$', '', name) if name else str(id(d))
+
+    # group graphs by base mesh name
+    groups: dict[str, list[Data]] = {}
+    for d in dataset:
+        groups.setdefault(_base_name(d), []).append(d)
+
+    # shuffle and split at the group level
+    rng = random.Random(seed)
+    group_keys = list(groups.keys())
+    rng.shuffle(group_keys)
+
+    n = len(group_keys)
     n_test = max(1, int(n * test_ratio))
     n_val = max(1, int(n * val_ratio))
 
-    test = shuffled[:n_test]
-    val = shuffled[n_test:n_test + n_val]
-    train = shuffled[n_test + n_val:]
+    test_keys = group_keys[:n_test]
+    val_keys = group_keys[n_test:n_test + n_val]
+    train_keys = group_keys[n_test + n_val:]
+
+    train = [d for k in train_keys for d in groups[k]]
+    val = [d for k in val_keys for d in groups[k]]
+    test = [d for k in test_keys for d in groups[k]]
 
     return train, val, test
 
