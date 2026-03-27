@@ -1,25 +1,8 @@
-"""
-UV quality metrics computed from mesh geometry and UV coordinates.
-
-All metrics work on triangulated meshes. Input conventions:
-  vertices:  [N, 3]  float64  — 3D vertex positions
-  faces:     [F, 3]  int64    — triangle vertex indices (into vertices)
-  uv_coords: [M, 2]  float64  — UV coordinates (M >= N, due to UV splits at seams)
-  uv_faces:  [F, 3]  int64    — UV face indices (which uv_coords row each face-corner uses)
-
-If uv_faces is None, uv_coords[i] is assumed to correspond to vertices[i].
-
-Usage:
-    python evaluation/uv_metrics.py path/to/mesh.obj
-"""
-
 import sys
 from pathlib import Path
 
 import numpy as np
 
-
-# ─── OBJ parser ──────────────────────────────────────────────────────────────
 
 def parse_obj_with_uv(path: str) -> dict:
     """Parse .obj file extracting vertices, faces, UV coords, and UV face indices.
@@ -80,10 +63,7 @@ def parse_obj_with_uv(path: str) -> dict:
     return result
 
 
-# ─── Geometry helpers ─────────────────────────────────────────────────────────
-
 def _triangle_areas_3d(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
-    """Compute area of each triangle in 3D. Returns [F] float64."""
     v0 = vertices[faces[:, 0]]
     v1 = vertices[faces[:, 1]]
     v2 = vertices[faces[:, 2]]
@@ -92,7 +72,6 @@ def _triangle_areas_3d(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
 
 
 def _triangle_areas_uv(uv_coords: np.ndarray, uv_faces: np.ndarray) -> np.ndarray:
-    """Compute signed area of each UV triangle. Returns [F] float64 (signed)."""
     u0 = uv_coords[uv_faces[:, 0]]
     u1 = uv_coords[uv_faces[:, 1]]
     u2 = uv_coords[uv_faces[:, 2]]
@@ -107,7 +86,7 @@ def _resolve_uvs(
     uv_coords: np.ndarray | None,
     uv_faces: np.ndarray | None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (uv_coords, uv_faces) after resolving the None case."""
+
     if uv_faces is None:
         # assume uv_coords == vertex positions projected to 2D (XY), 1:1 mapping
         if uv_coords is None:
@@ -183,8 +162,6 @@ def _jacobians(
     areas_3d = _triangle_areas_3d(vertices, faces)
     return J, areas_3d, valid
 
-
-# ─── Individual metrics ───────────────────────────────────────────────────────
 
 def area_distortion_per_face(
     vertices: np.ndarray,
@@ -310,10 +287,8 @@ def count_uv_shells(
     faces: np.ndarray,
     uv_faces: np.ndarray,
 ) -> int:
-    """Count connected components (islands) in UV space.
 
-    Two triangles are UV-connected if they share a UV edge (same UV indices on both sides).
-    """
+
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
 
@@ -376,18 +351,14 @@ def seam_length(
     return total_seam_len / normalization
 
 
-# ─── Combined function ────────────────────────────────────────────────────────
-
 def compute_all_uv_metrics(
     vertices: np.ndarray,
     faces: np.ndarray,
     uv_coords: np.ndarray | None,
     uv_faces: np.ndarray | None = None,
 ) -> dict:
-    """Compute all UV quality metrics. Returns a flat dict of scalar floats.
 
-    Returns NaN for metrics that cannot be computed (no UV data, degenerate mesh).
-    """
+
     if uv_coords is None:
         nan = float('nan')
         return {k: nan for k in [
@@ -402,7 +373,8 @@ def compute_all_uv_metrics(
     weight = areas_3d / (areas_3d.sum() + 1e-12)  # area weights for averaging
 
     def _wavg(arr: np.ndarray) -> float:
-        """Area-weighted mean, ignoring NaN faces."""
+
+
         mask = ~np.isnan(arr)
         if not mask.any():
             return float('nan')
@@ -424,8 +396,6 @@ def compute_all_uv_metrics(
         'seam_length': seam_length(vertices, faces, uv_f),
     }
 
-
-# ─── CLI ─────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:

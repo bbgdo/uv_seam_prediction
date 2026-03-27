@@ -4,14 +4,14 @@ import sys
 import mathutils
 
 EXPORT_CONFIG = {
-    "use_selection": True,
-    "use_mesh_modifiers": True,
-    "use_normals": True,
-    "use_uvs": True,
-    "use_triangles": False,
-    "use_materials": False,
-    "axis_forward": '-Z',
-    "axis_up": 'Y',
+    'use_selection': True,
+    'use_mesh_modifiers': True,
+    'use_normals': True,
+    'use_uvs': True,
+    'use_triangles': False,
+    'use_materials': False,
+    'axis_forward': '-Z',
+    'axis_up': 'Y',
 }
 
 
@@ -40,10 +40,6 @@ def get_unique_filepath(directory, filename):
 
 
 def normalize_objects():
-    """
-    Centers the combined selection to (0,0,0) and scales it
-    so the bounding box diagonal equals 1.0.
-    """
     selected_objects = [obj for obj in bpy.context.selected_objects if obj.type == 'MESH']
     if not selected_objects:
         return False
@@ -97,10 +93,10 @@ def export_obj_modern(out_path):
         bpy.ops.wm.obj_export(
             filepath=out_path,
             export_selected_objects=True,
-            apply_modifiers=EXPORT_CONFIG["use_mesh_modifiers"],
-            export_uv=EXPORT_CONFIG["use_uvs"],
-            export_normals=EXPORT_CONFIG["use_normals"],
-            export_triangulated_mesh=EXPORT_CONFIG["use_triangles"],
+            apply_modifiers=EXPORT_CONFIG['use_mesh_modifiers'],
+            export_uv=EXPORT_CONFIG['use_uvs'],
+            export_normals=EXPORT_CONFIG['use_normals'],
+            export_triangulated_mesh=EXPORT_CONFIG['use_triangles'],
             export_materials=False,
             forward_axis='NEGATIVE_Z',
             up_axis='Y'
@@ -174,7 +170,6 @@ def process_directory(input_path_arg):
     print(f"Failed: {fail_count}")
 
 
-# blender -b --factory-startup -P "path_to_meshes\normalize_scale.py" -- "path_to_meshes\meshes_obj_machine_cleaned" > normalization_logs.txt
 if __name__ == "__main__":
     argv = sys.argv
     if "--" in argv:

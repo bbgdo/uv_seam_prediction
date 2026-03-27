@@ -1,15 +1,3 @@
-"""
-Blender script for UV unwrapping mesh objects.
-
-Runs inside Blender's Python via:
-    blender -b --factory-startup -P evaluation/blender_unwrap.py -- [args]
-
-Three modes (mutually exclusive):
-  --seams <file>   mark given edges as seams, then unwrap with ANGLE_BASED/CONFORMAL
-  --smart-uv       run Smart UV Project (no manual seams)
-  --preserve-uv    re-export the mesh without changing UVs (ground truth passthrough)
-"""
-
 import argparse
 import math
 import os
@@ -17,7 +5,6 @@ import sys
 
 
 def _parse_args() -> argparse.Namespace:
-    # Blender passes its own args before '--'; ours start after it
     argv = sys.argv
     if '--' in argv:
         argv = argv[argv.index('--') + 1:]
@@ -46,7 +33,6 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _ensure_single_mesh(context) -> object:
-    """Return the single mesh object after import, or raise."""
     mesh_objs = [o for o in context.scene.objects if o.type == 'MESH']
     if not mesh_objs:
         raise RuntimeError('No mesh object found after import.')
@@ -54,7 +40,6 @@ def _ensure_single_mesh(context) -> object:
 
 
 def _triangulate(obj) -> None:
-    """Apply a Triangulate modifier and collapse it."""
     import bpy
     mod = obj.modifiers.new(name='Triangulate', type='TRIANGULATE')
     mod.quad_method = 'BEAUTY'
@@ -63,7 +48,7 @@ def _triangulate(obj) -> None:
 
 
 def _sorted_unique_edges(obj) -> list[tuple[int, int]]:
-    """Return sorted unique edges (vi < vj) matching our preprocessing convention."""
+    """Sorted unique edges (vi < vj) matching preprocessing convention."""
     import bmesh
     bm = bmesh.new()
     bm.from_mesh(obj.data)
@@ -78,9 +63,7 @@ def _sorted_unique_edges(obj) -> list[tuple[int, int]]:
 
 
 def _export_obj(obj, output_path: str) -> None:
-    """Export a single mesh object to .obj preserving UV."""
     import bpy
-    # deselect all, select only this object
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
@@ -102,32 +85,26 @@ def main() -> None:
 
     args = _parse_args()
 
-    # ── Import ────────────────────────────────────────────────────────────────
     bpy.ops.wm.obj_import(filepath=args.input)
     obj = _ensure_single_mesh(bpy.context)
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
 
-    # Switch to object mode to apply modifiers
     bpy.ops.object.mode_set(mode='OBJECT')
     _triangulate(obj)
 
-    # ── Mode: preserve existing UV ────────────────────────────────────────────
     if args.preserve_uv:
         _export_obj(obj, args.output)
         print(f'[blender_unwrap] preserved UV → {args.output}')
         return
 
-    # ── Clear existing UV layers ──────────────────────────────────────────────
     mesh = obj.data
     uv_layers = [uv.name for uv in mesh.uv_layers]
     for name in uv_layers:
         mesh.uv_layers.remove(mesh.uv_layers[name])
     mesh.uv_layers.new(name='UVMap')
 
-    # ── Mode: Smart UV Project ────────────────────────────────────────────────
     if args.smart_uv:
-        # clear all seams first
         for edge in mesh.edges:
             edge.use_seam = False
 
@@ -140,17 +117,14 @@ def main() -> None:
         print(f'[blender_unwrap] smart UV project → {args.output}')
         return
 
-    # ── Mode: Unwrap with given seam indices ──────────────────────────────────
     with open(args.seams) as sf:
         seam_set = {int(line.strip()) for line in sf if line.strip()}
 
-    # clear all seams
     for edge in mesh.edges:
         edge.use_seam = False
 
     unique_edges = _sorted_unique_edges(obj)
 
-    # build lookup: (vi, vj) -> mesh edge index
     edge_key_to_mesh_idx = {
         (min(e.vertices[0], e.vertices[1]),
          max(e.vertices[0], e.vertices[1])): i

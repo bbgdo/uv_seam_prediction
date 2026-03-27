@@ -1,15 +1,3 @@
-"""
-MeshCNN edge classifier: stacked MeshConv layers → per-edge seam logit.
-
-Simplified architecture without edge-collapse pooling — classifies edges at
-original mesh resolution. The MeshConv operator provides the key inductive bias:
-fixed 4-neighbor aggregation with topological structure. Pooling is omitted
-because our task (seam prediction at full resolution) doesn't benefit from
-hierarchical coarsening.
-
-Reference: MeshCNN (Hanocka et al., arXiv:1809.05910).
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,19 +8,9 @@ from models.meshcnn.mesh_conv import MeshConv
 class MeshCNNClassifier(nn.Module):
     """Stacked MeshConv layers for per-edge binary classification.
 
-    Uses the same training conventions as DualGraphSAGE and DualGATv2:
-    LayerNorm + activation + dropout after each layer, residuals from layer 2 onward,
-    2-layer classifier MLP. Returns raw logits (use BCEWithLogitsLoss).
-
-    Args:
-        in_channels:     feature dimension of input edge features (default: 11)
-        hidden_channels: internal feature dimension (default: 64)
-        num_layers:      number of MeshConv layers (default: 4)
-        dropout:         dropout probability (default: 0.3)
-
-    Note on hidden_channels: MeshConv internally expands to 5 * in_channels before
-    projecting to hidden_channels, so hidden=64 already implies a 320-dim intermediate
-    representation in the first layer — comparable to hidden=128 SAGEConv.
+    No edge-collapse pooling — classifies at original mesh resolution.
+    MeshConv expands to 5*in_channels internally, so hidden=64 implies
+    a 320-dim intermediate — comparable to hidden=128 SAGEConv.
     """
 
     def __init__(

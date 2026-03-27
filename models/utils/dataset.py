@@ -4,12 +4,10 @@ from pathlib import Path
 import torch
 from torch_geometric.data import Data
 
-# allow imports from project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 def load_dataset(path: str | Path) -> list[Data]:
-    """Load a dataset saved by obj_to_dataset_graph.py."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"dataset not found: {path}")
@@ -28,11 +26,7 @@ def split_dataset(
     test_ratio: float = 0.10,
     seed: int = 42,
 ) -> tuple[list[Data], list[Data], list[Data]]:
-    """Train/val/test split grouped by base mesh to prevent augmentation leakage.
-
-    Augmented copies (e.g. mesh_A_aug1.obj, mesh_A_aug2.obj) are always kept
-    in the same split as their base mesh (mesh_A.obj).
-    """
+    """Grouped by base mesh to prevent augmentation leakage."""
     import random
     import re
 
@@ -40,12 +34,10 @@ def split_dataset(
         name = Path(getattr(d, 'file_path', '')).stem
         return re.sub(r'_aug\d+$', '', name) if name else str(id(d))
 
-    # group graphs by base mesh name
     groups: dict[str, list[Data]] = {}
     for d in dataset:
         groups.setdefault(_base_name(d), []).append(d)
 
-    # shuffle and split at the group level
     rng = random.Random(seed)
     group_keys = list(groups.keys())
     rng.shuffle(group_keys)
@@ -66,14 +58,12 @@ def split_dataset(
 
 
 def load_dual_dataset(path: str | Path) -> list[Data]:
-    """Load original dataset and convert each graph to dual representation."""
     from preprocessing.build_dual_graph import build_dual_graph_data
     original = load_dataset(path)
     return [build_dual_graph_data(d) for d in original]
 
 
 def compute_pos_weight(dataset: list[Data]) -> torch.Tensor:
-    """Compute BCEWithLogitsLoss pos_weight from train set seam/non-seam ratio."""
     total_seam = sum(d.y.sum().item() for d in dataset)
     total_nonseam = sum((d.y == 0).sum().item() for d in dataset)
     weight = total_nonseam / max(total_seam, 1)

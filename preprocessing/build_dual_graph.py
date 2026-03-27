@@ -1,13 +1,3 @@
-"""
-Dual (line) graph construction for edge classification as node classification.
-
-Each edge of the original mesh becomes a node in the dual graph.
-Two dual nodes are connected if the corresponding edges share a face.
-
-Usage:
-    python build_dual_graph.py --input dataset.pt --output dataset_dual.pt
-"""
-
 import argparse
 import sys
 from pathlib import Path

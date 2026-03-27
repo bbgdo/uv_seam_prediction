@@ -1,17 +1,9 @@
-"""
-Compare multiple experiment runs: overlay F1 curves and generate a results table.
-
-Usage:
-    python models/utils/comparison.py runs/graphsage_001 runs/gatv2_001
-"""
-
 import json
 import sys
 from pathlib import Path
 
 
 def load_run(run_dir: Path) -> tuple[dict, list[dict]]:
-    """Load summary and metrics from a run directory."""
     summary_path = run_dir / 'summary.json'
     metrics_path = run_dir / 'metrics.json'
 
@@ -29,7 +21,6 @@ def load_run(run_dir: Path) -> tuple[dict, list[dict]]:
 
 
 def plot_comparison_f1(runs: dict[str, tuple[dict, list[dict]]], output_dir: Path) -> None:
-    """Overlay val F1 curves from multiple experiments."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -61,7 +52,6 @@ def plot_comparison_f1(runs: dict[str, tuple[dict, list[dict]]], output_dir: Pat
 
 
 def plot_comparison_table(runs: dict[str, tuple[dict, list[dict]]], output_dir: Path) -> None:
-    """Render a results table as an image."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -92,7 +82,6 @@ def plot_comparison_table(runs: dict[str, tuple[dict, list[dict]]], output_dir: 
     table.set_fontsize(FONT_TICK)
     table.scale(1, 1.5)
 
-    # style header
     for j in range(len(columns)):
         table[(0, j)].set_facecolor('#e0e0e0')
         table[(0, j)].set_text_props(weight='bold')
@@ -109,7 +98,6 @@ if __name__ == '__main__':
         print("Usage: python models/utils/comparison.py <run_dir1> <run_dir2> [run_dir3 ...]")
         sys.exit(1)
 
-    # allow running from project root
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
     run_dirs = [Path(p) for p in sys.argv[1:]]
@@ -127,7 +115,6 @@ if __name__ == '__main__':
         test_f1 = summary.get('test_f1', 'N/A')
         print(f"  loaded {name}: {len(metrics)} epochs, best val F1={best_f1}, test F1={test_f1}")
 
-    # output to the parent of the first run dir (typically 'runs/')
     output_dir = run_dirs[0].parent
     output_dir.mkdir(parents=True, exist_ok=True)
 

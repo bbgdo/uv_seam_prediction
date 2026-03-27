@@ -1,15 +1,3 @@
-"""
-Experiment logging: stores per-epoch metrics as JSON, generates plots as PNG.
-
-Usage:
-    logger = ExperimentLogger('runs/gatv2_exp01', config={...})
-    for epoch in range(100):
-        logger.log_epoch(epoch, train_loss=0.5, val_loss=0.4, val_f1=0.8, ...)
-    logger.finalize(test_metrics={...}, best_epoch=42)
-    logger.save()
-    logger.plot()
-"""
-
 import json
 import time
 from pathlib import Path
@@ -39,7 +27,6 @@ class ExperimentLogger:
         self._start_time = time.time()
 
     def log_epoch(self, epoch: int, **kwargs) -> None:
-        """Log metrics for one epoch. Pass any key=value pairs."""
         entry = {'epoch': epoch, **kwargs}
         self.metrics.append(entry)
 
@@ -49,7 +36,6 @@ class ExperimentLogger:
         val: list[Data],
         test: list[Data],
     ) -> None:
-        """Log and plot class balance across splits."""
         def _count(graphs):
             seam = sum(d.y.sum().item() for d in graphs)
             total = sum(len(d.y) for d in graphs)
@@ -62,7 +48,6 @@ class ExperimentLogger:
         }
 
     def finalize(self, test_metrics: dict, best_epoch: int) -> None:
-        """Record final summary after training."""
         total_time = time.time() - self._start_time
         best_entry = None
         for entry in self.metrics:
@@ -91,7 +76,6 @@ class ExperimentLogger:
         }
 
     def save(self) -> None:
-        """Write config, metrics, and summary to JSON files."""
         _write_json(self.run_dir / 'config.json', self.config)
         _write_json(self.run_dir / 'metrics.json', self.metrics)
         if self.summary:
@@ -99,7 +83,6 @@ class ExperimentLogger:
         print(f"logs saved -> {self.run_dir}")
 
     def plot(self) -> None:
-        """Generate all training plots as PNG."""
         try:
             import matplotlib
             matplotlib.use('Agg')
@@ -130,7 +113,6 @@ class ExperimentLogger:
         ax.plot(epochs, train_loss, color=COLOR_TRAIN, label='Train loss', linewidth=1.5)
         ax.plot(epochs, val_loss, color=COLOR_VAL, label='Val loss', linewidth=1.5)
 
-        # use log scale if range spans >2 orders of magnitude
         all_vals = [v for v in train_loss + val_loss if v > 0]
         if all_vals and max(all_vals) / (min(all_vals) + 1e-12) > 100:
             ax.set_yscale('log')
@@ -234,7 +216,6 @@ def _write_json(path: Path, data) -> None:
 
 
 def _apply_style(plt) -> None:
-    """Apply a clean plot style, falling back gracefully."""
     for style in ['seaborn-v0_8-whitegrid', 'seaborn-whitegrid', 'ggplot']:
         try:
             plt.style.use(style)

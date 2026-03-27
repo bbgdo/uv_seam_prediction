@@ -25,7 +25,6 @@ def _run_epoch(
     lambda_conn: float = 0.0,
     pos_weight: torch.Tensor | None = None,
 ) -> tuple[float, dict]:
-    """Single pass over dual graphs. Returns (mean_loss, mean_metrics)."""
     training = optimizer is not None
     model.train(training)
 

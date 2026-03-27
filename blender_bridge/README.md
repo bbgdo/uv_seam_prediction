@@ -1,7 +1,5 @@
 # Blender Bridge
 
-> **TEMPORARY: To be replaced with a more robust solution in the final version**
-
 A Blender add-on that runs trained GNN inference and marks predicted UV seams on the active mesh.
 
 ---
@@ -64,7 +62,7 @@ Standalone script that runs as the external subprocess. **Fully self-contained**
 
 ```
 python run_inference.py <data.npz> <weights.pth> <threshold> <output.txt>
-                        [--model-type graphsage|gatv2]
+                        [--model-type graphsage|gatv2|meshcnn]
                         [--min-component N]
                         [--max-gap N]
 ```

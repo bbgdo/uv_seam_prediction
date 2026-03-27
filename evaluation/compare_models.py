@@ -1,17 +1,3 @@
-"""
-Cross-model UV evaluation comparison.
-
-After running run_evaluation.py for each model, this script loads their
-summary.json files and produces the full comparison table and bar plots
-for the diploma thesis.
-
-Usage:
-    python evaluation/compare_models.py \\
-        evaluation/results/graphsage \\
-        evaluation/results/gatv2 \\
-        --output-dir evaluation/results/comparison
-"""
-
 import argparse
 import json
 import sys
@@ -50,7 +36,6 @@ def _get_mean(summary: dict, method: str, metric: str) -> float:
 
 
 def plot_full_comparison_table(summaries: list[dict], labels: list[str], output_path: str) -> None:
-    """Diploma table: rows = models + Smart UV + GT, columns = all metrics."""
     import matplotlib.pyplot as plt
 
     metric_keys = [
@@ -107,27 +92,23 @@ def plot_full_comparison_table(summaries: list[dict], labels: list[str], output_
 
     raw_arr = np.array(raw_vals, dtype=float)
 
-    # for each metric: best among model predictions + smart_uv (not GT, not edge)
     n_model_rows = len(labels)
     best_per_col = []
     for col in range(n_cols):
         col_vals = raw_arr[:n_model_rows + 1, col]  # models + smart_uv
         if col < len(metric_keys):
-            # lower is better for distortion metrics, except num_shells (neutral)
             if not np.all(np.isnan(col_vals)):
                 best_row = int(np.nanargmin(col_vals))
                 best_per_col.append(best_row)
             else:
                 best_per_col.append(-1)
         else:
-            # higher is better for F1 / precision / recall
             if not np.all(np.isnan(col_vals)):
                 best_row = int(np.nanargmax(col_vals))
                 best_per_col.append(best_row)
             else:
                 best_per_col.append(-1)
 
-    # format cell text
     for row_idx, row in enumerate(raw_arr):
         cell_row = []
         for col_idx, v in enumerate(row):
@@ -151,18 +132,15 @@ def plot_full_comparison_table(summaries: list[dict], labels: list[str], output_
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(8)
 
-    # color header
     for col in range(n_cols):
         tbl[0, col].set_facecolor('#1565C0')
         tbl[0, col].set_text_props(color='white', fontweight='bold')
 
-    # color best values
     for col_idx, best_row in enumerate(best_per_col):
         if best_row >= 0:
             tbl[best_row + 1, col_idx].set_facecolor('#BBDEFB')
 
-    # color GT row differently
-    gt_row_idx = n_rows  # last row (1-indexed)
+    gt_row_idx = n_rows
     for col_idx in range(n_cols):
         tbl[gt_row_idx, col_idx].set_facecolor('#E8F5E9')
 
@@ -175,13 +153,11 @@ def plot_full_comparison_table(summaries: list[dict], labels: list[str], output_
 
 
 def plot_method_comparison_bars(summaries: list[dict], labels: list[str], output_path: str) -> None:
-    """Grouped bar chart: key distortion metrics across all models + Smart UV + GT."""
     import matplotlib.pyplot as plt
 
     metrics = ['area_distortion_avg', 'angle_distortion_avg', 'symmetric_dirichlet_avg']
     display = ['Area Distortion', 'Angle Distortion', 'Sym. Dirichlet']
 
-    # build method list: model predictions first, then Smart UV, then GT
     method_labels = labels + ['Smart UV', 'Ground Truth']
     model_colors = _COLORS_MODEL[:len(labels)] + [_C_SMART, _C_GT]
 
@@ -247,7 +223,6 @@ def main() -> None:
     plot_full_comparison_table(summaries, labels, str(out_dir / 'full_comparison_table.png'))
     plot_method_comparison_bars(summaries, labels, str(out_dir / 'method_comparison_bars.png'))
 
-    # also dump a merged summary JSON for reference
     merged = {
         'models': [
             {'label': lbl, 'dir': d, 'summary': s}

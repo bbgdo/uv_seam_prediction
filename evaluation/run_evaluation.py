@@ -1,25 +1,3 @@
-"""
-UV-level evaluation orchestrator.
-
-For each test mesh, runs GNN inference, Blender unwrap (predicted seams),
-Smart UV Project baseline, and compares UV quality against the ground truth
-UV already embedded in the .obj file.
-
-Usage:
-    python evaluation/run_evaluation.py \\
-        --test-meshes ./3d-objs/ \\
-        --dual-dataset dataset_dual.pt \\
-        --weights runs/dual_graphsage_001/best_model.pth \\
-        --model-type graphsage \\
-        --blender-exe blender \\
-        --output-dir evaluation/results/graphsage_eval \\
-        [--threshold 0.5] \\
-        [--min-component 3] \\
-        [--max-gap 3] \\
-        [--unwrap-method ANGLE_BASED] \\
-        [--max-meshes N]
-"""
-
 import argparse
 import json
 import os
@@ -31,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 
-# allow imports from project root
 _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -44,14 +21,11 @@ from evaluation.uv_metrics import parse_obj_with_uv, compute_all_uv_metrics
 
 import trimesh
 
-# plot style constants (match experiment_log.py)
 _C_OURS = '#2196F3'
 _C_GT = '#4CAF50'
 _C_SMART = '#FF5722'
 _DPI = 150
 
-
-# ─── Inference ───────────────────────────────────────────────────────────────
 
 def _load_model(weights_path: str, model_type: str, device: torch.device):
     if model_type == 'graphsage':
@@ -81,7 +55,6 @@ def _infer_seam_indices(
     min_component: int,
     max_gap: int,
 ) -> tuple[list[int], np.ndarray]:
-    """Run inference on a single .obj and return post-processed seam edge indices."""
     mesh = trimesh.load(str(mesh_path), process=False, force='mesh')
     features, unique_edges, _ = compute_edge_features(mesh)
     faces = np.asarray(mesh.faces, dtype=np.int64)
@@ -100,7 +73,6 @@ def _infer_seam_indices(
         with torch.no_grad():
             logits = model(x, nb)
     else:
-        # dual graph path (graphsage / gatv2)
         from torch_geometric.data import Data
         n_verts = len(mesh.vertices)
         edge_index_fwd = torch.from_numpy(
@@ -126,7 +98,6 @@ def _infer_seam_indices(
 
     probs = torch.sigmoid(logits).cpu().numpy()
 
-    # build edge_to_faces for gap stitching
     edge_to_faces: dict = {}
     for f_idx, face in enumerate(faces):
         for k in range(3):
@@ -145,7 +116,6 @@ def _edge_metrics(
     seam_indices: list[int],
     unique_edges: np.ndarray,
 ) -> dict:
-    """Compute edge-level F1 by comparing predicted seams against .obj UV seams."""
     try:
         data = parse_obj_with_uv(mesh_path)
         if data['uv_faces'] is None:
@@ -155,8 +125,6 @@ def _edge_metrics(
         faces = data['faces']
         uv_faces = data['uv_faces']
 
-        # build ground truth seam mask: edges with different UV indices on two sides
-        from evaluation.uv_metrics import seam_length as _sl  # just to reuse mesh edge logic
         edge_key_to_idx = {
             (int(unique_edges[i, 0]), int(unique_edges[i, 1])): i
             for i in range(len(unique_edges))
@@ -172,7 +140,7 @@ def _edge_metrics(
         gt_seam = np.zeros(len(unique_edges), dtype=bool)
         for key, uv_pairs in mesh_edge_to_uvs.items():
             if len(uv_pairs) < 2:
-                gt_seam[edge_key_to_idx.get(key, -1)] = True  # boundary = seam
+                gt_seam[edge_key_to_idx.get(key, -1)] = True
                 continue
             (ui0, uj0), (ui1, uj1) = uv_pairs[0], uv_pairs[1]
             same = (ui0 == ui1 and uj0 == uj1) or (ui0 == uj1 and uj0 == ui1)
@@ -202,8 +170,6 @@ def _edge_metrics(
         return {}
 
 
-# ─── Blender subprocess ──────────────────────────────────────────────────────
-
 _BLENDER_SCRIPT = str(Path(__file__).parent / 'blender_unwrap.py')
 
 
@@ -215,8 +181,6 @@ def _run_blender(blender_exe: str, args: list[str]) -> bool:
         return False
     return True
 
-
-# ─── Plots ───────────────────────────────────────────────────────────────────
 
 def _plot_comparison_table(summary: dict, output_path: str) -> None:
     import matplotlib.pyplot as plt
@@ -248,11 +212,9 @@ def _plot_comparison_table(summary: dict, output_path: str) -> None:
             v = agg.get(method, {}).get(metric, {}).get('mean', float('nan'))
             vals.append(v)
 
-        # bold (darker bg) the best value in each row, excluding GT
-        non_gt_vals = vals[1:]  # ours + smart_uv
+        non_gt_vals = vals[1:]
         best_idx = None
         if not all(np.isnan(v) for v in non_gt_vals):
-            # lower is better for all metrics except num_shells (neutral)
             best_idx = 1 + int(np.nanargmin(non_gt_vals))
 
         for col_idx, v in enumerate(vals):
@@ -276,12 +238,10 @@ def _plot_comparison_table(summary: dict, output_path: str) -> None:
     tbl.set_fontsize(9)
     tbl.auto_set_column_width(col=list(range(len(labels) + 1)))
 
-    # apply cell colors
     for row_idx, row_colors in enumerate(col_colors):
         for col_idx, color in enumerate(row_colors):
             tbl[row_idx + 1, col_idx].set_facecolor(color)
 
-    # header color
     for col_idx in range(len(labels) + 1):
         tbl[0, col_idx].set_facecolor('#1565C0')
         tbl[0, col_idx].set_text_props(color='white', fontweight='bold')
@@ -363,8 +323,6 @@ def _plot_per_mesh_scatter(per_mesh: list[dict], output_path: str) -> None:
     plt.close()
 
 
-# ─── Main ────────────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser(description='UV-level evaluation pipeline.')
     parser.add_argument('--test-meshes', required=True,
@@ -389,7 +347,6 @@ def main() -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # find test meshes (skip augmented copies)
     mesh_dir = Path(args.test_meshes)
     mesh_paths = sorted([
         p for p in mesh_dir.glob('*.obj')
@@ -415,7 +372,6 @@ def main() -> None:
 
         record: dict = {'mesh': name}
 
-        # Ground truth UV is already in the .obj
         gt_data = parse_obj_with_uv(str(mesh_path))
         if gt_data['uv_coords'] is None:
             print(f'  [skip] no UV in {name}')
@@ -431,7 +387,6 @@ def main() -> None:
             pred_obj = os.path.join(tmp, 'pred_unwrap.obj')
             smart_obj = os.path.join(tmp, 'smart_unwrap.obj')
 
-            # ── Inference ────────────────────────────────────────────────────
             try:
                 seam_indices, unique_edges = _infer_seam_indices(
                     str(mesh_path), model, args.model_type, device,
@@ -445,7 +400,6 @@ def main() -> None:
             with open(seams_file, 'w') as sf:
                 sf.write('\n'.join(map(str, seam_indices)))
 
-            # edge-level metrics
             if len(unique_edges) > 0:
                 em = _edge_metrics(str(mesh_path), seam_indices, unique_edges)
                 if em:
@@ -454,7 +408,6 @@ def main() -> None:
                           f'P={em.get("precision", 0):.3f}  '
                           f'R={em.get("recall", 0):.3f}')
 
-            # ── Predicted seam unwrap (Blender) ───────────────────────────────
             ok = _run_blender(args.blender_exe, [
                 '--input', str(mesh_path),
                 '--seams', seams_file,
@@ -473,7 +426,6 @@ def main() -> None:
             else:
                 record['predicted'] = None
 
-            # ── Smart UV Project (Blender) ─────────────────────────────────────
             ok = _run_blender(args.blender_exe, [
                 '--input', str(mesh_path),
                 '--output', smart_obj,
@@ -493,7 +445,6 @@ def main() -> None:
 
         per_mesh_results.append(record)
 
-    # ── Aggregate ─────────────────────────────────────────────────────────────
     metric_keys = [
         'area_distortion_avg', 'area_distortion_max',
         'angle_distortion_avg', 'angle_distortion_max',
@@ -534,7 +485,6 @@ def main() -> None:
         },
     }
 
-    # ── Save JSON ─────────────────────────────────────────────────────────────
     with open(out_dir / 'per_mesh_results.json', 'w') as f:
         json.dump(per_mesh_results, f, indent=2, default=str)
 
@@ -543,7 +493,6 @@ def main() -> None:
 
     print(f'\n[eval] results saved to {out_dir}')
 
-    # ── Plots ─────────────────────────────────────────────────────────────────
     try:
         _plot_comparison_table(summary, str(out_dir / 'comparison_table.png'))
         _plot_distortion_bars(summary, str(out_dir / 'distortion_bars.png'))
@@ -553,7 +502,6 @@ def main() -> None:
     except Exception as e:
         print(f'[eval] plot generation failed: {e}')
 
-    # ── Print summary ─────────────────────────────────────────────────────────
     agg = summary['aggregated']
     print(f'\n{"─"*60}')
     print(f'{"Metric":<30s}  {"GT":>8s}  {"Ours":>8s}  {"SmartUV":>8s}')

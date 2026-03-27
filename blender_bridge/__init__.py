@@ -147,14 +147,12 @@ class OBJECT_OT_predict_uv_seams(Operator):
             self.report({'ERROR'}, 'Select a mesh object.')
             return {'CANCELLED'}
 
-        # extract raw mesh geometry (numpy only — no torch needed here)
         try:
             vertices, normals, faces, unique_edges = _mesh_to_arrays(obj)
         except Exception as exc:
             self.report({'ERROR'}, f'Mesh extraction failed: {exc}')
             return {'CANCELLED'}
 
-        # communicate with the inference subprocess via temp files
         with tempfile.TemporaryDirectory() as tmp:
             data_path = os.path.join(tmp, 'mesh.npz')
             output_path = os.path.join(tmp, 'seams.txt')

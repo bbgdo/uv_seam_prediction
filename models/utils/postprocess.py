@@ -1,22 +1,3 @@
-"""
-Inference-time post-processing for seam predictions.
-
-Steps:
-  1. threshold_and_clean  — threshold + remove tiny disconnected components
-  2. stitch_seam_gaps     — bridge small gaps between seam components (greedy)
-  3. postprocess_seams    — combined pipeline
-
-Usage:
-    python models/utils/postprocess.py \\
-        --dataset dataset.pt \\
-        --dual-dataset dataset_dual.pt \\
-        --weights runs/dual_graphsage_test/best_model.pth \\
-        [--model-type graphsage|gatv2] \\
-        [--threshold 0.5] \\
-        [--min-component 3] \\
-        [--max-gap 3]
-"""
-
 import argparse
 import sys
 from pathlib import Path
@@ -42,14 +23,12 @@ def threshold_and_clean(
     if len(seam_indices) == 0:
         return seam_mask
 
-    # build vertex -> seam_edge_indices mapping to find shared vertices
     vertex_to_seam: dict[int, list[int]] = {}
     for local_idx, global_idx in enumerate(seam_indices):
         vi, vj = int(unique_edges[global_idx, 0]), int(unique_edges[global_idx, 1])
         vertex_to_seam.setdefault(vi, []).append(local_idx)
         vertex_to_seam.setdefault(vj, []).append(local_idx)
 
-    # adjacency: two seam edges are adjacent if they share a vertex
     n = len(seam_indices)
     rows, cols = [], []
     for incident in vertex_to_seam.values():
@@ -61,7 +40,6 @@ def threshold_and_clean(
     adj = csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n))
     n_components, labels = connected_components(adj, directed=False)
 
-    # remove components below size threshold
     comp_sizes = np.bincount(labels, minlength=n_components)
     keep = comp_sizes[labels] >= min_component_size
 
@@ -89,7 +67,6 @@ def stitch_seam_gaps(
     """
     mask = seam_mask.copy()
 
-    # build edge lookup structures
     edge_key_to_idx: dict[tuple[int, int], int] = {}
     vertex_to_edges: dict[int, list[int]] = {}
     for idx, (vi, vj) in enumerate(unique_edges):
@@ -124,7 +101,6 @@ def stitch_seam_gaps(
         )
         _, labels = connected_components(adj, directed=False)
 
-        # map from global edge idx -> component label (-1 = not seam)
         comp = np.full(len(mask_arr), -1, dtype=np.int32)
         for local_idx, global_idx in enumerate(seam_indices):
             comp[global_idx] = labels[local_idx]
@@ -132,7 +108,6 @@ def stitch_seam_gaps(
 
     comp = component_label(mask)
 
-    # find endpoint vertices: exactly 1 incident seam edge
     endpoint_verts: set[int] = set()
     for idx in np.where(mask)[0]:
         vi, vj = int(unique_edges[idx, 0]), int(unique_edges[idx, 1])
@@ -143,13 +118,11 @@ def stitch_seam_gaps(
 
     stitched = 0
     for start_v in list(endpoint_verts):
-        # find the seam component this endpoint belongs to
         start_edges = [e for e in vertex_to_edges.get(start_v, []) if mask[e]]
         if not start_edges:
             continue
         start_comp = comp[start_edges[0]]
 
-        # greedy walk through non-seam edges, preferring high probability
         path = []
         current_v = start_v
         visited_verts = {start_v}
@@ -161,7 +134,6 @@ def stitch_seam_gaps(
             ]
             if not candidates:
                 break
-            # sort by decreasing probability
             candidates.sort(key=lambda e: -probs[e])
             best_edge = candidates[0]
             path.append(best_edge)
@@ -172,12 +144,10 @@ def stitch_seam_gaps(
                 break
             visited_verts.add(next_v)
 
-            # check if we've reached a different seam component
             next_seam_edges = [e for e in vertex_to_edges.get(next_v, []) if mask[e]]
             if next_seam_edges:
                 target_comp = comp[next_seam_edges[0]]
                 if target_comp != start_comp:
-                    # stitch the path
                     for e in path:
                         mask[e] = True
                     stitched += 1
@@ -196,10 +166,6 @@ def postprocess_seams(
     min_component_size: int = 3,
     max_gap: int = 3,
 ) -> np.ndarray:
-    """Full post-processing: threshold -> clean -> stitch.
-
-    Returns boolean mask [E] — final seam edges.
-    """
     mask = threshold_and_clean(probs, unique_edges, threshold, min_component_size)
     if edge_to_faces is not None:
         mask = stitch_seam_gaps(probs, mask, unique_edges, edge_to_faces, max_gap)
@@ -279,7 +245,6 @@ if __name__ == '__main__':
         logits = model(dual_data.x.to(device), dual_data.edge_index.to(device))
     probs = torch.sigmoid(logits).numpy()
 
-    # rebuild edge topology from original data for stitching
     num_unique = dual_data.num_nodes
     src = orig_data.edge_index[0, :num_unique].numpy()
     dst = orig_data.edge_index[1, :num_unique].numpy()
@@ -294,13 +259,11 @@ if __name__ == '__main__':
                 key = (min(vi, vj), max(vi, vj))
                 edge_to_faces.setdefault(key, []).append(f_idx)
 
-    # before
     mask_raw = probs >= args.threshold
     n_before = mask_raw.sum()
     n_comp_before, sizes_before = _count_components(mask_raw, unique_edges)
     small_before = (sizes_before < args.min_component).sum() if n_comp_before else 0
 
-    # after
     mask_clean = threshold_and_clean(probs, unique_edges, args.threshold, args.min_component)
     mask_final = stitch_seam_gaps(probs, mask_clean, unique_edges, edge_to_faces, args.max_gap)
     n_after = mask_final.sum()

@@ -1,13 +1,3 @@
-"""
-Train MeshCNNClassifier on dataset_meshcnn.pt for UV seam prediction.
-
-Usage:
-    python models/meshcnn/train.py \\
-        --dataset dataset_meshcnn.pt \\
-        --run-dir runs/meshcnn_001 \\
-        --epochs 100 --hidden 64 --num-layers 4
-"""
-
 import argparse
 import sys
 import time
@@ -27,7 +17,6 @@ from models.utils.metrics import edge_f1
 
 
 def _neighbors_to_edge_index(neighbors: torch.Tensor) -> torch.Tensor:
-    """Convert [E, 4] neighbor indices to [2, D] edge_index for connectivity loss."""
     E = neighbors.shape[0]
     valid = neighbors >= 0                                    # [E, 4]
     src_idx = torch.arange(E, device=neighbors.device).unsqueeze(1).expand_as(neighbors)
@@ -43,7 +32,6 @@ def _run_epoch(
     lambda_conn: float = 0.0,
     pos_weight: torch.Tensor | None = None,
 ) -> tuple[float, dict]:
-    """Single pass over all graphs. Returns (mean_loss, mean_metrics)."""
     training = optimizer is not None
     model.train(training)
 
@@ -98,7 +86,6 @@ def main(args: argparse.Namespace) -> None:
 
     criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    # auto-detect feature dim from data if not overridden
     detected_in = dataset[0].x.shape[1]
     if args.in_channels != detected_in:
         print(f'[info] detected in_channels={detected_in} from dataset (overriding --in-channels {args.in_channels})')

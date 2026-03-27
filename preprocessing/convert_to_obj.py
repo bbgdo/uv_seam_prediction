@@ -4,14 +4,14 @@ import sys
 import shutil
 
 EXPORT_CONFIG = {
-    "use_selection": True,
-    "use_mesh_modifiers": True,
-    "use_normals": True,
-    "use_uvs": True,
-    "use_triangles": False,
-    "use_materials": False,
-    "axis_forward": '-Z',
-    "axis_up": 'Y',
+    'use_selection': True,
+    'use_mesh_modifiers': True,
+    'use_normals': True,
+    'use_uvs': True,
+    'use_triangles': False,
+    'use_materials': False,
+    'axis_forward': '-Z',
+    'axis_up': 'Y',
 }
 
 
@@ -82,16 +82,16 @@ def export_obj_modern(out_path):
         bpy.ops.wm.obj_export(
             filepath=out_path,
             export_selected_objects=True,
-            apply_modifiers=EXPORT_CONFIG["use_mesh_modifiers"],
-            export_uv=EXPORT_CONFIG["use_uvs"],
-            export_normals=EXPORT_CONFIG["use_normals"],
-            export_triangulated_mesh=EXPORT_CONFIG["use_triangles"],
+            apply_modifiers=EXPORT_CONFIG['use_mesh_modifiers'],
+            export_uv=EXPORT_CONFIG['use_uvs'],
+            export_normals=EXPORT_CONFIG['use_normals'],
+            export_triangulated_mesh=EXPORT_CONFIG['use_triangles'],
             export_materials=False,
             forward_axis='NEGATIVE_Z',
             up_axis='Y'
         )
     except AttributeError:
-        # legacy API (< 4.0)
+        # Blender < 4.0
         bpy.ops.export_scene.obj(
             filepath=out_path,
             **EXPORT_CONFIG
@@ -180,8 +180,6 @@ def process_directory(input_path_arg):
     print(f"Converted: {success_count}")
     print(f"Copied (already OBJ): {copied_count}")
     print(f"Failed: {fail_count}")
-
-# blender -b --factory-startup -P convert_to_obj.py -- "path_to_meshes\Mesh_Files_Cleaned" > convert_to_obj_logs.txt
 
 if __name__ == "__main__":
     argv = sys.argv

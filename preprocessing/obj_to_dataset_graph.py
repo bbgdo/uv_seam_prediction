@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
 # support running both as `python preprocessing/obj_to_dataset_graph.py` and as a module
@@ -17,13 +17,12 @@ from compute_features import compute_edge_features
 def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
     faces = mesh.faces
     has_uv = (
-        hasattr(mesh, "visual")
-        and hasattr(mesh.visual, "uv")
+        hasattr(mesh, 'visual')
+        and hasattr(mesh.visual, 'uv')
         and mesh.visual.uv is not None
         and len(mesh.visual.uv) > 0
     )
 
-    # {(vi, vj): [face_idx, ...]}
     edge_to_faces: dict[tuple, list] = {}
     for f_idx, face in enumerate(faces):
         for k in range(3):
@@ -91,7 +90,7 @@ def process_mesh(file_path: str | Path) -> Data | None:
     file_path = Path(file_path)
 
     try:
-        mesh = trimesh.load(str(file_path), process=False, force="mesh")
+        mesh = trimesh.load(str(file_path), process=False, force='mesh')
         if not isinstance(mesh, trimesh.Trimesh):
             print(f"  [skip] {file_path.name}: not a single Trimesh object.")
             return None
@@ -119,7 +118,6 @@ def process_mesh(file_path: str | Path) -> Data | None:
         dtype=np.float32,
     )
 
-    # store both directions per edge (mirror features + labels for undirected message passing)
     src = np.concatenate([vi_idx, vj_idx])
     dst = np.concatenate([vj_idx, vi_idx])
     edge_index = torch.from_numpy(np.stack([src, dst], axis=0).astype(np.int64))
@@ -158,7 +156,6 @@ def print_stats(data: Data, file_name: str) -> None:
     print(f"  other (0): {num_nonseams:>8d}  ({100 - seam_pct:.2f}%)")
     print(f"  pos_weight: {pos_weight:.4f}")
 
-    # sample feature vector
     sample_idx = min(5, data.edge_attr.shape[0] - 1)
     sample = data.edge_attr[sample_idx].numpy()
     print(f"  sample edge_attr[{sample_idx}]: [{', '.join(f'{v:.4f}' for v in sample)}]")
@@ -168,10 +165,10 @@ def print_stats(data: Data, file_name: str) -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Build PyG UV-seam dataset from .obj files.")
-    parser.add_argument("mesh_dir", nargs="?", default="./meshes", help="Directory with .obj files (default: ./meshes)")
-    parser.add_argument("--max-meshes", type=int, default=5, help="Max meshes to process (default: 5)")
-    parser.add_argument("--save", action="store_true", help="Save dataset as dataset.pt")
+    parser = argparse.ArgumentParser(description='Build PyG UV-seam dataset from .obj files.')
+    parser.add_argument('mesh_dir', nargs='?', default='./meshes', help='Directory with .obj files (default: ./meshes)')
+    parser.add_argument('--max-meshes', type=int, default=5, help='Max meshes to process (default: 5)')
+    parser.add_argument('--save', action='store_true', help='Save dataset as dataset.pt')
     args = parser.parse_args()
 
     mesh_dir = Path(args.mesh_dir)
@@ -179,7 +176,7 @@ if __name__ == "__main__":
         print(f"[error] directory not found: {mesh_dir}")
         sys.exit(1)
 
-    obj_files = sorted(mesh_dir.glob("**/*.obj"))
+    obj_files = sorted(mesh_dir.glob('**/*.obj'))
     if not obj_files:
         print(f"[error] no .obj files found in {mesh_dir}")
         sys.exit(1)
@@ -188,7 +185,7 @@ if __name__ == "__main__":
     print(f"processing first {min(args.max_meshes, len(obj_files))} …\n")
 
     dataset: list[Data] = []
-    outliers: list[str] = []  # files with 0 seam edges
+    outliers: list[str] = []
     failed = 0
 
     for obj_file in obj_files[:args.max_meshes]:
@@ -224,7 +221,7 @@ if __name__ == "__main__":
         print(f"{'#'*60}\n")
 
     if args.save and dataset:
-        out_path = Path("../dataset.pt")
+        out_path = Path('../dataset.pt')
         torch.save(dataset, out_path)
         print(f"dataset saved -> {out_path.resolve()}  ({len(dataset)} graphs)")
 

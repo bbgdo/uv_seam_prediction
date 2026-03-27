@@ -1,19 +1,3 @@
-"""
-Standalone UV seam inference worker — runs in an external Python process.
-
-Usage:
-    python run_inference.py <data.npz> <weights.pth> <threshold> <output.txt>
-                           [--model-type graphsage|gatv2|meshcnn]
-                           [--min-component N]
-                           [--max-gap N]
-
-Reads raw mesh geometry from <data.npz>, computes 11-dim edge features,
-builds the dual graph, runs the GNN, applies post-processing, and writes
-predicted seam edge indices to <output.txt>, one index per line.
-
-This script is fully self-contained — it does not import from the project tree.
-"""
-
 import argparse
 import sys
 
@@ -26,7 +10,6 @@ from scipy.sparse.csgraph import connected_components
 from torch_geometric.nn import GATv2Conv, SAGEConv
 
 
-# ─── Geometry helpers ────────────────────────────────────────────────────────
 
 def _safe_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     norms = np.linalg.norm(v, axis=-1, keepdims=True)
@@ -52,7 +35,6 @@ def _build_edge_to_faces(faces: np.ndarray) -> dict:
     return edge_to_faces
 
 
-# ─── Feature computation (pure numpy, no trimesh) ────────────────────────────
 
 def _feat_edge_length(vertices: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
     lengths = np.linalg.norm(
@@ -225,11 +207,8 @@ def compute_edge_features(
     faces: np.ndarray,
     unique_edges: np.ndarray,
 ) -> np.ndarray:
-    """Compute all 11 edge features from raw mesh arrays.
 
-    Returns:
-        features: [E, 11] float32
-    """
+
     edge_to_faces = _build_edge_to_faces(faces)
 
     f0 = _feat_edge_length(vertices, unique_edges)
@@ -245,7 +224,6 @@ def compute_edge_features(
     return np.stack([f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10], axis=1)
 
 
-# ─── Dual graph builder ──────────────────────────────────────────────────────
 
 def build_dual_edge_index(faces: np.ndarray, unique_edges: np.ndarray) -> torch.Tensor:
     """Build dual graph edge_index [2, D] from face adjacency.
@@ -278,7 +256,6 @@ def build_dual_edge_index(faces: np.ndarray, unique_edges: np.ndarray) -> torch.
     return torch.tensor([dual_src, dual_dst], dtype=torch.long)
 
 
-# ─── Embedded model definitions ──────────────────────────────────────────────
 
 class DualGraphSAGE(nn.Module):
     def __init__(self, in_dim=11, hidden_dim=128, num_layers=3, dropout=0.3):
@@ -409,10 +386,10 @@ class MeshCNNClassifier(nn.Module):
         return self.classifier(x).squeeze(-1)
 
 
-# ─── MeshCNN neighbor builder ─────────────────────────────────────────────────
 
 def build_edge_neighbors(faces: np.ndarray, unique_edges: np.ndarray) -> torch.Tensor:
-    """Build [E, 4] neighbor index tensor for MeshConv from raw face/edge arrays."""
+
+
     src = unique_edges[:, 0]
     dst = unique_edges[:, 1]
     num_unique = len(unique_edges)
@@ -450,7 +427,6 @@ def build_edge_neighbors(faces: np.ndarray, unique_edges: np.ndarray) -> torch.T
     return torch.from_numpy(neighbors)
 
 
-# ─── Post-processing ─────────────────────────────────────────────────────────
 
 def _seam_component_labels(mask: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
     seam_idx = np.where(mask)[0]
@@ -489,7 +465,8 @@ def threshold_and_clean(
     threshold: float = 0.5,
     min_component_size: int = 3,
 ) -> np.ndarray:
-    """Threshold probabilities and remove tiny disconnected seam components."""
+
+
     seam_mask = probs >= threshold
     seam_indices = np.where(seam_mask)[0]
     if len(seam_indices) == 0:
@@ -528,7 +505,8 @@ def stitch_seam_gaps(
     unique_edges: np.ndarray,
     max_gap: int = 3,
 ) -> np.ndarray:
-    """Bridge small gaps between disconnected seam components (greedy)."""
+
+
     mask = seam_mask.copy()
 
     vertex_to_edges: dict = {}
@@ -583,7 +561,6 @@ def stitch_seam_gaps(
     return mask
 
 
-# ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='UV seam inference worker.')

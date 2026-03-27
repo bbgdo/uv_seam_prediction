@@ -3,14 +3,14 @@ import os
 import sys
 
 EXPORT_CONFIG = {
-    "use_selection": True,
-    "use_mesh_modifiers": True,
-    "use_normals": True,
-    "use_uvs": True,
-    "use_triangles": False,
-    "use_materials": False,
-    "axis_forward": '-Z',
-    "axis_up": 'Y',
+    'use_selection': True,
+    'use_mesh_modifiers': True,
+    'use_normals': True,
+    'use_uvs': True,
+    'use_triangles': False,
+    'use_materials': False,
+    'axis_forward': '-Z',
+    'axis_up': 'Y',
 }
 
 
@@ -60,20 +60,19 @@ def robust_cleanup_and_triangulate():
 
 def export_obj_modern(out_path):
     try:
-        # Blender 4.0+ API
         bpy.ops.wm.obj_export(
             filepath=out_path,
             export_selected_objects=True,
-            apply_modifiers=EXPORT_CONFIG["use_mesh_modifiers"],
-            export_uv=EXPORT_CONFIG["use_uvs"],
-            export_normals=EXPORT_CONFIG["use_normals"],
-            export_triangulated_mesh=EXPORT_CONFIG["use_triangles"],
+            apply_modifiers=EXPORT_CONFIG['use_mesh_modifiers'],
+            export_uv=EXPORT_CONFIG['use_uvs'],
+            export_normals=EXPORT_CONFIG['use_normals'],
+            export_triangulated_mesh=EXPORT_CONFIG['use_triangles'],
             export_materials=False,
             forward_axis='NEGATIVE_Z',
             up_axis='Y'
         )
     except AttributeError:
-        # Legacy API
+        # Blender < 4.0
         bpy.ops.export_scene.obj(
             filepath=out_path,
             **EXPORT_CONFIG

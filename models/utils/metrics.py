@@ -3,7 +3,6 @@ import torch
 
 @torch.no_grad()
 def edge_f1(logits: torch.Tensor, labels: torch.Tensor, threshold: float = 0.5) -> dict:
-    """Binary F1, precision, recall, and accuracy for edge classification."""
     preds = (torch.sigmoid(logits) >= threshold).long()
     gt = labels.long()
 

@@ -55,9 +55,7 @@ Each mesh is stored as a PyTorch Geometric `Data` object (original graph, used f
 
 ### Dual graph (`dataset_dual.pt`)
 
-Edge classification is reframed as node classification on the dual (line) graph.
-
-Edge classification is reframed as node classification. Each original edge becomes a dual node; two dual nodes are connected if their original edges share a face.
+Each original edge becomes a dual node; two dual nodes are connected if their original edges share a face.
 
 | Tensor | Shape | Description |
 |---|---|---|

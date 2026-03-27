@@ -6,11 +6,10 @@ def connectivity_penalty(
     logits: torch.Tensor,
     edge_index: torch.Tensor,
 ) -> torch.Tensor:
-    """Penalize isolated seam predictions on the dual graph.
+    """Penalty = mean of prob_self * (1 - mean_prob_neighbors).
 
-    A predicted seam node whose dual-graph neighbors have low seam probability
-    is unlikely to form a useful UV boundary — penalize it.
-    Penalty = mean over nodes of: prob_self * (1 - mean_prob_neighbors).
+    Discourages isolated high-probability seam predictions whose
+    neighbors have low probability.
     """
     probs = torch.sigmoid(logits)
     src, dst = edge_index
@@ -22,7 +21,6 @@ def connectivity_penalty(
 
     neighbor_mean = neighbor_sum / neighbor_count.clamp(min=1)
 
-    # high own prob + low neighbor mean = isolated prediction = bad
     isolation = probs * (1.0 - neighbor_mean)
     return isolation.mean()
 
@@ -34,7 +32,6 @@ def seam_loss_with_connectivity(
     pos_weight: torch.Tensor,
     lambda_conn: float = 0.1,
 ) -> torch.Tensor:
-    """BCE loss + weighted connectivity penalty."""
     bce = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight)
     conn = connectivity_penalty(logits, edge_index)
     return bce + lambda_conn * conn

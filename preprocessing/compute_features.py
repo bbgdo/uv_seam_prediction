@@ -1,13 +1,3 @@
-"""
-Edge-level feature computation for UV seam prediction GNN.
-
-Computes 11 features per unique (undirected) edge from a trimesh.Trimesh object.
-Each feature function is standalone and testable.
-
-Usage:
-    python compute_features.py path/to/mesh.obj
-"""
-
 import sys
 from pathlib import Path
 
@@ -169,7 +159,6 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
 
 
 def _zscore_clip_normalize(values: np.ndarray, clip_range: float = 3.0) -> np.ndarray:
-    """Z-score normalize, clip to [-clip_range, clip_range], rescale to [-1, 1]."""
     mean = values.mean()
     std = values.std() + 1e-8
     z = (values - mean) / std

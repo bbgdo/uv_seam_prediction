@@ -1,17 +1,3 @@
-"""
-Build MeshCNN-compatible dataset from an existing dataset.pt.
-
-Adds edge_neighbors [E, 4] — the indices of each edge's 4 topological neighbors
-using the symmetric ordering from MeshCNN (arXiv:1809.05910):
-  neighbors[e] = [e_ac, e_cb, e_bd, e_da]
-where (a,b) is the edge, (a,b,c) and (a,b,d) are its two incident triangles.
-
-Boundary edges (1 incident face) have -1 in positions 2 and 3.
-
-Usage:
-    python preprocessing/build_meshcnn_data.py --input dataset.pt --output dataset_meshcnn.pt
-"""
-
 import argparse
 import sys
 from pathlib import Path
@@ -75,7 +61,6 @@ def build_edge_neighbors(
 
 
 def _load_faces(data: Data) -> np.ndarray:
-    """Get face array from Data.faces or fall back to loading the source .obj."""
     if hasattr(data, 'faces') and data.faces is not None:
         return data.faces.numpy().astype(np.int64)
 

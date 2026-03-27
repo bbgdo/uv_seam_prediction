@@ -1,14 +1,3 @@
-"""
-Mesh augmentation via Gaussian vertex perturbation.
-
-Generates N augmented copies of each .obj file by jittering vertex positions.
-Face connectivity, UV coordinates, and normals are preserved — only xyz changes.
-This lets a small hand-unwrapped dataset grow to a trainable size.
-
-Usage:
-    python augment_meshes.py ./3d-objs --copies 3 --noise 0.05
-"""
-
 import argparse
 import re
 import sys
@@ -18,7 +7,6 @@ import numpy as np
 
 
 def _parse_obj_lines(text: str) -> tuple[list[str], list[int]]:
-    """Parse OBJ file text, return all lines and indices of 'v ' (vertex position) lines."""
     lines = text.splitlines(keepends=True)
     vertex_indices = []
     for i, line in enumerate(lines):
@@ -29,7 +17,6 @@ def _parse_obj_lines(text: str) -> tuple[list[str], list[int]]:
 
 
 def _parse_vertex_line(line: str) -> np.ndarray:
-    """Extract xyz from a 'v x y z' line."""
     parts = line.split()
     return np.array([float(parts[1]), float(parts[2]), float(parts[3])], dtype=np.float64)
 
@@ -44,11 +31,7 @@ def augment_obj_file(
     noise_fraction: float,
     rng: np.random.Generator,
 ) -> list[Path]:
-    """Create augmented copies of an OBJ file by perturbing vertex positions.
-
-    Directly manipulates OBJ text to guarantee UV preservation.
-    Returns list of created file paths.
-    """
+    """Directly manipulates OBJ text to guarantee UV preservation."""
     text = obj_path.read_text(encoding='utf-8', errors='replace')
     lines, vertex_indices = _parse_obj_lines(text)
 
@@ -56,7 +39,6 @@ def augment_obj_file(
         print(f"  [skip] {obj_path.name}: no vertex lines found")
         return []
 
-    # extract vertex positions
     vertices = np.array([_parse_vertex_line(lines[i]) for i in vertex_indices])
     bbox_diag = np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))
     noise_scale = noise_fraction * bbox_diag
@@ -93,7 +75,6 @@ def main():
         print(f"[error] directory not found: {mesh_dir}")
         sys.exit(1)
 
-    # only process original files, skip already-augmented ones
     obj_files = sorted([
         f for f in mesh_dir.glob('*.obj')
         if not re.search(r'_aug\d+\.obj$', f.name)

@@ -1,31 +1,12 @@
-"""
-MeshConv: edge convolution with fixed 4-neighbor structure.
-
-Each edge in a manifold triangulated mesh has exactly 4 neighboring edges
-(2 from each incident triangle). MeshConv exploits this fixed topology
-to apply a learnable transformation over the symmetric neighborhood.
-
-The key invariance trick: the 4 neighbors are split into 2 pairs (one pair
-per incident triangle). Within each pair, features are sorted element-wise
-so the result is invariant to the arbitrary labeling of pair members.
-
-Reference: MeshCNN (Hanocka et al., arXiv:1809.05910).
-"""
-
 import torch
 import torch.nn as nn
 
 
 class MeshConv(nn.Module):
-    """Convolution on mesh edges using the fixed 4-neighbor structure.
+    """Fixed 4-neighbor edge convolution with pair-wise sort for order invariance.
 
-    Gathers features from each edge's 4 topological neighbors, applies
-    element-wise sorting within each pair for order invariance, then
-    projects the concatenation [self || pair1 || pair2] to the output dim.
-
-    Args:
-        in_channels:  feature dimension of input edges
-        out_channels: feature dimension of output edges
+    Concatenates [self || sorted_pair1 || sorted_pair2] -> Linear -> output.
+    Reference: MeshCNN (Hanocka et al., arXiv:1809.05910).
     """
 
     def __init__(self, in_channels: int, out_channels: int):
