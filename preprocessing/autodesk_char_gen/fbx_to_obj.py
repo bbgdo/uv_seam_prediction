@@ -9,11 +9,11 @@ Usage:
 
 import os
 import sys
-
+import re
 import bpy
 
-
-MESH_NAME_PATTERN = 'H_DDS_MidRes'
+# MidRes, HighRes, LowRes,
+MESH_NAME_PATTERN = re.compile(r'H_DDS_(MidRes|HighRes|LowRes)')
 
 
 def reset_scene():
@@ -36,7 +36,7 @@ def reset_scene():
 def find_body_mesh():
     """Find the H_DDS_MidRes mesh object in the scene."""
     for obj in bpy.data.objects:
-        if obj.type == 'MESH' and MESH_NAME_PATTERN in obj.name:
+        if obj.type == 'MESH' and MESH_NAME_PATTERN.search(obj.name):
             return obj
     return None
 
@@ -87,7 +87,7 @@ def process_fbx(fbx_path, output_dir):
 
     body = find_body_mesh()
     if body is None:
-        print(f'  [skip] {name}: no "{MESH_NAME_PATTERN}" mesh found')
+        print(f'  [skip] {name}: no mesh matching pattern H_DDS_(MidRes|HighRes|LowRes) found')
         return False
 
     unparent_keep_transform(body)
