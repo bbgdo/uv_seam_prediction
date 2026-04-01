@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from models.meshcnn.model import MeshCNNClassifier
 from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
-from models.utils.losses import seam_loss_with_connectivity
+from models.utils.losses import focal_bce_with_logits, seam_loss_with_connectivity
 from models.utils.metrics import edge_f1
 
 
@@ -26,11 +26,11 @@ def _neighbors_to_edge_index(neighbors: torch.Tensor) -> torch.Tensor:
 def _run_epoch(
     model: MeshCNNClassifier,
     graphs: list[Data],
-    criterion: torch.nn.Module,
     device: torch.device,
+    pos_weight: torch.Tensor,
     optimizer: torch.optim.Optimizer | None = None,
     lambda_conn: float = 0.0,
-    pos_weight: torch.Tensor | None = None,
+    focal_gamma: float = 2.0,
 ) -> tuple[float, dict]:
     training = optimizer is not None
     model.train(training)
@@ -47,14 +47,11 @@ def _run_epoch(
 
             logits = model(x, neighbors)
 
-            if training and lambda_conn > 0.0 and pos_weight is not None:
-                # build edge_index from neighbor structure for connectivity penalty
+            if lambda_conn > 0.0:
                 edge_index = _neighbors_to_edge_index(neighbors)
-                loss = seam_loss_with_connectivity(
-                    logits, y, edge_index, pos_weight.to(device), lambda_conn
-                )
+                loss = seam_loss_with_connectivity(logits, y, edge_index, pos_weight, lambda_conn, focal_gamma)
             else:
-                loss = criterion(logits, y)
+                loss = focal_bce_with_logits(logits, y, pos_weight, focal_gamma)
 
             if training:
                 optimizer.zero_grad()
@@ -86,8 +83,6 @@ def main(args: argparse.Namespace) -> None:
 
     pos_weight = compute_pos_weight(train).to(device)
     print(f'pos_weight: {pos_weight.item():.4f}')
-
-    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     detected_in = dataset[0].x.shape[1]
     if args.in_channels != detected_in:
@@ -135,9 +130,9 @@ def main(args: argparse.Namespace) -> None:
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
         train_loss, train_m = _run_epoch(
-            model, train, criterion, device, optimizer, args.lambda_conn, pos_weight
+            model, train, device, pos_weight, optimizer, args.lambda_conn
         )
-        val_loss, val_m = _run_epoch(model, val, criterion, device)
+        val_loss, val_m = _run_epoch(model, val, device, pos_weight)
         epoch_time = time.time() - t0
 
         current_lr = optimizer.param_groups[0]['lr']
@@ -179,7 +174,7 @@ def main(args: argparse.Namespace) -> None:
 
     print(f'\nloading best weights from {save_path}')
     model.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
-    test_loss, test_m = _run_epoch(model, test, criterion, device)
+    test_loss, test_m = _run_epoch(model, test, device, pos_weight)
     print(
         f'test | loss {test_loss:.4f}  f1 {test_m["f1"]:.4f}  '
         f'prec {test_m["precision"]:.4f}  rec {test_m["recall"]:.4f}  '
