@@ -80,13 +80,13 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
 def process_mesh(file_path: str | Path) -> Data | None:
     """Load an .obj file and return a PyG Data object, or None on failure.
 
-    Graph schema:
-      x:          [N, 6]    vertex coords + normals
-      edge_index: [2, 2*E]  undirected edges stored both directions
-      edge_attr:  [2*E, 11] 11-dim feature vector per edge
-      y:          [2*E]     1.0 = seam, 0.0 = not a seam
-      faces:      [F, 3]    triangle face indices (for dual graph construction)
+    Detects UV seams on the UV-split topology (as loaded by trimesh),
+    then merges duplicate vertices to get the geometric topology that
+    matches Blender's representation at inference time. Features are
+    computed on the merged mesh.
     """
+    from scipy.spatial import cKDTree
+
     file_path = Path(file_path)
 
     try:
@@ -101,11 +101,40 @@ def process_mesh(file_path: str | Path) -> Data | None:
         print(f"  [error] {file_path.name}: {exc}")
         return None
 
+    # 1. Detect UV seams on UV-split topology (before merging)
+    seam_map_split = _detect_seam_edges(mesh)
+
+    # 2. Merge duplicate vertices to get geometric topology
+    split_verts = np.asarray(mesh.vertices, dtype=np.float64).copy()
+    n_split = len(split_verts)
+    mesh.merge_vertices()
+    n_merged = len(mesh.vertices)
+
+    if n_split != n_merged:
+        print(f"  [merge] {n_split} -> {n_merged} verts ({n_split - n_merged} UV splits removed)")
+
+    # 3. Map split vertex indices to merged vertex indices
+    tree = cKDTree(np.asarray(mesh.vertices, dtype=np.float64))
+    _, old_to_new = tree.query(split_verts)
+
+    # 4. Remap seam labels to merged edge keys
+    seam_map: dict[tuple, bool] = {}
+    for (vi, vj), is_seam in seam_map_split.items():
+        geo_vi, geo_vj = int(old_to_new[vi]), int(old_to_new[vj])
+        if geo_vi == geo_vj:
+            continue
+        key = (min(geo_vi, geo_vj), max(geo_vi, geo_vj))
+        # any split edge being a seam -> geometric edge is a seam
+        if is_seam:
+            seam_map[key] = True
+        elif key not in seam_map:
+            seam_map[key] = False
+
+    # 5. Compute features on the merged (geometric) mesh
     vertices = np.asarray(mesh.vertices, dtype=np.float32)
     vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
     faces = np.asarray(mesh.faces, dtype=np.int64)
 
-    seam_map = _detect_seam_edges(mesh)
     edge_features, unique_edges, edge_to_faces = compute_edge_features(mesh)
 
     x = torch.from_numpy(np.concatenate([vertices, vert_nrms], axis=1))
