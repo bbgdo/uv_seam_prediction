@@ -60,7 +60,7 @@ def export_obj(obj, out_path):
             apply_modifiers=True,
             export_uv=True,
             export_normals=True,
-            export_triangulated_mesh=False,
+            export_triangulated_mesh=True,
             export_materials=False,
             forward_axis='NEGATIVE_Z',
             up_axis='Y',
