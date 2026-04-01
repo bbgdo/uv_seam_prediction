@@ -25,8 +25,12 @@ def split_dataset(
     val_ratio: float = 0.15,
     test_ratio: float = 0.10,
     seed: int = 42,
-) -> tuple[list[Data], list[Data], list[Data]]:
-    """Grouped by base mesh to prevent augmentation leakage."""
+) -> tuple[list[Data], list[Data], list[Data], dict]:
+    """Grouped by base mesh to prevent augmentation leakage.
+
+    Returns (train, val, test, split_info) where split_info maps
+    split name -> list of base mesh names.
+    """
     import random
     import re
 
@@ -54,7 +58,13 @@ def split_dataset(
     val = [d for k in val_keys for d in groups[k]]
     test = [d for k in test_keys for d in groups[k]]
 
-    return train, val, test
+    split_info = {
+        'train': sorted(train_keys),
+        'val': sorted(val_keys),
+        'test': sorted(test_keys),
+    }
+
+    return train, val, test, split_info
 
 
 def load_dual_dataset(path: str | Path) -> list[Data]:

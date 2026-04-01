@@ -78,8 +78,11 @@ def main(args: argparse.Namespace) -> None:
     print(f'device: {device}')
 
     dataset = load_dataset(args.dataset)
-    train, val, test = split_dataset(dataset, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
+    train, val, test, split_info = split_dataset(dataset, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
     print(f'split — train: {len(train)}, val: {len(val)}, test: {len(test)}')
+    print(f'  train meshes: {split_info["train"]}')
+    print(f'  val meshes:   {split_info["val"]}')
+    print(f'  test meshes:  {split_info["test"]}')
 
     pos_weight = compute_pos_weight(train).to(device)
     print(f'pos_weight: {pos_weight.item():.4f}')
@@ -119,6 +122,7 @@ def main(args: argparse.Namespace) -> None:
             'val_graphs': len(val),
             'test_graphs': len(test),
             'pos_weight': pos_weight.item(),
+            'split': split_info,
         },
     )
     logger.log_class_balance(train, val, test)

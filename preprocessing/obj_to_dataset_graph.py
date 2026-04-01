@@ -221,7 +221,7 @@ if __name__ == "__main__":
         print(f"{'#'*60}\n")
 
     if args.save and dataset:
-        out_path = Path('../dataset.pt')
+        out_path = Path('dataset.pt')
         torch.save(dataset, out_path)
         print(f"dataset saved -> {out_path.resolve()}  ({len(dataset)} graphs)")
 

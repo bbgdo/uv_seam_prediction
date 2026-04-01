@@ -142,32 +142,113 @@ def _feat_gauss_curvature(
     return gauss_mean, gauss_diff
 
 
-def _feat_ao(
-    vertices: np.ndarray, normals: np.ndarray, unique_edges: np.ndarray
-) -> tuple:
-    """Normal-based AO approximation (no raycasting required)."""
-    try:
-        from scipy.spatial import cKDTree
-    except ImportError:
-        ao = np.full(len(vertices), 0.5, dtype=np.float32)
-        ao_vi, ao_vj = ao[unique_edges[:, 0]], ao[unique_edges[:, 1]]
-        return (ao_vi + ao_vj) / 2, np.abs(ao_vi - ao_vj)
+def _generate_hemisphere_samples(n_samples: int) -> np.ndarray:
+    """Fibonacci hemisphere sampling — deterministic, well-distributed."""
+    samples = np.zeros((n_samples, 3), dtype=np.float64)
+    golden_ratio = (1 + np.sqrt(5)) / 2
+    for i in range(n_samples):
+        theta = np.arccos(1 - (i + 0.5) / n_samples)
+        phi = 2 * np.pi * i / golden_ratio
+        samples[i] = [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+    return samples
 
-    bbox_diag = float(np.linalg.norm(vertices.max(0) - vertices.min(0)))
-    radius = bbox_diag * 0.1
-    tree = cKDTree(vertices)
-    ao = np.zeros(len(vertices), dtype=np.float32)
 
-    for i in range(len(vertices)):
-        neighbors = tree.query_ball_point(vertices[i], radius)
-        neighbor_idx = [n for n in neighbors if n != i]
-        if not neighbor_idx:
+def _rotation_matrix_to_align(from_vec: np.ndarray, to_vec: np.ndarray) -> np.ndarray:
+    """Rodrigues' rotation from from_vec to to_vec."""
+    from_vec = from_vec / (np.linalg.norm(from_vec) + 1e-12)
+    to_vec = to_vec / (np.linalg.norm(to_vec) + 1e-12)
+    cross = np.cross(from_vec, to_vec)
+    dot = np.dot(from_vec, to_vec)
+    if dot > 0.9999:
+        return np.eye(3)
+    if dot < -0.9999:
+        perp = np.array([1, 0, 0]) if abs(from_vec[0]) < 0.9 else np.array([0, 1, 0])
+        perp = perp - np.dot(perp, from_vec) * from_vec
+        perp /= np.linalg.norm(perp) + 1e-12
+        return 2 * np.outer(perp, perp) - np.eye(3)
+    skew = np.array([
+        [0, -cross[2], cross[1]],
+        [cross[2], 0, -cross[0]],
+        [-cross[1], cross[0], 0],
+    ])
+    return np.eye(3) + skew + skew @ skew / (1 + dot)
+
+
+def _compute_vertex_ao_raycast(
+    vertices: np.ndarray, normals: np.ndarray, faces: np.ndarray, n_rays: int = 32
+) -> np.ndarray:
+    """Raycasted AO — identical to compute_features.py's compute_vertex_ao."""
+    import trimesh
+
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    n_verts = len(vertices)
+    bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])
+    epsilon = 1e-4 * bbox_diag
+
+    hemisphere_samples = _generate_hemisphere_samples(n_rays)
+    z_axis = np.array([0.0, 0.0, 1.0])
+
+    verts_f64 = vertices.astype(np.float64)
+    norms_f64 = normals.astype(np.float64)
+
+    intersector = None
+    for loader in [
+        lambda: trimesh.ray.ray_pyembree.RayMeshIntersector,
+        lambda: trimesh.ray.ray_triangle.RayMeshIntersector,
+    ]:
+        try:
+            cls = loader()
+            candidate = cls(mesh)
+            test_origin = verts_f64[0:1] + norms_f64[0:1] * epsilon
+            candidate.intersects_any(test_origin, norms_f64[0:1])
+            intersector = candidate
+            break
+        except Exception:
             continue
-        dirs = vertices[i] - vertices[neighbor_idx]
-        dirs_norm = dirs / (np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12)
-        alignment = np.einsum('ij,ij->i', normals[neighbor_idx], dirs_norm)
-        ao[i] = float(np.clip(np.mean(np.maximum(alignment, 0)), 0, 1))
 
+    if intersector is None:
+        # fallback: kNN approximation
+        from scipy.spatial import cKDTree
+        k = min(16, n_verts - 1)
+        if k < 1:
+            return np.full(n_verts, 0.5, dtype=np.float32)
+        tree = cKDTree(verts_f64)
+        _, indices = tree.query(verts_f64, k=k + 1)
+        nb_idx = indices[:, 1:]
+        dirs = verts_f64[:, None, :] - verts_f64[nb_idx]
+        dirs = dirs / (np.linalg.norm(dirs, axis=2, keepdims=True) + 1e-12)
+        n_nbr = norms_f64[nb_idx]
+        alignment = np.einsum('nki,nki->nk', n_nbr, dirs)
+        return np.clip(np.mean(np.maximum(alignment, 0), axis=1), 0, 1).astype(np.float32)
+
+    ao_values = np.zeros(n_verts, dtype=np.float32)
+    batch_size = 256
+    for batch_start in range(0, n_verts, batch_size):
+        batch_end = min(batch_start + batch_size, n_verts)
+        batch_origins = []
+        batch_directions = []
+        for v_idx in range(batch_start, batch_end):
+            normal = norms_f64[v_idx]
+            origin = verts_f64[v_idx] + normal * epsilon
+            rot = _rotation_matrix_to_align(z_axis, normal)
+            directions = (rot @ hemisphere_samples.T).T
+            for d in directions:
+                batch_origins.append(origin)
+                batch_directions.append(d)
+        batch_origins = np.array(batch_origins)
+        batch_directions = np.array(batch_directions)
+        hits = intersector.intersects_any(batch_origins, batch_directions)
+        hits = hits.reshape(batch_end - batch_start, n_rays)
+        ao_values[batch_start:batch_end] = hits.mean(axis=1)
+
+    return ao_values
+
+
+def _feat_ao(
+    vertices: np.ndarray, normals: np.ndarray, faces: np.ndarray, unique_edges: np.ndarray
+) -> tuple:
+    """AO features via raycasting — matches training pipeline exactly."""
+    ao = _compute_vertex_ao_raycast(vertices, normals, faces)
     ao_vi, ao_vj = ao[unique_edges[:, 0]], ao[unique_edges[:, 1]]
     return ((ao_vi + ao_vj) / 2).astype(np.float32), np.abs(ao_vi - ao_vj).astype(np.float32)
 
@@ -218,7 +299,7 @@ def compute_edge_features(
     f4 = _feat_delta_normal(normals, unique_edges)
     f5 = _feat_dot_normal(normals, unique_edges)
     f6, f7 = _feat_gauss_curvature(vertices, faces, unique_edges)
-    f8, f9 = _feat_ao(vertices, normals, unique_edges)
+    f8, f9 = _feat_ao(vertices, normals, faces, unique_edges)
     f10 = _feat_symmetry(vertices, unique_edges)
 
     return np.stack([f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10], axis=1)
