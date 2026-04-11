@@ -10,15 +10,19 @@ from torch_geometric.data import Data
 def build_dual_graph_data(original_data: Data) -> Data:
     """Convert an original-graph Data object into a dual-graph Data object.
 
+    Uses line graph (vertex-sharing) adjacency: two edges are connected in the
+    dual when they share a vertex. This matches GraphSeam Section 4.2 and gives
+    avg degree ~10 vs ~4 for face-adjacency, providing 2.5x denser receptive field.
+
     Input Data fields used:
         edge_index: [2, 2E]  — first E columns are unique (vi, vj), second E are reverse
         edge_attr:  [2E, 16] — edge features (first E rows = unique)
         y:          [2E]     — edge labels (first E rows = unique)
-        faces:      [F, 3]   — triangle face indices
+        faces:      [F, 3]   — triangle face indices (kept in original data, not used here)
 
     Output Data:
         x:          [E, 16]  — dual node features = original edge features
-        edge_index: [2, D]   — dual graph connectivity (bidirectional)
+        edge_index: [2, D]   — dual graph connectivity (bidirectional, vertex-sharing)
         y:          [E]      — dual node labels = original edge labels
     """
     num_directed = original_data.edge_index.shape[1]
@@ -27,28 +31,18 @@ def build_dual_graph_data(original_data: Data) -> Data:
     src = original_data.edge_index[0, :num_unique].numpy()
     dst = original_data.edge_index[1, :num_unique].numpy()
 
-    # map (min(vi,vj), max(vi,vj)) -> edge_idx
-    edge_key_to_idx: dict[tuple, int] = {}
+    # Line graph: connect edges sharing a vertex (matches GraphSeam Section 4.2)
+    vertex_to_edges: dict[int, list[int]] = {}
     for idx in range(num_unique):
         vi, vj = int(src[idx]), int(dst[idx])
-        key = (min(vi, vj), max(vi, vj))
-        edge_key_to_idx[key] = idx
+        vertex_to_edges.setdefault(vi, []).append(idx)
+        vertex_to_edges.setdefault(vj, []).append(idx)
 
-    faces = original_data.faces.numpy()
     dual_edges_set: set[tuple[int, int]] = set()
-
-    for face in faces:
-        face_edge_indices = []
-        for k in range(3):
-            vi, vj = int(face[k]), int(face[(k + 1) % 3])
-            key = (min(vi, vj), max(vi, vj))
-            if key in edge_key_to_idx:
-                face_edge_indices.append(edge_key_to_idx[key])
-
-        # each pair of edges in this face -> dual edge (bidirectional)
-        for i in range(len(face_edge_indices)):
-            for j in range(i + 1, len(face_edge_indices)):
-                a, b = face_edge_indices[i], face_edge_indices[j]
+    for incident in vertex_to_edges.values():
+        for i in range(len(incident)):
+            for j in range(i + 1, len(incident)):
+                a, b = incident[i], incident[j]
                 dual_edges_set.add((a, b))
                 dual_edges_set.add((b, a))
 

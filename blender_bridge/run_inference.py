@@ -334,30 +334,26 @@ def compute_edge_features(
 
 
 
-def build_dual_edge_index(faces: np.ndarray, unique_edges: np.ndarray) -> torch.Tensor:
-    """Build dual graph edge_index [2, D] from face adjacency.
+def build_dual_edge_index(unique_edges: np.ndarray) -> torch.Tensor:
+    """Build dual graph edge_index [2, D] via line graph (vertex-sharing adjacency).
 
     Each original edge is a dual node. Two dual nodes are connected when their
-    edges share a triangular face.
+    edges share a vertex. Matches GraphSeam Section 4.2 (avg degree ~10 vs ~4
+    for face adjacency).
     """
-    edge_key_to_idx: dict = {
-        (int(vi), int(vj)): idx for idx, (vi, vj) in enumerate(unique_edges)
-    }
+    vertex_to_edges: dict[int, list[int]] = {}
+    for idx, (vi, vj) in enumerate(unique_edges):
+        vi, vj = int(vi), int(vj)
+        vertex_to_edges.setdefault(vi, []).append(idx)
+        vertex_to_edges.setdefault(vj, []).append(idx)
 
     dual_src, dual_dst = [], []
-    for face in faces:
-        edge_indices = []
-        for k in range(3):
-            vi, vj = int(face[k]), int(face[(k + 1) % 3])
-            key = (min(vi, vj), max(vi, vj))
-            if key in edge_key_to_idx:
-                edge_indices.append(edge_key_to_idx[key])
-
-        for i in range(len(edge_indices)):
-            for j in range(len(edge_indices)):
-                if i != j:
-                    dual_src.append(edge_indices[i])
-                    dual_dst.append(edge_indices[j])
+    for incident in vertex_to_edges.values():
+        for i in range(len(incident)):
+            for j in range(i + 1, len(incident)):
+                a, b = incident[i], incident[j]
+                dual_src.extend([a, b])
+                dual_dst.extend([b, a])
 
     if not dual_src:
         return torch.zeros((2, 0), dtype=torch.long)
@@ -709,11 +705,11 @@ def main() -> None:
         model = MeshCNNClassifier().to(device)
     elif args.model_type == 'gatv2':
         print('[UV Seam GNN] building dual graph...')
-        graph_input = build_dual_edge_index(faces, unique_edges).to(device)
+        graph_input = build_dual_edge_index(unique_edges).to(device)
         model = DualGATv2().to(device)
     else:
         print('[UV Seam GNN] building dual graph...')
-        graph_input = build_dual_edge_index(faces, unique_edges).to(device)
+        graph_input = build_dual_edge_index(unique_edges).to(device)
         model = DualGraphSAGE().to(device)
 
     state = torch.load(args.weights_pth, map_location=device, weights_only=True)
