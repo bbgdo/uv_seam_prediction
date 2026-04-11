@@ -12,7 +12,7 @@ class DualGraphSAGE(nn.Module):
 
     def __init__(
         self,
-        in_dim: int = 11,
+        in_dim: int = 16,
         hidden_dim: int = 128,
         num_layers: int = 3,
         dropout: float = 0.3,

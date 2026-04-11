@@ -253,6 +253,34 @@ def _feat_ao(
     return ((ao_vi + ao_vj) / 2).astype(np.float32), np.abs(ao_vi - ao_vj).astype(np.float32)
 
 
+def _feat_centroid_position(
+    vertices: np.ndarray, unique_edges: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Edge midpoint position, centered at mesh COM and scaled by bbox diagonal."""
+    midpoints = (vertices[unique_edges[:, 0]] + vertices[unique_edges[:, 1]]) / 2.0
+    com = vertices.mean(axis=0)
+    bbox_diag = float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))) + 1e-8
+    centered = (midpoints - com) / bbox_diag
+    return (
+        centered[:, 0].astype(np.float32),
+        centered[:, 1].astype(np.float32),
+        centered[:, 2].astype(np.float32),
+    )
+
+
+def _feat_edge_normal(
+    normals: np.ndarray, unique_edges: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Average vertex normal at edge endpoints, normalized to unit length."""
+    avg = (normals[unique_edges[:, 0]] + normals[unique_edges[:, 1]]) / 2.0
+    avg = _safe_normalize(avg)
+    return (
+        avg[:, 0].astype(np.float32),
+        avg[:, 1].astype(np.float32),
+        avg[:, 2].astype(np.float32),
+    )
+
+
 def _feat_symmetry(vertices: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
     try:
         from scipy.spatial import cKDTree
@@ -289,20 +317,20 @@ def compute_edge_features(
     unique_edges: np.ndarray,
 ) -> np.ndarray:
 
-
     edge_to_faces = _build_edge_to_faces(faces)
 
     f0 = _feat_edge_length(vertices, unique_edges)
     f1 = _feat_signed_dihedral(vertices, faces, unique_edges, edge_to_faces)
     f2 = np.abs(f1)   # sharpness
-    f3 = f1.copy()    # concavity
-    f4 = _feat_delta_normal(normals, unique_edges)
-    f5 = _feat_dot_normal(normals, unique_edges)
-    f6, f7 = _feat_gauss_curvature(vertices, faces, unique_edges)
-    f8, f9 = _feat_ao(vertices, normals, faces, unique_edges)
-    f10 = _feat_symmetry(vertices, unique_edges)
+    f3 = _feat_delta_normal(normals, unique_edges)
+    f4 = _feat_dot_normal(normals, unique_edges)
+    f5, f6 = _feat_gauss_curvature(vertices, faces, unique_edges)
+    f7, f8 = _feat_ao(vertices, normals, faces, unique_edges)
+    f9 = _feat_symmetry(vertices, unique_edges)
+    f10, f11, f12 = _feat_centroid_position(vertices, unique_edges)
+    f13, f14, f15 = _feat_edge_normal(normals, unique_edges)
 
-    return np.stack([f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10], axis=1)
+    return np.stack([f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15], axis=1)
 
 
 
@@ -339,7 +367,7 @@ def build_dual_edge_index(faces: np.ndarray, unique_edges: np.ndarray) -> torch.
 
 
 class DualGraphSAGE(nn.Module):
-    def __init__(self, in_dim=11, hidden_dim=128, num_layers=3, dropout=0.3):
+    def __init__(self, in_dim=16, hidden_dim=128, num_layers=3, dropout=0.3):
         super().__init__()
         self.num_layers = num_layers
         self.dropout = dropout
@@ -376,7 +404,7 @@ class DualGraphSAGE(nn.Module):
 
 
 class DualGATv2(nn.Module):
-    def __init__(self, in_dim=11, hidden_dim=64, heads=8, num_layers=3, dropout=0.3):
+    def __init__(self, in_dim=16, hidden_dim=64, heads=8, num_layers=3, dropout=0.3):
         super().__init__()
         self.num_layers = num_layers
         self.dropout = dropout

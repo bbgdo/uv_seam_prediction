@@ -12,12 +12,12 @@ def build_dual_graph_data(original_data: Data) -> Data:
 
     Input Data fields used:
         edge_index: [2, 2E]  — first E columns are unique (vi, vj), second E are reverse
-        edge_attr:  [2E, 11] — edge features (first E rows = unique)
+        edge_attr:  [2E, 16] — edge features (first E rows = unique)
         y:          [2E]     — edge labels (first E rows = unique)
         faces:      [F, 3]   — triangle face indices
 
     Output Data:
-        x:          [E, 11]  — dual node features = original edge features
+        x:          [E, 16]  — dual node features = original edge features
         edge_index: [2, D]   — dual graph connectivity (bidirectional)
         y:          [E]      — dual node labels = original edge labels
     """

@@ -8,13 +8,13 @@ class DualGATv2(nn.Module):
     """GATv2 for edge classification via dual graph node classification.
 
     On the dual graph, each node = original edge, each edge = face adjacency.
-    Node features = 11-dim artistic edge features.
+    Node features = 16-dim artistic edge features.
     Output = per-node (= per-original-edge) seam probability logit.
     """
 
     def __init__(
         self,
-        in_dim: int = 11,
+        in_dim: int = 16,
         hidden_dim: int = 64,
         heads: int = 8,
         num_layers: int = 3,

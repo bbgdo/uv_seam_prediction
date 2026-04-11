@@ -73,7 +73,7 @@ def load_dual_dataset(path: str | Path) -> list[Data]:
     return [build_dual_graph_data(d) for d in original]
 
 
-def compute_pos_weight(dataset: list[Data], max_weight: float = 10.0) -> torch.Tensor:
+def compute_pos_weight(dataset: list[Data], max_weight: float = 100.0) -> torch.Tensor:
     total_seam = sum(d.y.sum().item() for d in dataset)
     total_nonseam = sum((d.y == 0).sum().item() for d in dataset)
     weight = total_nonseam / max(total_seam, 1)

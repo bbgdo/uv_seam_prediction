@@ -179,7 +179,7 @@ def print_stats(data: Data, file_name: str) -> None:
     print(f"  nodes         : {data.num_nodes}")
     print(f"  unique edges  : {num_unique_edges}")
     print(f"  directed edges: {num_edges}  (both directions)")
-    print(f"  edge features : {data.edge_attr.shape[1]}  (11-dim feature vector)")
+    print(f"  edge features : {data.edge_attr.shape[1]}  ({data.edge_attr.shape[1]}-dim feature vector)")
     print(f"  --- class balance ---")
     print(f"  seam  (1): {num_seams:>8d}  ({seam_pct:.2f}%)")
     print(f"  other (0): {num_nonseams:>8d}  ({100 - seam_pct:.2f}%)")

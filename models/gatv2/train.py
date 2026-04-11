@@ -193,6 +193,6 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=15, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
-    parser.add_argument('--in-dim', type=int, default=11, help='dual node feature dim (default: 11)')
+    parser.add_argument('--in-dim', type=int, default=16, help='dual node feature dim (default: 16)')
 
     main(parser.parse_args())
