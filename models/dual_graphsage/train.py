@@ -13,7 +13,7 @@ from models.dual_graphsage.model import DualGraphSAGE
 from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.losses import focal_bce_with_logits, seam_loss_with_connectivity
-from models.utils.metrics import edge_f1
+from models.utils.metrics import edge_f1, threshold_sweep
 
 
 def _run_epoch(
@@ -74,8 +74,12 @@ def main(args: argparse.Namespace) -> None:
     print(f"  val meshes:   {split_info['val']}")
     print(f"  test meshes:  {split_info['test']}")
 
-    pos_weight = compute_pos_weight(train).to(device)
-    print(f"pos_weight: {pos_weight.item():.4f}")
+    if args.pos_weight is not None:
+        pos_weight = torch.tensor([args.pos_weight], dtype=torch.float32).to(device)
+        print(f"pos_weight: {pos_weight.item():.4f} (manual override)")
+    else:
+        pos_weight = compute_pos_weight(train).to(device)
+        print(f"pos_weight: {pos_weight.item():.4f} (auto-computed)")
 
     model = DualGraphSAGE(
         in_dim=args.in_dim,
@@ -99,6 +103,7 @@ def main(args: argparse.Namespace) -> None:
             'dropout': args.dropout,
             'lr': args.lr,
             'lambda_conn': args.lambda_conn,
+            'focal_gamma': args.focal_gamma,
             'patience': args.patience,
             'dataset': args.dataset,
             'train_graphs': len(train),
@@ -118,9 +123,9 @@ def main(args: argparse.Namespace) -> None:
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
         train_loss, train_m = _run_epoch(
-            model, train, device, pos_weight, optimizer, args.lambda_conn
+            model, train, device, pos_weight, optimizer, args.lambda_conn, args.focal_gamma
         )
-        val_loss, val_m = _run_epoch(model, val, device, pos_weight)
+        val_loss, val_m = _run_epoch(model, val, device, pos_weight, focal_gamma=args.focal_gamma)
         epoch_time = time.time() - t0
 
         current_lr = optimizer.param_groups[0]['lr']
@@ -162,12 +167,46 @@ def main(args: argparse.Namespace) -> None:
 
     print(f"\nloading best weights from {save_path}")
     model.load_state_dict(torch.load(save_path, map_location=device))
-    test_loss, test_m = _run_epoch(model, test, device, pos_weight)
+    test_loss, test_m = _run_epoch(model, test, device, pos_weight, focal_gamma=args.focal_gamma)
     print(
         f"test | loss {test_loss:.4f}  f1 {test_m['f1']:.4f}  "
         f"prec {test_m['precision']:.4f}  rec {test_m['recall']:.4f}  "
         f"acc {test_m['accuracy']:.4f}"
     )
+
+    # Threshold sweep on val (select) and test (report)
+    model.eval()
+    val_logits, val_labels = [], []
+    test_logits_list, test_labels_list = [], []
+    with torch.no_grad():
+        for data in val:
+            val_logits.append(model(data.x.to(device), data.edge_index.to(device)).cpu())
+            val_labels.append(data.y.cpu())
+        for data in test:
+            test_logits_list.append(model(data.x.to(device), data.edge_index.to(device)).cpu())
+            test_labels_list.append(data.y.cpu())
+    val_logits_cat = torch.cat(val_logits)
+    val_labels_cat = torch.cat(val_labels)
+    test_logits_cat = torch.cat(test_logits_list)
+    test_labels_cat = torch.cat(test_labels_list)
+
+    val_sweep = threshold_sweep(val_logits_cat, val_labels_cat)
+    test_sweep = threshold_sweep(test_logits_cat, test_labels_cat)
+    best_t = val_sweep['best']['threshold']
+
+    print(f"\n{'─'*65}")
+    print("threshold sweep (val):")
+    print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}")
+    for r in val_sweep['all']:
+        marker = ' <-- best' if r['threshold'] == best_t else ''
+        print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}{marker}")
+    print("\nthreshold sweep (test):")
+    print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}")
+    for r in test_sweep['all']:
+        marker = ' <-- best val' if r['threshold'] == best_t else ''
+        print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}{marker}")
+    print(f"\noptimal threshold (by val F1): {best_t:.2f}")
+    print(f"{'─'*65}")
 
     logger.finalize(test_metrics=test_m, best_epoch=best_epoch)
     logger.save()
@@ -191,5 +230,9 @@ if __name__ == '__main__':
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--in-dim', type=int, default=16, help='dual node feature dim (default: 16)')
+    parser.add_argument('--pos-weight', type=float, default=None,
+                        help='override pos_weight (default: auto-computed from dataset)')
+    parser.add_argument('--focal-gamma', type=float, default=2.0,
+                        help='focal loss gamma (0=plain BCE, 2=standard focal)')
 
     main(parser.parse_args())

@@ -2,6 +2,19 @@ import torch
 
 
 @torch.no_grad()
+def threshold_sweep(logits: torch.Tensor, labels: torch.Tensor) -> dict:
+    """Evaluate F1 across thresholds, return best threshold and full results."""
+    thresholds = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+    results = []
+    for t in thresholds:
+        m = edge_f1(logits, labels, threshold=t)
+        m['threshold'] = t
+        results.append(m)
+    best = max(results, key=lambda r: r['f1'])
+    return {'best': best, 'all': results}
+
+
+@torch.no_grad()
 def edge_f1(logits: torch.Tensor, labels: torch.Tensor, threshold: float = 0.5) -> dict:
     preds = (torch.sigmoid(logits) >= threshold).long()
     gt = labels.long()
