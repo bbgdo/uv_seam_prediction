@@ -1,6 +1,6 @@
 """Grid search over loss hyperparameters for DualGraphSAGE.
 
-Searches pos_weight × focal_gamma × threshold jointly.
+Searches pos_weight × focal_gamma × lr × threshold jointly.
 Each combo trains for up to --epochs with early stopping on val F1
 at the best threshold (not fixed 0.5).
 
@@ -27,8 +27,9 @@ from models.utils.metrics import edge_f1
 
 
 GRID = {
-    'pos_weight': [5, 10, 15, 20, 30],
+    'pos_weight': [5, 10, 15, 20, 30, 50, 100],
     'focal_gamma': [0.0, 1.0, 2.0],
+    'lr': [0.0005, 0.001],
 }
 
 THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -134,6 +135,7 @@ def run_one_config(
     return {
         'pos_weight': pw,
         'focal_gamma': gamma,
+        'lr': lr,
         'best_val_f1': round(best_val_f1, 4),
         'best_threshold': best_threshold,
         'test_f1_at_val_threshold': round(test_m['f1'], 4),
@@ -150,7 +152,6 @@ def main() -> None:
     parser.add_argument('--dataset', default='dataset_dual.pt')
     parser.add_argument('--epochs', type=int, default=80)
     parser.add_argument('--patience', type=int, default=15)
-    parser.add_argument('--lr', type=float, default=1e-3)
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -162,31 +163,31 @@ def main() -> None:
     print(f'val meshes:  {split_info["val"]}')
     print(f'test meshes: {split_info["test"]}')
 
-    configs = list(product(GRID['pos_weight'], GRID['focal_gamma']))
+    configs = list(product(GRID['pos_weight'], GRID['focal_gamma'], GRID['lr']))
     results = []
 
     print(f'\nrunning {len(configs)} configurations ({args.epochs} epochs each, patience={args.patience})...\n')
-    print(f'{"pw":>5s}  {"gamma":>5s}  {"val_F1":>7s}  {"thr":>5s}  '
+    print(f'{"pw":>5s}  {"gamma":>5s}  {"lr":>8s}  {"val_F1":>7s}  {"thr":>5s}  '
           f'{"test_F1":>7s}  {"P":>7s}  {"R":>7s}  {"ep":>4s}  {"time":>6s}')
-    print('-' * 70)
+    print('-' * 80)
 
-    for pw, gamma in configs:
+    for pw, gamma, lr in configs:
         t0 = time.time()
-        result = run_one_config(train, val, test, device, pw, gamma, args.epochs, args.patience, args.lr)
+        result = run_one_config(train, val, test, device, pw, gamma, args.epochs, args.patience, lr)
         elapsed = time.time() - t0
         results.append(result)
 
-        print(f'{pw:>5.0f}  {gamma:>5.1f}  {result["best_val_f1"]:>7.4f}  '
+        print(f'{pw:>5.0f}  {gamma:>5.1f}  {lr:>8.4f}  {result["best_val_f1"]:>7.4f}  '
               f'{result["best_threshold"]:>5.2f}  {result["test_f1_at_val_threshold"]:>7.4f}  '
               f'{result["test_precision"]:>7.4f}  {result["test_recall"]:>7.4f}  '
               f'{result["epochs_trained"]:>4d}  {elapsed:>5.0f}s')
 
     results.sort(key=lambda r: r['best_val_f1'], reverse=True)
 
-    print(f'\n{"="*70}')
+    print(f'\n{"="*80}')
     print('TOP 5 by val F1:')
     for i, r in enumerate(results[:5]):
-        print(f'  {i+1}. pw={r["pos_weight"]}, gamma={r["focal_gamma"]}, '
+        print(f'  {i+1}. pw={r["pos_weight"]}, gamma={r["focal_gamma"]}, lr={r["lr"]}, '
               f'val_F1={r["best_val_f1"]:.4f} (t={r["best_threshold"]:.2f}), '
               f'test_F1={r["test_f1_at_val_threshold"]:.4f} '
               f'(P={r["test_precision"]:.4f} R={r["test_recall"]:.4f})')
@@ -194,7 +195,7 @@ def main() -> None:
     best = results[0]
     print(f'\nrecommended next run:')
     print(f'  python models/dual_graphsage/train.py --dataset {args.dataset} '
-          f'--epochs 200 --patience 20 '
+          f'--epochs 200 --patience 20 --lr {best["lr"]} '
           f'--pos-weight {best["pos_weight"]} --focal-gamma {best["focal_gamma"]}')
 
     out_dir = Path(f'runs/grid_search_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
