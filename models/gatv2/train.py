@@ -152,6 +152,7 @@ def main(args: argparse.Namespace) -> None:
             f"train loss {train_loss:.4f}  f1 {train_m['f1']:.4f} | "
             f"val loss {val_loss:.4f}  f1 {val_m['f1']:.4f}  "
             f"prec {val_m['precision']:.4f}  rec {val_m['recall']:.4f}  "
+            f"fpr {val_m['fpr']:.4f}  "
             f"[{epoch_time:.1f}s]"
         )
 
@@ -196,19 +197,19 @@ def main(args: argparse.Namespace) -> None:
     test_sweep = threshold_sweep(test_logits_cat, test_labels_cat)
     best_t = val_sweep['best']['threshold']
 
-    print(f"\n{'─'*65}")
+    print(f"\n{'─'*75}")
     print("threshold sweep (val):")
-    print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}")
+    print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}  {'FPR':>7s}")
     for r in val_sweep['all']:
         marker = ' <-- best' if r['threshold'] == best_t else ''
-        print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}{marker}")
+        print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}  {r['fpr']:>7.4f}{marker}")
     print("\nthreshold sweep (test):")
-    print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}")
+    print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}  {'FPR':>7s}")
     for r in test_sweep['all']:
         marker = ' <-- best val' if r['threshold'] == best_t else ''
-        print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}{marker}")
+        print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}  {r['fpr']:>7.4f}{marker}")
     print(f"\noptimal threshold (by val F1): {best_t:.2f}")
-    print(f"{'─'*65}")
+    print(f"{'─'*75}")
 
     logger.finalize(test_metrics=test_m, best_epoch=best_epoch)
     logger.save()
@@ -232,7 +233,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=15, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
-    parser.add_argument('--in-dim', type=int, default=16, help='dual node feature dim (default: 16)')
+    parser.add_argument('--in-dim', type=int, default=18, help='dual node feature dim (default: 18)')
     parser.add_argument('--pos-weight', type=float, default=None,
                         help='override pos_weight (default: auto-computed from dataset)')
     parser.add_argument('--focal-gamma', type=float, default=2.0,

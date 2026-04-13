@@ -28,5 +28,10 @@ def edge_f1(logits: torch.Tensor, labels: torch.Tensor, threshold: float = 0.5) 
     recall = tp / max(tp + fn, 1)
     f1 = 2 * precision * recall / max(precision + recall, 1e-8)
     accuracy = (tp + tn) / max(len(gt), 1)
+    fpr = fp / max(fp + tn, 1)
+    tpr = recall  # same as recall
 
-    return {'f1': f1, 'precision': precision, 'recall': recall, 'accuracy': accuracy}
+    return {
+        'f1': f1, 'precision': precision, 'recall': recall, 'accuracy': accuracy,
+        'fpr': fpr, 'tpr': tpr, 'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
+    }

@@ -36,12 +36,6 @@ def _build_edge_to_faces(faces: np.ndarray) -> dict:
 
 
 
-def _feat_edge_length(vertices: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
-    lengths = np.linalg.norm(
-        vertices[unique_edges[:, 1]] - vertices[unique_edges[:, 0]], axis=1
-    )
-    return (lengths / (lengths.max() + 1e-8)).astype(np.float32)
-
 
 def _feat_signed_dihedral(
     vertices: np.ndarray,
@@ -74,18 +68,6 @@ def _feat_signed_dihedral(
 
     return (angles / np.pi).astype(np.float32)
 
-
-def _feat_delta_normal(normals: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
-    delta = np.linalg.norm(
-        normals[unique_edges[:, 0]] - normals[unique_edges[:, 1]], axis=1
-    )
-    return (delta / 2.0).astype(np.float32)
-
-
-def _feat_dot_normal(normals: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
-    n_vi = _safe_normalize(normals[unique_edges[:, 0]])
-    n_vj = _safe_normalize(normals[unique_edges[:, 1]])
-    return np.einsum('ij,ij->i', n_vi, n_vj).astype(np.float32)
 
 
 def _vertex_gaussian_curvature(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
@@ -130,16 +112,6 @@ def _zscore_clip_normalize(values: np.ndarray, clip_range: float = 3.0) -> np.nd
     z = np.clip(z, -clip_range, clip_range)
     return (z / clip_range).astype(np.float32)
 
-
-def _feat_gauss_curvature(
-    vertices: np.ndarray, faces: np.ndarray, unique_edges: np.ndarray
-) -> tuple:
-    k = _vertex_gaussian_curvature(vertices, faces)
-    k_n = _zscore_clip_normalize(k)
-    k_vi, k_vj = k_n[unique_edges[:, 0]], k_n[unique_edges[:, 1]]
-    gauss_mean = ((k_vi + k_vj) / 2.0).astype(np.float32)
-    gauss_diff = np.abs(k_vi - k_vj).astype(np.float32)
-    return gauss_mean, gauss_diff
 
 
 def _generate_hemisphere_samples(n_samples: int) -> np.ndarray:
@@ -244,43 +216,6 @@ def _compute_vertex_ao_raycast(
     return ao_values
 
 
-def _feat_ao(
-    vertices: np.ndarray, normals: np.ndarray, faces: np.ndarray, unique_edges: np.ndarray
-) -> tuple:
-    """AO features via raycasting — matches training pipeline exactly."""
-    ao = _compute_vertex_ao_raycast(vertices, normals, faces)
-    ao_vi, ao_vj = ao[unique_edges[:, 0]], ao[unique_edges[:, 1]]
-    return ((ao_vi + ao_vj) / 2).astype(np.float32), np.abs(ao_vi - ao_vj).astype(np.float32)
-
-
-def _feat_centroid_position(
-    vertices: np.ndarray, unique_edges: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Edge midpoint position, centered at mesh COM and scaled by bbox diagonal."""
-    midpoints = (vertices[unique_edges[:, 0]] + vertices[unique_edges[:, 1]]) / 2.0
-    com = vertices.mean(axis=0)
-    bbox_diag = float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))) + 1e-8
-    centered = (midpoints - com) / bbox_diag
-    return (
-        centered[:, 0].astype(np.float32),
-        centered[:, 1].astype(np.float32),
-        centered[:, 2].astype(np.float32),
-    )
-
-
-def _feat_edge_normal(
-    normals: np.ndarray, unique_edges: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Average vertex normal at edge endpoints, normalized to unit length."""
-    avg = (normals[unique_edges[:, 0]] + normals[unique_edges[:, 1]]) / 2.0
-    avg = _safe_normalize(avg)
-    return (
-        avg[:, 0].astype(np.float32),
-        avg[:, 1].astype(np.float32),
-        avg[:, 2].astype(np.float32),
-    )
-
-
 def _feat_symmetry(vertices: np.ndarray, unique_edges: np.ndarray) -> np.ndarray:
     try:
         from scipy.spatial import cKDTree
@@ -316,21 +251,33 @@ def compute_edge_features(
     faces: np.ndarray,
     unique_edges: np.ndarray,
 ) -> np.ndarray:
+    """18-dim features: endpoint concatenation (8+8) + edge-level (2).
+
+    Layout: [vi_feats(8) || vj_feats(8) || edge_feats(2)]
+    Per-vertex (8): pos_xyz (COM-centered, bbox-scaled), normal_xyz, gauss_curvature, AO
+    Per-edge (2): signed_dihedral, symmetry_distance
+    """
+    com = vertices.mean(axis=0)
+    bbox_diag = float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))) + 1e-8
+    pos_norm = ((vertices - com) / bbox_diag).astype(np.float32)
+    normals_f32 = _safe_normalize(normals).astype(np.float32)
+    gauss = _vertex_gaussian_curvature(vertices, faces)
+    gauss_norm = _zscore_clip_normalize(gauss)
+    ao = _compute_vertex_ao_raycast(vertices, normals, faces)
+    vertex_feats = np.concatenate([
+        pos_norm, normals_f32, gauss_norm[:, None], ao[:, None],
+    ], axis=1)  # [V, 8]
+
+    vi_feats = vertex_feats[unique_edges[:, 0]]  # [E, 8]
+    vj_feats = vertex_feats[unique_edges[:, 1]]  # [E, 8]
 
     edge_to_faces = _build_edge_to_faces(faces)
+    dihedral = _feat_signed_dihedral(vertices, faces, unique_edges, edge_to_faces)
+    symmetry = _feat_symmetry(vertices, unique_edges)
 
-    f0 = _feat_edge_length(vertices, unique_edges)
-    f1 = _feat_signed_dihedral(vertices, faces, unique_edges, edge_to_faces)
-    f2 = np.abs(f1)   # sharpness
-    f3 = _feat_delta_normal(normals, unique_edges)
-    f4 = _feat_dot_normal(normals, unique_edges)
-    f5, f6 = _feat_gauss_curvature(vertices, faces, unique_edges)
-    f7, f8 = _feat_ao(vertices, normals, faces, unique_edges)
-    f9 = _feat_symmetry(vertices, unique_edges)
-    f10, f11, f12 = _feat_centroid_position(vertices, unique_edges)
-    f13, f14, f15 = _feat_edge_normal(normals, unique_edges)
-
-    return np.stack([f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15], axis=1)
+    return np.concatenate([
+        vi_feats, vj_feats, dihedral[:, None], symmetry[:, None],
+    ], axis=1).astype(np.float32)  # [E, 18]
 
 
 
@@ -363,7 +310,7 @@ def build_dual_edge_index(unique_edges: np.ndarray) -> torch.Tensor:
 
 
 class DualGraphSAGE(nn.Module):
-    def __init__(self, in_dim=16, hidden_dim=128, num_layers=3, dropout=0.3):
+    def __init__(self, in_dim=18, hidden_dim=128, num_layers=3, dropout=0.3):
         super().__init__()
         self.num_layers = num_layers
         self.dropout = dropout
@@ -400,7 +347,7 @@ class DualGraphSAGE(nn.Module):
 
 
 class DualGATv2(nn.Module):
-    def __init__(self, in_dim=16, hidden_dim=64, heads=8, num_layers=3, dropout=0.3):
+    def __init__(self, in_dim=18, hidden_dim=64, heads=8, num_layers=3, dropout=0.3):
         super().__init__()
         self.num_layers = num_layers
         self.dropout = dropout
@@ -694,7 +641,7 @@ def main() -> None:
     )
 
     print('[UV Seam GNN] computing edge features...')
-    features = compute_edge_features(vertices, normals, faces, unique_edges)  # [E, 11]
+    features = compute_edge_features(vertices, normals, faces, unique_edges)  # [E, 18]
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     x = torch.from_numpy(features).float().to(device)

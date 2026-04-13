@@ -38,12 +38,6 @@ def build_edge_topology(mesh: trimesh.Trimesh) -> tuple[np.ndarray, dict]:
     return unique_edges, edge_to_faces
 
 
-def compute_edge_length(mesh: trimesh.Trimesh, unique_edges: np.ndarray) -> np.ndarray:
-    """Feature 0: edge length, normalized per-mesh by max edge length."""
-    verts = np.asarray(mesh.vertices, dtype=np.float32)
-    lengths = np.linalg.norm(verts[unique_edges[:, 1]] - verts[unique_edges[:, 0]], axis=1)
-    max_len = lengths.max() + 1e-8
-    return (lengths / max_len).astype(np.float32)
 
 
 def compute_signed_dihedral(
@@ -82,26 +76,6 @@ def compute_signed_dihedral(
     return (angles / np.pi).astype(np.float32)
 
 
-def compute_sharpness(signed_dihedral_normalized: np.ndarray) -> np.ndarray:
-    """Feature 2: sharpness = |signed_dihedral / pi|. 0 = flat, 1 = knife-edge.
-    Input is already normalized to [-1, 1], so sharpness = abs(input)."""
-    return np.abs(signed_dihedral_normalized).astype(np.float32)
-
-
-def compute_delta_normal(mesh: trimesh.Trimesh, unique_edges: np.ndarray) -> np.ndarray:
-    """Feature 4: magnitude of vertex normal difference, normalized to [0, 1]."""
-    vn = np.asarray(mesh.vertex_normals, dtype=np.float32)
-    delta = np.linalg.norm(vn[unique_edges[:, 0]] - vn[unique_edges[:, 1]], axis=1)
-    # max possible magnitude of difference between unit vectors is 2
-    return (delta / 2.0).astype(np.float32)
-
-
-def compute_dot_normal(mesh: trimesh.Trimesh, unique_edges: np.ndarray) -> np.ndarray:
-    """Feature 5: dot product of normalized vertex normals. Range [-1, 1]."""
-    vn = np.asarray(mesh.vertex_normals, dtype=np.float32)
-    n_vi = _safe_normalize(vn[unique_edges[:, 0]])
-    n_vj = _safe_normalize(vn[unique_edges[:, 1]])
-    return np.einsum('ij,ij->i', n_vi, n_vj).astype(np.float32)
 
 
 def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -161,19 +135,6 @@ def _zscore_clip_normalize(values: np.ndarray, clip_range: float = 3.0) -> np.nd
     return (z / clip_range).astype(np.float32)
 
 
-def compute_gauss_curvature_features(
-    mesh: trimesh.Trimesh, unique_edges: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Features 6-7: mean and diff of Gaussian curvature at edge endpoints."""
-    curvatures = compute_vertex_gaussian_curvature(mesh)
-    curvatures_norm = _zscore_clip_normalize(curvatures)
-
-    k_vi = curvatures_norm[unique_edges[:, 0]]
-    k_vj = curvatures_norm[unique_edges[:, 1]]
-
-    gauss_mean = ((k_vi + k_vj) / 2.0).astype(np.float32)
-    gauss_diff = np.abs(k_vi - k_vj).astype(np.float32)
-    return gauss_mean, gauss_diff
 
 
 def _generate_hemisphere_samples(n_samples: int, rng: np.random.Generator) -> np.ndarray:
@@ -314,17 +275,6 @@ def _ao_normal_approximation(mesh: trimesh.Trimesh) -> np.ndarray:
     return np.clip(np.mean(np.maximum(alignment, 0), axis=1), 0, 1).astype(np.float32)
 
 
-def compute_ao_features(
-    mesh: trimesh.Trimesh, unique_edges: np.ndarray, n_rays: int = 32
-) -> tuple[np.ndarray, np.ndarray]:
-    """Features 8-9: mean and diff of ambient occlusion at edge endpoints."""
-    ao = compute_vertex_ao(mesh, n_rays=n_rays)
-    ao_vi = ao[unique_edges[:, 0]]
-    ao_vj = ao[unique_edges[:, 1]]
-
-    ao_mean = ((ao_vi + ao_vj) / 2.0).astype(np.float32)
-    ao_diff = np.abs(ao_vi - ao_vj).astype(np.float32)
-    return ao_mean, ao_diff
 
 
 def detect_symmetry_axis(
@@ -357,48 +307,6 @@ def detect_symmetry_axis(
     return None
 
 
-def compute_centroid_position(
-    mesh: trimesh.Trimesh,
-    unique_edges: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Edge midpoint position, centered at mesh COM and scaled by bbox diagonal.
-
-    COM-centering + single-scalar scaling preserves proportions across meshes
-    (unlike per-axis bbox normalization which distorts aspect ratios).
-    Humanoid meshes from the same generator get consistent normalized coords:
-    head ≈ top, feet ≈ bottom, arms ≈ sides.
-    """
-    verts = np.asarray(mesh.vertices, dtype=np.float64)
-    midpoints = (verts[unique_edges[:, 0]] + verts[unique_edges[:, 1]]) / 2.0
-
-    com = mesh.center_mass if hasattr(mesh, 'center_mass') else verts.mean(axis=0)
-    bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]) + 1e-8
-
-    centered = (midpoints - com) / bbox_diag  # roughly [-0.5, 0.5]
-    return (
-        centered[:, 0].astype(np.float32),
-        centered[:, 1].astype(np.float32),
-        centered[:, 2].astype(np.float32),
-    )
-
-
-def compute_edge_normal(
-    mesh: trimesh.Trimesh,
-    unique_edges: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Average vertex normal at edge midpoint, normalized to unit length.
-
-    Encodes which direction the surface faces at each edge.
-    Front-facing edges have high Z, side-facing edges have high |X|, etc.
-    """
-    vn = np.asarray(mesh.vertex_normals, dtype=np.float64)
-    avg = (vn[unique_edges[:, 0]] + vn[unique_edges[:, 1]]) / 2.0
-    avg = _safe_normalize(avg)
-    return (
-        avg[:, 0].astype(np.float32),
-        avg[:, 1].astype(np.float32),
-        avg[:, 2].astype(np.float32),
-    )
 
 
 def compute_symmetry_distance(
@@ -419,43 +327,74 @@ def compute_symmetry_distance(
 def compute_edge_features(
     mesh: trimesh.Trimesh,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Compute all 16 edge features for a mesh.
+    """Compute 18-dim edge features: endpoint concatenation + edge-level features.
+
+    Layout: [vertex_i_features(8) || vertex_j_features(8) || edge_features(2)]
+
+    Per-vertex (8): pos_xyz (COM-centered, bbox-scaled), normal_xyz, gauss_curvature, AO
+    Per-edge (2): signed_dihedral, symmetry_distance
+
+    Endpoint ordering: vi < vj (matches unique_edges sorting).
 
     Returns:
-        edge_features: [E, 16] float32 array
+        edge_features: [E, 18] float32 array
         unique_edges: [E, 2] int64 array (vi < vj)
         edge_to_faces: dict mapping (vi, vj) -> [face_idx, ...]
     """
     unique_edges, edge_to_faces = build_edge_topology(mesh)
 
-    f0_length = compute_edge_length(mesh, unique_edges)
-    f1_dihedral = compute_signed_dihedral(mesh, unique_edges, edge_to_faces)
-    f2_sharpness = compute_sharpness(f1_dihedral)
-    f3_delta_n = compute_delta_normal(mesh, unique_edges)
-    f4_dot_n = compute_dot_normal(mesh, unique_edges)
-    f5_gauss_mean, f6_gauss_diff = compute_gauss_curvature_features(mesh, unique_edges)
-    f7_ao_mean, f8_ao_diff = compute_ao_features(mesh, unique_edges)
-    f9_symmetry = compute_symmetry_distance(mesh, unique_edges)
-    f10_cx, f11_cy, f12_cz = compute_centroid_position(mesh, unique_edges)
-    f13_nx, f14_ny, f15_nz = compute_edge_normal(mesh, unique_edges)
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
 
-    features = np.stack([
-        f0_length, f1_dihedral, f2_sharpness,
-        f3_delta_n, f4_dot_n, f5_gauss_mean, f6_gauss_diff,
-        f7_ao_mean, f8_ao_diff, f9_symmetry,
-        f10_cx, f11_cy, f12_cz,
-        f13_nx, f14_ny, f15_nz,
+    # Per-vertex position: COM-centered, single-scalar bbox scaling (preserves proportions)
+    com = mesh.center_mass if hasattr(mesh, 'center_mass') else verts.mean(axis=0)
+    bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]) + 1e-8
+    pos_norm = ((verts - com) / bbox_diag).astype(np.float32)  # [V, 3]
+
+    normals_f32 = normals.astype(np.float32)  # [V, 3], already unit-length from trimesh
+
+    gauss_curv = compute_vertex_gaussian_curvature(mesh)
+    gauss_curv_norm = _zscore_clip_normalize(gauss_curv)  # [V]
+
+    ao = compute_vertex_ao(mesh, n_rays=32)  # [V]
+
+    # Vertex feature matrix [V, 8]
+    vertex_features = np.concatenate([
+        pos_norm,                 # [V, 3]
+        normals_f32,              # [V, 3]
+        gauss_curv_norm[:, None], # [V, 1]
+        ao[:, None],              # [V, 1]
+    ], axis=1).astype(np.float32)
+
+    # Endpoint concatenation [E, 16]
+    vi_feats = vertex_features[unique_edges[:, 0]]
+    vj_feats = vertex_features[unique_edges[:, 1]]
+
+    # Edge-level features [E, 2]
+    dihedral = compute_signed_dihedral(mesh, unique_edges, edge_to_faces)
+    symmetry = compute_symmetry_distance(mesh, unique_edges)
+
+    features = np.concatenate([
+        vi_feats,             # [E, 8]
+        vj_feats,             # [E, 8]
+        dihedral[:, None],    # [E, 1]
+        symmetry[:, None],    # [E, 1]
     ], axis=1).astype(np.float32)
 
     return features, unique_edges, edge_to_faces
 
 
 FEATURE_NAMES = [
-    'edge_length', 'signed_dihedral', 'sharpness',
-    'delta_normal', 'dot_normal', 'gauss_curv_mean', 'gauss_curv_diff',
-    'ao_mean', 'ao_diff', 'symmetry_dist',
-    'centroid_x', 'centroid_y', 'centroid_z',
-    'avg_normal_x', 'avg_normal_y', 'avg_normal_z',
+    # vertex i (lower index)
+    'pos_x_i', 'pos_y_i', 'pos_z_i',
+    'normal_x_i', 'normal_y_i', 'normal_z_i',
+    'gauss_curv_i', 'ao_i',
+    # vertex j (higher index)
+    'pos_x_j', 'pos_y_j', 'pos_z_j',
+    'normal_x_j', 'normal_y_j', 'normal_z_j',
+    'gauss_curv_j', 'ao_j',
+    # edge-level
+    'signed_dihedral', 'symmetry_dist',
 ]
 
 
