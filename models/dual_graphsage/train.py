@@ -1,19 +1,130 @@
 import argparse
+import random
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch_geometric.data import Data
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.dual_graphsage.model import DualGraphSAGE
-from models.utils.dataset import compute_pos_weight, filter_dataset_by_resolution, load_dataset, split_dataset
+from models.utils.dataset import (
+    compute_pos_weight,
+    filter_dataset_by_resolution,
+    load_dataset,
+    load_split_json_metadata,
+    split_dataset,
+)
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.losses import focal_bce_with_logits, seam_loss_with_connectivity
 from models.utils.metrics import edge_f1, threshold_sweep
+
+
+METADATA_KEYS = ('label_source', 'feature_preset', 'endpoint_order', 'weld_mode')
+
+
+def set_random_seeds(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _metadata_value(data: Data, key: str):
+    try:
+        value = getattr(data, key)
+        if value not in (None, ''):
+            return value
+    except AttributeError:
+        pass
+
+    for container_key in ('metadata', 'meta', 'dataset_metadata'):
+        try:
+            container = getattr(data, container_key)
+        except AttributeError:
+            continue
+        if isinstance(container, dict) and key in container and container[key] not in (None, ''):
+            return container[key]
+        if hasattr(container, key):
+            value = getattr(container, key)
+            if value not in (None, ''):
+                return value
+    return None
+
+
+def dataset_metadata_summary(dataset: list[Data]) -> dict:
+    summary: dict = {'graph_count': len(dataset)}
+    for key in METADATA_KEYS:
+        values = []
+        missing = 0
+        for data in dataset:
+            value = _metadata_value(data, key)
+            if value is None:
+                missing += 1
+            else:
+                values.append(str(value))
+
+        if values:
+            unique_values = sorted(set(values))
+            summary[key] = unique_values[0] if len(unique_values) == 1 else unique_values
+        if missing and (values or missing != len(dataset)):
+            summary[f'{key}_missing'] = missing
+
+    feature_dims = []
+    for data in dataset:
+        x = getattr(data, 'x', None)
+        if x is not None and getattr(x, 'ndim', 0) == 2:
+            feature_dims.append(int(x.shape[1]))
+    if feature_dims:
+        unique_dims = sorted(set(feature_dims))
+        summary['x_feature_dim'] = unique_dims[0] if len(unique_dims) == 1 else unique_dims
+
+    return summary
+
+
+def validate_strict_paper_protocol(args: argparse.Namespace, dataset: list[Data]) -> None:
+    failures = []
+    if args.preset != 'paper':
+        failures.append("preset must be 'paper'")
+    if not getattr(args, 'resolution_tag', None):
+        failures.append('resolution_tag must be set')
+    if args.in_dim != 14:
+        failures.append('in_dim must be 14')
+    if args.aggr != 'lstm':
+        failures.append("aggr must be 'lstm'")
+    if args.skip_connections != 'all':
+        failures.append("skip_connections must be 'all'")
+
+    for key, expected in (('label_source', 'exact_obj'), ('feature_preset', 'paper14')):
+        values = [_metadata_value(data, key) for data in dataset]
+        observed = sorted({str(value) for value in values if value not in (None, '')})
+        missing = sum(1 for value in values if value in (None, ''))
+        if missing or observed != [expected]:
+            detail = f"observed={observed or 'none'}"
+            if missing:
+                detail += f", missing={missing}"
+            failures.append(f"dataset {key} must be {expected!r} ({detail})")
+
+    if failures:
+        raise ValueError('strict paper protocol failed: ' + '; '.join(failures))
+
+
+def _metric_line(label: str, loss: float | None, metrics: dict) -> str:
+    loss_part = f"loss {loss:.4f}  " if loss is not None else ''
+    return (
+        f"{label} | {loss_part}f1 {metrics['f1']:.4f}  "
+        f"prec {metrics['precision']:.4f}  rec {metrics['recall']:.4f}  "
+        f"tpr {metrics['tpr']:.4f}  fpr {metrics['fpr']:.4f}  acc {metrics['accuracy']:.4f}"
+    )
+
+
+def _confusion_counts(metrics: dict) -> dict:
+    return {key: int(metrics[key]) for key in ('tp', 'fp', 'fn', 'tn')}
 
 
 def _run_epoch(
@@ -63,6 +174,12 @@ def _run_epoch(
 
 
 def main(args: argparse.Namespace) -> None:
+    split_metadata = load_split_json_metadata(args.split_json_in) if args.split_json_in else {}
+    effective_seed = args.seed if args.seed is not None else int(split_metadata.get('seed', 42))
+    effective_group_mode = args.group_mode or split_metadata.get('group_mode', 'legacy')
+
+    set_random_seeds(effective_seed)
+
     if args.preset == 'paper':
         args.lr = 5e-4
         args.hidden = 64
@@ -79,14 +196,31 @@ def main(args: argparse.Namespace) -> None:
 
     dataset = load_dataset(args.dataset)
     dataset = filter_dataset_by_resolution(dataset, args.resolution_tag)
-    if args.resolution_tag:
-        print(f"resolution filter: {args.resolution_tag} ({len(dataset)} graph(s))")
+    filtered_graph_count = len(dataset)
+    print(f"resolution selector: {args.resolution_tag} ({filtered_graph_count} graph(s))")
 
-    train, val, test, split_info = split_dataset(dataset, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
-    print(f"split — train: {len(train)}, val: {len(val)}, test: {len(test)}")
+    if args.strict_paper_protocol:
+        validate_strict_paper_protocol(args, dataset)
+
+    metadata_summary = dataset_metadata_summary(dataset)
+
+    train, val, test, split_info = split_dataset(
+        dataset,
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
+        seed=effective_seed,
+        group_mode=effective_group_mode,
+        split_json_in=args.split_json_in,
+        split_json_out=args.split_json_out,
+        dataset_path=args.dataset,
+        resolution_tag=args.resolution_tag,
+    )
+    print(f"split - train: {len(train)}, val: {len(val)}, test: {len(test)}")
     print(f"  train meshes: {split_info['train']}")
     print(f"  val meshes:   {split_info['val']}")
     print(f"  test meshes:  {split_info['test']}")
+    if args.split_json_out:
+        print(f"split saved: {args.split_json_out}")
 
     if args.pos_weight is not None:
         pos_weight = torch.tensor([args.pos_weight], dtype=torch.float32).to(device)
@@ -126,11 +260,18 @@ def main(args: argparse.Namespace) -> None:
             'patience': args.patience,
             'dataset': args.dataset,
             'resolution_tag': args.resolution_tag,
+            'resolution_selector': args.resolution_tag,
+            'filtered_graph_count': filtered_graph_count,
+            'seed': effective_seed,
+            'group_mode': effective_group_mode,
+            'split_json_in': str(args.split_json_in) if args.split_json_in else None,
+            'split_json_out': str(args.split_json_out) if args.split_json_out else None,
             'train_graphs': len(train),
             'val_graphs': len(val),
             'test_graphs': len(test),
             'pos_weight': pos_weight.item(),
             'split': split_info,
+            'dataset_metadata_summary': metadata_summary,
         },
     )
     logger.log_class_balance(train, val, test)
@@ -195,11 +336,6 @@ def main(args: argparse.Namespace) -> None:
     print(f"\nloading best weights from {save_path}")
     model.load_state_dict(torch.load(save_path, map_location=device))
     test_loss, test_m = _run_epoch(model, test, device, pos_weight, focal_gamma=args.focal_gamma)
-    print(
-        f"test | loss {test_loss:.4f}  f1 {test_m['f1']:.4f}  "
-        f"prec {test_m['precision']:.4f}  rec {test_m['recall']:.4f}  "
-        f"tpr {test_m['tpr']:.4f}  fpr {test_m['fpr']:.4f}  acc {test_m['accuracy']:.4f}"
-    )
 
     # Threshold sweep on val (select) and test (report)
     model.eval()
@@ -220,8 +356,16 @@ def main(args: argparse.Namespace) -> None:
     val_sweep = threshold_sweep(val_logits_cat, val_labels_cat)
     test_sweep = threshold_sweep(test_logits_cat, test_labels_cat)
     best_t = val_sweep['best']['threshold']
+    test_best_val_t_m = edge_f1(test_logits_cat, test_labels_cat, threshold=best_t)
 
-    print(f"\n{'─'*75}")
+    logger.write_json('val_threshold_sweep.json', val_sweep)
+    logger.write_json('test_threshold_sweep.json', test_sweep)
+
+    print()
+    print(_metric_line('test @0.50', test_loss, test_m))
+    print(_metric_line(f'test @val-best {best_t:.2f}', None, test_best_val_t_m))
+
+    print(f"\n{'-'*75}")
     print("threshold sweep (val):")
     print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}  {'FPR':>7s}")
     for r in val_sweep['all']:
@@ -233,9 +377,28 @@ def main(args: argparse.Namespace) -> None:
         marker = ' <-- best val' if r['threshold'] == best_t else ''
         print(f"  {r['threshold']:>5.2f}  {r['precision']:>7.4f}  {r['recall']:>7.4f}  {r['f1']:>7.4f}  {r['fpr']:>7.4f}{marker}")
     print(f"\noptimal threshold (by val F1): {best_t:.2f}")
-    print(f"{'─'*75}")
+    print(f"{'-'*75}")
 
-    logger.finalize(test_metrics=test_m, best_epoch=best_epoch)
+    logger.finalize(
+        test_metrics=test_m,
+        best_epoch=best_epoch,
+        extra_summary={
+            'seed': effective_seed,
+            'group_mode': effective_group_mode,
+            'split_json_in': str(args.split_json_in) if args.split_json_in else None,
+            'split_json_out': str(args.split_json_out) if args.split_json_out else None,
+            'best_validation_threshold': best_t,
+            'test_metrics_threshold_0_5': test_m,
+            'test_metrics_best_validation_threshold': test_best_val_t_m,
+            'test_confusion_threshold_0_5': _confusion_counts(test_m),
+            'test_confusion_best_validation_threshold': _confusion_counts(test_best_val_t_m),
+            'resolution_tag': args.resolution_tag,
+            'resolution_selector': args.resolution_tag,
+            'filtered_graph_count': filtered_graph_count,
+            'preset': args.preset,
+            'dataset_metadata_summary': metadata_summary,
+        },
+    )
     logger.save()
     logger.plot()
 
@@ -258,16 +421,24 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=15, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
+    parser.add_argument('--seed', type=int, default=None,
+                        help='random seed for training and generated splits (default: 42 or split JSON seed)')
+    parser.add_argument('--group-mode', choices=['legacy', 'family'], default=None,
+                        help='grouping mode for generated or loaded splits (default: legacy or split JSON value)')
+    parser.add_argument('--split-json-in', default=None, help='load train/val/test group ids from this JSON file')
+    parser.add_argument('--split-json-out', default=None, help='save train/val/test group ids to this JSON file')
     parser.add_argument('--in-dim', type=int, default=18, help='dual node feature dim (default: 18)')
     parser.add_argument('--aggr', choices=['mean', 'lstm'], default='mean',
                         help='GraphSAGE aggregation (default: mean)')
     parser.add_argument('--skip-connections', choices=['hidden', 'all', 'none'], default='hidden',
                         help='Residual mode (default preserves current behavior)')
-    parser.add_argument('--resolution-tag', default=None,
-                        help='train only meshes whose filename parses to this resolution tag, e.g. 10000f')
+    parser.add_argument('--resolution-tag', default='all',
+                        help='resolution selector: all, base, h, l, or a dataset-specific raw tag')
     parser.add_argument('--pos-weight', type=float, default=None,
                         help='override pos_weight (default: auto-computed from dataset)')
     parser.add_argument('--focal-gamma', type=float, default=2.0,
                         help='focal loss gamma (0=plain BCE, 2=standard focal)')
+    parser.add_argument('--strict-paper-protocol', action='store_true',
+                        help='fail unless dataset and options match the paper-faithful GraphSeam protocol')
 
     main(parser.parse_args())

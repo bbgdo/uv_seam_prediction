@@ -47,7 +47,7 @@ class ExperimentLogger:
             'test': _count(test),
         }
 
-    def finalize(self, test_metrics: dict, best_epoch: int) -> None:
+    def finalize(self, test_metrics: dict, best_epoch: int, extra_summary: dict | None = None) -> None:
         total_time = time.time() - self._start_time
         best_entry = None
         for entry in self.metrics:
@@ -79,6 +79,11 @@ class ExperimentLogger:
                 'pos_weight': self.config.get('pos_weight', 0),
             },
         }
+        if extra_summary:
+            self.summary.update(extra_summary)
+
+    def write_json(self, filename: str, data) -> None:
+        _write_json(self.run_dir / filename, data)
 
     def save(self) -> None:
         _write_json(self.run_dir / 'config.json', self.config)
