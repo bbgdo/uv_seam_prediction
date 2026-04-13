@@ -12,6 +12,9 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
+FEATURE_PRESETS = ('paper14', 'extended18')
+ENDPOINT_ORDERS = ('fixed', 'random')
+
 
 def _safe_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     norms = np.linalg.norm(v, axis=-1, keepdims=True)
@@ -324,67 +327,104 @@ def compute_symmetry_distance(
     return distances.astype(np.float32)
 
 
+def _normalized_vertex_basics(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    normals = np.asarray(mesh.vertex_normals, dtype=np.float64).astype(np.float32)
+
+    com = mesh.center_mass if hasattr(mesh, 'center_mass') else verts.mean(axis=0)
+    bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]) + 1e-8
+    pos_norm = ((verts - com) / bbox_diag).astype(np.float32)
+
+    gauss_curv = compute_vertex_gaussian_curvature(mesh)
+    gauss_curv_norm = _zscore_clip_normalize(gauss_curv)
+    return pos_norm, normals, gauss_curv_norm
+
+
+def _ordered_endpoint_features(
+    vertex_features: np.ndarray,
+    unique_edges: np.ndarray,
+    endpoint_order: str,
+    rng_seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    if endpoint_order not in ENDPOINT_ORDERS:
+        raise ValueError(f"endpoint_order must be one of {ENDPOINT_ORDERS}, got: {endpoint_order}")
+
+    vi = unique_edges[:, 0].copy()
+    vj = unique_edges[:, 1].copy()
+    if endpoint_order == 'random':
+        rng = np.random.default_rng(rng_seed)
+        swap = rng.random(len(unique_edges)) < 0.5
+        vi[swap], vj[swap] = vj[swap], vi[swap]
+
+    return vertex_features[vi], vertex_features[vj]
+
+
 def compute_edge_features(
     mesh: trimesh.Trimesh,
+    feature_preset: str = 'extended18',
+    endpoint_order: str = 'auto',
+    rng_seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Compute 18-dim edge features: endpoint concatenation + edge-level features.
-
-    Layout: [vertex_i_features(8) || vertex_j_features(8) || edge_features(2)]
-
-    Per-vertex (8): pos_xyz (COM-centered, bbox-scaled), normal_xyz, gauss_curvature, AO
-    Per-edge (2): signed_dihedral, symmetry_distance
-
-    Endpoint ordering: vi < vj (matches unique_edges sorting).
+    """Compute edge features for the paper baseline or the extended path.
 
     Returns:
-        edge_features: [E, 18] float32 array
+        edge_features: [E, 14] or [E, 18] float32 array
         unique_edges: [E, 2] int64 array (vi < vj)
         edge_to_faces: dict mapping (vi, vj) -> [face_idx, ...]
     """
+    if feature_preset not in FEATURE_PRESETS:
+        raise ValueError(f"feature_preset must be one of {FEATURE_PRESETS}, got: {feature_preset}")
+    if endpoint_order == 'auto':
+        endpoint_order = 'random' if feature_preset == 'paper14' else 'fixed'
+
     unique_edges, edge_to_faces = build_edge_topology(mesh)
 
-    verts = np.asarray(mesh.vertices, dtype=np.float64)
-    normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
+    pos_norm, normals_f32, gauss_curv_norm = _normalized_vertex_basics(mesh)
 
-    # Per-vertex position: COM-centered, single-scalar bbox scaling (preserves proportions)
-    com = mesh.center_mass if hasattr(mesh, 'center_mass') else verts.mean(axis=0)
-    bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]) + 1e-8
-    pos_norm = ((verts - com) / bbox_diag).astype(np.float32)  # [V, 3]
+    if feature_preset == 'paper14':
+        vertex_features = np.concatenate([
+            pos_norm,
+            normals_f32,
+            gauss_curv_norm[:, None],
+        ], axis=1).astype(np.float32)
+        vi_feats, vj_feats = _ordered_endpoint_features(vertex_features, unique_edges, endpoint_order, rng_seed)
+        features = np.concatenate([vi_feats, vj_feats], axis=1).astype(np.float32)
+        return features, unique_edges, edge_to_faces
 
-    normals_f32 = normals.astype(np.float32)  # [V, 3], already unit-length from trimesh
+    ao = compute_vertex_ao(mesh, n_rays=32)
 
-    gauss_curv = compute_vertex_gaussian_curvature(mesh)
-    gauss_curv_norm = _zscore_clip_normalize(gauss_curv)  # [V]
-
-    ao = compute_vertex_ao(mesh, n_rays=32)  # [V]
-
-    # Vertex feature matrix [V, 8]
     vertex_features = np.concatenate([
-        pos_norm,                 # [V, 3]
-        normals_f32,              # [V, 3]
-        gauss_curv_norm[:, None], # [V, 1]
-        ao[:, None],              # [V, 1]
+        pos_norm,
+        normals_f32,
+        gauss_curv_norm[:, None],
+        ao[:, None],
     ], axis=1).astype(np.float32)
 
-    # Endpoint concatenation [E, 16]
-    vi_feats = vertex_features[unique_edges[:, 0]]
-    vj_feats = vertex_features[unique_edges[:, 1]]
+    vi_feats, vj_feats = _ordered_endpoint_features(vertex_features, unique_edges, endpoint_order, rng_seed)
 
-    # Edge-level features [E, 2]
     dihedral = compute_signed_dihedral(mesh, unique_edges, edge_to_faces)
     symmetry = compute_symmetry_distance(mesh, unique_edges)
 
     features = np.concatenate([
-        vi_feats,             # [E, 8]
-        vj_feats,             # [E, 8]
-        dihedral[:, None],    # [E, 1]
-        symmetry[:, None],    # [E, 1]
+        vi_feats,
+        vj_feats,
+        dihedral[:, None],
+        symmetry[:, None],
     ], axis=1).astype(np.float32)
 
     return features, unique_edges, edge_to_faces
 
 
-FEATURE_NAMES = [
+PAPER14_FEATURE_NAMES = [
+    'pos_x_i', 'pos_y_i', 'pos_z_i',
+    'normal_x_i', 'normal_y_i', 'normal_z_i',
+    'gauss_curv_i',
+    'pos_x_j', 'pos_y_j', 'pos_z_j',
+    'normal_x_j', 'normal_y_j', 'normal_z_j',
+    'gauss_curv_j',
+]
+
+EXTENDED18_FEATURE_NAMES = [
     # vertex i (lower index)
     'pos_x_i', 'pos_y_i', 'pos_z_i',
     'normal_x_i', 'normal_y_i', 'normal_z_i',
@@ -396,6 +436,8 @@ FEATURE_NAMES = [
     # edge-level
     'signed_dihedral', 'symmetry_dist',
 ]
+
+FEATURE_NAMES = EXTENDED18_FEATURE_NAMES
 
 
 if __name__ == '__main__':

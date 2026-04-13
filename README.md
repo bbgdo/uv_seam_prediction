@@ -74,7 +74,33 @@ Scans `./meshes` for `.obj` files, converts each to a PyG `Data` object, prints 
 
 Meshes with zero detected seam edges are flagged as outliers and excluded.
 
+Feature presets:
+- `extended18` is the default and preserves the current endpoint + AO + symmetry feature path.
+- `paper14` builds the GraphSeam-style baseline features: endpoint `[normalized xyz, normals, gaussian curvature]` for both endpoints. With `--endpoint-order auto`, this preset uses random endpoint order.
+
 Seam detection works on actual UV data when present — an edge is a seam if either endpoint has different UV coordinates across its two adjacent faces. Boundary edges are always seams. Falls back to boundary-only detection when the mesh has no UVs.
+
+</details>
+
+<details>
+<summary>Click to expand: Dataset audit</summary>
+
+Audit raw `.obj` files before building a dataset:
+
+```bash
+python tools/audit_dataset.py ./3d-objs --json-out audit_raw.json --csv-out audit_raw.csv
+```
+
+Audit a serialized dataset:
+
+```bash
+python tools/audit_dataset.py dataset.pt --json-out audit_dataset.json --csv-out audit_dataset.csv
+python tools/audit_dataset.py dataset_dual.pt --json-out audit_dual.json --csv-out audit_dual.csv
+```
+
+The audit prints a short console summary and writes a JSON report plus a CSV table with one row per mesh. It infers family IDs, resolution tags, augmentation status, edge/seam counts, merge statistics when raw geometry is available, and possible train/val/test leakage using the configured split ratios.
+
+Family parsing strips augmentation suffixes such as `_aug0` and common resolution suffixes such as `_10000f` or `_res12`. Custom suffix rules can be passed with `--augmentation-pattern` and repeated `--resolution-pattern` flags.
 
 </details>
 

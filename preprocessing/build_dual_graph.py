@@ -58,6 +58,8 @@ def build_dual_graph_data(original_data: Data) -> Data:
         num_nodes=num_unique,
     )
     dual.file_path = getattr(original_data, 'file_path', '')
+    dual.feature_preset = getattr(original_data, 'feature_preset', '')
+    dual.endpoint_order = getattr(original_data, 'endpoint_order', '')
     return dual
 
 

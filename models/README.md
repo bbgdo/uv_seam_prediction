@@ -8,7 +8,9 @@ Three architectures are provided for comparison. All classify the same 11-dim ar
 
 ## Architecture 1 — `dual_graphsage/model.py`
 
-`DualGraphSAGE` is a GraphSAGE-based node classifier on the **dual graph**. Each original mesh edge becomes a dual node with the 11-dim feature vector as its features. Edges in the dual graph connect dual nodes whose corresponding mesh edges share a face.
+`DualGraphSAGE` is a GraphSAGE-based node classifier on the **dual graph**. Each original mesh edge becomes a dual node with the feature vector as its features. Edges in the dual graph connect dual nodes whose corresponding mesh edges share a face.
+
+The default training path preserves the current mean-aggregation experiment. A paper-baseline path is available with `--preset paper`: 14-dim GraphSeam-style features, LSTM aggregation, 3 layers, hidden dim 64, projection skip on the first layer, `lr=5e-4`, `pos_weight=100`, plain BCE (`focal_gamma=0`), and patience 50.
 
 <details>
 <summary>Click to expand: Architecture details</summary>
@@ -25,6 +27,7 @@ Three architectures are provided for comparison. All classify the same 11-dim ar
 | `hidden_dim` | 128 | SAGEConv output dim |
 | `num_layers` | 3 | SAGEConv layers |
 | `dropout` | 0.3 | applied between layers |
+| `aggr` | mean | use `lstm` for the paper baseline |
 
 </details>
 
@@ -107,6 +110,19 @@ python models/dual_graphsage/train.py \
     --epochs 100 --hidden 128
 ```
 
+Paper baseline:
+
+```bash
+python preprocessing/obj_to_dataset_graph.py ./3d-objs --max-meshes 200 --save \
+    --output dataset_paper14.pt --feature-preset paper14
+python preprocessing/build_dual_graph.py --input dataset_paper14.pt --output dataset_paper14_dual.pt
+python models/dual_graphsage/train.py \
+    --dataset dataset_paper14_dual.pt \
+    --preset paper \
+    --resolution-tag 10000f \
+    --run-dir runs/graphseam_paper14_10000f
+```
+
 ### DualGATv2 — `gatv2/train.py`
 
 ```bash
@@ -162,6 +178,8 @@ python models/meshcnn/train.py \
 
 </details>
 
+DualGraphSAGE also accepts `--preset paper`, `--aggr lstm`, `--skip-connections all`, and `--resolution-tag <tag>` for GraphSeam-style reproduction runs.
+
 Each run produces `config.json`, `metrics.json`, `summary.json`, training plots (`.png`), and `best_model.pth` in the `--run-dir`.
 
 ---
@@ -174,8 +192,11 @@ Each run produces `config.json`, `metrics.json`, `summary.json`, training plots 
 |---|---|
 | `load_dataset(path)` | Load `.pt` file as a list of PyG `Data` objects |
 | `load_dual_dataset(path)` | Load original dataset and convert each graph to dual on-the-fly |
-| `split_dataset(dataset, val_ratio, test_ratio, seed)` | Reproducible train/val/test split |
+| `filter_dataset_by_resolution(dataset, resolution_tag)` | Keep only meshes whose filename parses to a resolution tag |
+| `split_dataset(dataset, val_ratio, test_ratio, seed, group_mode='legacy')` | Reproducible train/val/test split |
 | `compute_pos_weight(dataset)` | Compute `pos_weight` tensor for `BCEWithLogitsLoss` from train set class balance |
+
+`split_dataset` keeps the existing default behavior: `group_mode='legacy'` strips only `_augN` suffixes. Pass `group_mode='family'` to group resolution variants of the same mesh family as well, using the shared filename parser that strips suffixes such as `_10000f` and `_res12`.
 
 ### `metrics.py`
 

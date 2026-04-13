@@ -10,7 +10,7 @@ from torch_geometric.data import Data
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.dual_graphsage.model import DualGraphSAGE
-from models.utils.dataset import compute_pos_weight, load_dataset, split_dataset
+from models.utils.dataset import compute_pos_weight, filter_dataset_by_resolution, load_dataset, split_dataset
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.losses import focal_bce_with_logits, seam_loss_with_connectivity
 from models.utils.metrics import edge_f1, threshold_sweep
@@ -63,10 +63,24 @@ def _run_epoch(
 
 
 def main(args: argparse.Namespace) -> None:
+    if args.preset == 'paper':
+        args.lr = 5e-4
+        args.hidden = 64
+        args.num_layers = 3
+        args.pos_weight = 100.0
+        args.focal_gamma = 0.0
+        args.patience = 50
+        args.in_dim = 14
+        args.aggr = 'lstm'
+        args.skip_connections = 'all'
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"device: {device}")
 
     dataset = load_dataset(args.dataset)
+    dataset = filter_dataset_by_resolution(dataset, args.resolution_tag)
+    if args.resolution_tag:
+        print(f"resolution filter: {args.resolution_tag} ({len(dataset)} graph(s))")
 
     train, val, test, split_info = split_dataset(dataset, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
     print(f"split — train: {len(train)}, val: {len(val)}, test: {len(test)}")
@@ -86,6 +100,8 @@ def main(args: argparse.Namespace) -> None:
         hidden_dim=args.hidden,
         num_layers=args.num_layers,
         dropout=args.dropout,
+        aggr=args.aggr,
+        skip_connections=args.skip_connections,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -101,11 +117,15 @@ def main(args: argparse.Namespace) -> None:
             'hidden_dim': args.hidden,
             'num_layers': args.num_layers,
             'dropout': args.dropout,
+            'preset': args.preset,
+            'aggr': args.aggr,
+            'skip_connections': args.skip_connections,
             'lr': args.lr,
             'lambda_conn': args.lambda_conn,
             'focal_gamma': args.focal_gamma,
             'patience': args.patience,
             'dataset': args.dataset,
+            'resolution_tag': args.resolution_tag,
             'train_graphs': len(train),
             'val_graphs': len(val),
             'test_graphs': len(test),
@@ -143,6 +163,12 @@ def main(args: argparse.Namespace) -> None:
             val_f1=val_m['f1'],
             val_precision=val_m['precision'],
             val_recall=val_m['recall'],
+            train_accuracy=train_m['accuracy'],
+            train_fpr=train_m['fpr'],
+            train_tpr=train_m['tpr'],
+            val_accuracy=val_m['accuracy'],
+            val_fpr=val_m['fpr'],
+            val_tpr=val_m['tpr'],
         )
 
         print(
@@ -150,7 +176,7 @@ def main(args: argparse.Namespace) -> None:
             f"train loss {train_loss:.4f}  f1 {train_m['f1']:.4f} | "
             f"val loss {val_loss:.4f}  f1 {val_m['f1']:.4f}  "
             f"prec {val_m['precision']:.4f}  rec {val_m['recall']:.4f}  "
-            f"fpr {val_m['fpr']:.4f}  "
+            f"tpr {val_m['tpr']:.4f}  fpr {val_m['fpr']:.4f}  acc {val_m['accuracy']:.4f}  "
             f"[{epoch_time:.1f}s]"
         )
 
@@ -172,7 +198,7 @@ def main(args: argparse.Namespace) -> None:
     print(
         f"test | loss {test_loss:.4f}  f1 {test_m['f1']:.4f}  "
         f"prec {test_m['precision']:.4f}  rec {test_m['recall']:.4f}  "
-        f"acc {test_m['accuracy']:.4f}"
+        f"tpr {test_m['tpr']:.4f}  fpr {test_m['fpr']:.4f}  acc {test_m['accuracy']:.4f}"
     )
 
     # Threshold sweep on val (select) and test (report)
@@ -220,6 +246,8 @@ if __name__ == '__main__':
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     parser.add_argument('--dataset', default='dataset_dual.pt', help='path to dual dataset')
     parser.add_argument('--run-dir', default=f'runs/dual_graphsage_{timestamp}', help='experiment output dir')
+    parser.add_argument('--preset', choices=['extended', 'paper'], default='extended',
+                        help='training preset; paper sets GraphSeam-style hyperparameters')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--hidden', type=int, default=128)
@@ -231,6 +259,12 @@ if __name__ == '__main__':
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--in-dim', type=int, default=18, help='dual node feature dim (default: 18)')
+    parser.add_argument('--aggr', choices=['mean', 'lstm'], default='mean',
+                        help='GraphSAGE aggregation (default: mean)')
+    parser.add_argument('--skip-connections', choices=['hidden', 'all', 'none'], default='hidden',
+                        help='Residual mode (default preserves current behavior)')
+    parser.add_argument('--resolution-tag', default=None,
+                        help='train only meshes whose filename parses to this resolution tag, e.g. 10000f')
     parser.add_argument('--pos-weight', type=float, default=None,
                         help='override pos_weight (default: auto-computed from dataset)')
     parser.add_argument('--focal-gamma', type=float, default=2.0,

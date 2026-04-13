@@ -96,7 +96,7 @@ Already-augmented files (matching `*_aug*.obj`) are skipped on re-runs.
 
 ### 6. `compute_features.py` — Edge Feature Engineering
 
-Computes 11 edge-level features from a `trimesh.Trimesh` object. Each feature function is standalone and testable. Used by `obj_to_dataset_graph.py` but can also run standalone for inspection:
+Computes edge-level features from a `trimesh.Trimesh` object. Each feature function is standalone and testable. Used by `obj_to_dataset_graph.py` but can also run standalone for inspection:
 
 ```bash
 python compute_features.py path/to/mesh.obj
@@ -129,17 +129,22 @@ AO uses raycasting (pyembree > ray_triangle) when available, otherwise falls bac
 
 ### 7. `obj_to_dataset_graph.py` — Graph Dataset Builder
 
-Converts `.obj` meshes into PyG `Data` objects with the full 11-dim edge feature vector and face indices. Seam labels are derived from UV coordinate splits across adjacent faces.
+Converts `.obj` meshes into PyG `Data` objects with edge features and face indices. Seam labels are derived from UV coordinate splits across adjacent faces.
 
 ```bash
 python obj_to_dataset_graph.py ./3d-objs --max-meshes 50 --save
 ```
+
+The default `--feature-preset extended18` preserves the current endpoint + AO + symmetry feature path with fixed sorted endpoint order. Use `--feature-preset paper14` for GraphSeam-style endpoint `[normalized xyz, normals, gaussian curvature]` features. With `--endpoint-order auto`, `paper14` uses random endpoint order and `extended18` keeps fixed sorted order.
 
 | Flag | Default | Description |
 |---|---|---|
 | `mesh_dir` | `./meshes` | Directory with `.obj` files |
 | `--max-meshes` | 5 | Max meshes to process |
 | `--save` | off | Save dataset as `dataset.pt` |
+| `--output` | `dataset.pt` | Output path when saving |
+| `--feature-preset` | `extended18` | `extended18` or `paper14` |
+| `--endpoint-order` | `auto` | `auto`, `fixed`, or `random` |
 
 ---
 
@@ -155,3 +160,18 @@ python build_dual_graph.py --input dataset.pt --output dataset_dual.pt
 |---|---|
 | `--input` | Path to original `dataset.pt` |
 | `--output` | Path to save dual dataset |
+
+---
+
+### Dataset Audit
+
+Use `../tools/audit_dataset.py` to audit either a raw OBJ directory or a serialized `dataset.pt` / `dataset_dual.pt` before training. It writes a JSON report and a per-mesh CSV table.
+
+```bash
+python ../tools/audit_dataset.py ./3d-objs --json-out audit_raw.json --csv-out audit_raw.csv
+python ../tools/audit_dataset.py ../dataset.pt --json-out audit_dataset.json --csv-out audit_dataset.csv
+```
+
+The audit reports family IDs, resolution tags, augmentation status, topology counts, seam ratios, merge statistics for raw OBJ input, detected symmetry axis, and possible split leakage.
+
+Filename parsing strips `_augN` and configurable resolution suffixes such as `_10000f` and `_res12`. Pass `--resolution-pattern` multiple times for project-specific naming rules.

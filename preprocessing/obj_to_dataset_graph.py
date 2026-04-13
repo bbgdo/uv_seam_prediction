@@ -11,7 +11,13 @@ import trimesh  # noqa: E402
 
 # support running both as `python preprocessing/obj_to_dataset_graph.py` and as a module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from compute_features import compute_edge_features
+from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features
+
+
+def resolve_endpoint_order(feature_preset: str, endpoint_order: str) -> str:
+    if endpoint_order != 'auto':
+        return endpoint_order
+    return 'random' if feature_preset == 'paper14' else 'fixed'
 
 
 def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
@@ -77,7 +83,12 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
     return seam_map
 
 
-def process_mesh(file_path: str | Path) -> Data | None:
+def process_mesh(
+    file_path: str | Path,
+    feature_preset: str = 'extended18',
+    endpoint_order: str = 'auto',
+    endpoint_seed: int = 42,
+) -> Data | None:
     """Load an .obj file and return a PyG Data object, or None on failure.
 
     Detects UV seams on the UV-split topology (as loaded by trimesh),
@@ -88,6 +99,7 @@ def process_mesh(file_path: str | Path) -> Data | None:
     from scipy.spatial import cKDTree
 
     file_path = Path(file_path)
+    endpoint_order = resolve_endpoint_order(feature_preset, endpoint_order)
 
     try:
         mesh = trimesh.load(str(file_path), process=False, force='mesh')
@@ -135,7 +147,12 @@ def process_mesh(file_path: str | Path) -> Data | None:
     vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
     faces = np.asarray(mesh.faces, dtype=np.int64)
 
-    edge_features, unique_edges, edge_to_faces = compute_edge_features(mesh)
+    edge_features, unique_edges, edge_to_faces = compute_edge_features(
+        mesh,
+        feature_preset=feature_preset,
+        endpoint_order=endpoint_order,
+        rng_seed=endpoint_seed,
+    )
 
     x = torch.from_numpy(np.concatenate([vertices, vert_nrms], axis=1))
 
@@ -162,6 +179,8 @@ def process_mesh(file_path: str | Path) -> Data | None:
     )
     data.faces = torch.from_numpy(faces)
     data.file_path = str(file_path)
+    data.feature_preset = feature_preset
+    data.endpoint_order = endpoint_order
     return data
 
 
@@ -198,7 +217,12 @@ if __name__ == "__main__":
     parser.add_argument('mesh_dir', nargs='?', default='./meshes', help='Directory with .obj files (default: ./meshes)')
     parser.add_argument('--max-meshes', type=int, default=5, help='Max meshes to process (default: 5)')
     parser.add_argument('--save', action='store_true', help='Save dataset as dataset.pt')
+    parser.add_argument('--output', default='dataset.pt', help='Output path when --save is set')
+    parser.add_argument('--feature-preset', choices=FEATURE_PRESETS, default='extended18')
+    parser.add_argument('--endpoint-order', choices=('auto', *ENDPOINT_ORDERS), default='auto')
+    parser.add_argument('--endpoint-seed', type=int, default=42)
     args = parser.parse_args()
+    endpoint_order = resolve_endpoint_order(args.feature_preset, args.endpoint_order)
 
     mesh_dir = Path(args.mesh_dir)
     if not mesh_dir.is_dir():
@@ -219,7 +243,12 @@ if __name__ == "__main__":
 
     for obj_file in obj_files[:args.max_meshes]:
         print(f"processing: {obj_file.name} …", end=" ", flush=True)
-        data = process_mesh(obj_file)
+        data = process_mesh(
+            obj_file,
+            feature_preset=args.feature_preset,
+            endpoint_order=endpoint_order,
+            endpoint_seed=args.endpoint_seed,
+        )
         if data is None:
             failed += 1
             continue
@@ -250,7 +279,7 @@ if __name__ == "__main__":
         print(f"{'#'*60}\n")
 
     if args.save and dataset:
-        out_path = Path('dataset.pt')
+        out_path = Path(args.output)
         torch.save(dataset, out_path)
         print(f"dataset saved -> {out_path.resolve()}  ({len(dataset)} graphs)")
 

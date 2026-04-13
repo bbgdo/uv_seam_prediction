@@ -6,6 +6,8 @@ from torch_geometric.data import Data
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from models.utils.filename_parsing import FilenameParseConfig, legacy_base_name, parse_mesh_name
+
 
 def load_dataset(path: str | Path) -> list[Data]:
     path = Path(path)
@@ -20,27 +22,51 @@ def load_dataset(path: str | Path) -> list[Data]:
     return dataset
 
 
+def filter_dataset_by_resolution(dataset: list[Data], resolution_tag: str | None) -> list[Data]:
+    if not resolution_tag:
+        return dataset
+
+    filtered = [
+        d for d in dataset
+        if parse_mesh_name(getattr(d, 'file_path', '')).resolution_tag == resolution_tag
+    ]
+    if not filtered:
+        raise ValueError(f"no graphs matched resolution tag: {resolution_tag}")
+    return filtered
+
+
 def split_dataset(
     dataset: list[Data],
     val_ratio: float = 0.15,
     test_ratio: float = 0.10,
     seed: int = 42,
+    group_mode: str = 'legacy',
+    filename_config: FilenameParseConfig | None = None,
 ) -> tuple[list[Data], list[Data], list[Data], dict]:
     """Grouped by base mesh to prevent augmentation leakage.
+
+    The default legacy grouping only strips `_augN`. Use group_mode='family'
+    to also group common resolution variants of the same mesh.
 
     Returns (train, val, test, split_info) where split_info maps
     split name -> list of base mesh names.
     """
     import random
-    import re
 
-    def _base_name(d: Data) -> str:
+    if group_mode not in {'legacy', 'family'}:
+        raise ValueError(f"group_mode must be 'legacy' or 'family', got: {group_mode}")
+
+    def _group_name(d: Data) -> str:
         name = Path(getattr(d, 'file_path', '')).stem
-        return re.sub(r'_aug\d+$', '', name) if name else str(id(d))
+        if not name:
+            return str(id(d))
+        if group_mode == 'family':
+            return parse_mesh_name(name, filename_config).family_id
+        return legacy_base_name(name)
 
     groups: dict[str, list[Data]] = {}
     for d in dataset:
-        groups.setdefault(_base_name(d), []).append(d)
+        groups.setdefault(_group_name(d), []).append(d)
 
     rng = random.Random(seed)
     group_keys = list(groups.keys())
