@@ -13,12 +13,14 @@ import trimesh  # noqa: E402
 # support running both as `python preprocessing/obj_to_dataset_graph.py` and as a module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features
+    from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
+    from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
     from preprocessing.obj_parser import parse_obj
     from preprocessing.seam_labels import extract_seam_truth
     from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
 except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
-    from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features
+    from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
+    from feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
     from obj_parser import parse_obj
     from seam_labels import extract_seam_truth
     from topology import WeldConfig, build_topology, canonical_edge_key
@@ -39,10 +41,27 @@ def _warn_legacy_label_source() -> None:
     _LEGACY_LABEL_WARNING_SHOWN = True
 
 
-def resolve_endpoint_order(feature_preset: str, endpoint_order: str) -> str:
+def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:
     if endpoint_order != 'auto':
         return endpoint_order
-    return 'random' if feature_preset == 'paper14' else 'fixed'
+    return 'random' if feature_group == 'paper14' else 'fixed'
+
+
+def resolve_feature_cli_selection(
+    feature_preset: str = 'extended18',
+    feature_group: str | None = None,
+    enable_ao: bool = False,
+    enable_dihedral: bool = False,
+    enable_symmetry: bool = False,
+    enable_density: bool = False,
+) -> ResolvedFeatureSet:
+    return resolve_feature_selection(
+        feature_group or feature_preset,
+        enable_ao=enable_ao,
+        enable_dihedral=enable_dihedral,
+        enable_symmetry=enable_symmetry,
+        enable_density=enable_density,
+    )
 
 
 def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
@@ -116,7 +135,7 @@ def _build_graph_data(
     unique_edges: np.ndarray,
     labels: np.ndarray,
     file_path: Path,
-    feature_preset: str,
+    feature_selection: ResolvedFeatureSet,
     endpoint_order: str,
     label_source: str,
 ) -> Data:
@@ -142,7 +161,12 @@ def _build_graph_data(
     data.faces = torch.from_numpy(faces)
     data.file_path = str(file_path)
     data.label_source = label_source
-    data.feature_preset = feature_preset
+    data.feature_preset = feature_selection.feature_preset
+    data.feature_group = feature_selection.feature_group
+    data.feature_names = list(feature_selection.feature_names)
+    data.feature_flags = feature_selection.feature_flags.as_dict()
+    if feature_selection.density_config is not None:
+        data.density_config = dict(feature_selection.density_config)
     data.endpoint_order = endpoint_order
     data.unique_edges = torch.from_numpy(unique_edges.astype(np.int64))
     return data
@@ -191,6 +215,10 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
 
     label_source = getattr(dataset[0], 'label_source', '')
     feature_preset = getattr(dataset[0], 'feature_preset', '')
+    feature_group = getattr(dataset[0], 'feature_group', feature_preset)
+    feature_names = list(getattr(dataset[0], 'feature_names', []))
+    feature_flags = dict(getattr(dataset[0], 'feature_flags', {}))
+    density_config = getattr(dataset[0], 'density_config', None)
     endpoint_order = getattr(dataset[0], 'endpoint_order', '')
     weld_mode = getattr(dataset[0], 'weld_mode', '')
 
@@ -202,10 +230,13 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
     total_boundary_edges = sum(item['boundary_edges'] for item in summaries)
     total_nonseam_edges = total_unique_edges - total_seam_edges
 
-    return {
+    manifest = {
         'dataset_path': str(dataset_path),
         'label_source': label_source,
         'feature_preset': feature_preset,
+        'feature_group': feature_group,
+        'feature_flags': feature_flags,
+        'feature_names': feature_names,
         'endpoint_order': endpoint_order,
         'weld_mode': weld_mode,
         'mesh_count': len(dataset),
@@ -218,6 +249,9 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
         'aggregate_pos_weight': total_nonseam_edges / max(total_seam_edges, 1),
         'meshes': summaries,
     }
+    if density_config is not None:
+        manifest['density_config'] = dict(density_config)
+    return manifest
 
 
 def write_dataset_manifest(dataset: list[Data], dataset_path: Path) -> Path:
@@ -231,7 +265,7 @@ def write_dataset_manifest(dataset: list[Data], dataset_path: Path) -> Path:
 
 def _process_mesh_deprecated_legacy_uv_remap(
     file_path: Path,
-    feature_preset: str,
+    feature_selection: ResolvedFeatureSet,
     endpoint_order: str,
     endpoint_seed: int,
 ) -> Data | None:
@@ -283,9 +317,9 @@ def _process_mesh_deprecated_legacy_uv_remap(
     vertices = np.asarray(mesh.vertices, dtype=np.float32)
     faces = np.asarray(mesh.faces, dtype=np.int64)
 
-    edge_features, unique_edges, _ = compute_edge_features(
+    edge_features, unique_edges, _ = compute_edge_features_for_selection(
         mesh,
-        feature_preset=feature_preset,
+        feature_selection,
         endpoint_order=endpoint_order,
         rng_seed=endpoint_seed,
     )
@@ -303,7 +337,7 @@ def _process_mesh_deprecated_legacy_uv_remap(
         unique_edges=unique_edges,
         labels=labels,
         file_path=file_path,
-        feature_preset=feature_preset,
+        feature_selection=feature_selection,
         endpoint_order=endpoint_order,
         label_source='legacy_uv_remap',
     )
@@ -311,12 +345,12 @@ def _process_mesh_deprecated_legacy_uv_remap(
 
 def _process_mesh_legacy_uv_remap(
     file_path: Path,
-    feature_preset: str,
+    feature_selection: ResolvedFeatureSet,
     endpoint_order: str,
     endpoint_seed: int,
 ) -> Data | None:
     _warn_legacy_label_source()
-    return _process_mesh_deprecated_legacy_uv_remap(file_path, feature_preset, endpoint_order, endpoint_seed)
+    return _process_mesh_deprecated_legacy_uv_remap(file_path, feature_selection, endpoint_order, endpoint_seed)
 
 
 def _build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
@@ -349,7 +383,7 @@ def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, f
 
 def _process_mesh_exact_obj(
     file_path: Path,
-    feature_preset: str,
+    feature_selection: ResolvedFeatureSet,
     endpoint_order: str,
     endpoint_seed: int,
 ) -> Data:
@@ -363,9 +397,9 @@ def _process_mesh_exact_obj(
         )
     feature_mesh = _build_feature_mesh_from_topology(topology)
 
-    edge_features, unique_edges, _ = compute_edge_features(
+    edge_features, unique_edges, _ = compute_edge_features_for_selection(
         feature_mesh,
-        feature_preset=feature_preset,
+        feature_selection,
         endpoint_order=endpoint_order,
         rng_seed=endpoint_seed,
     )
@@ -384,7 +418,7 @@ def _process_mesh_exact_obj(
         unique_edges=unique_edges,
         labels=labels,
         file_path=file_path,
-        feature_preset=feature_preset,
+        feature_selection=feature_selection,
         endpoint_order=endpoint_order,
         label_source='exact_obj',
     )
@@ -397,6 +431,11 @@ def _process_mesh_exact_obj(
 def process_mesh(
     file_path: str | Path,
     feature_preset: str = 'extended18',
+    feature_group: str | None = None,
+    enable_ao: bool = False,
+    enable_dihedral: bool = False,
+    enable_symmetry: bool = False,
+    enable_density: bool = False,
     endpoint_order: str = 'auto',
     endpoint_seed: int = 42,
     label_source: str = 'exact_obj',
@@ -410,11 +449,19 @@ def process_mesh(
         raise ValueError(f"label_source must be one of {LABEL_SOURCES}, got: {label_source}")
 
     file_path = Path(file_path)
-    endpoint_order = resolve_endpoint_order(feature_preset, endpoint_order)
+    feature_selection = resolve_feature_cli_selection(
+        feature_preset=feature_preset,
+        feature_group=feature_group,
+        enable_ao=enable_ao,
+        enable_dihedral=enable_dihedral,
+        enable_symmetry=enable_symmetry,
+        enable_density=enable_density,
+    )
+    endpoint_order = resolve_endpoint_order(feature_selection.feature_group, endpoint_order)
 
     if label_source == 'exact_obj':
-        return _process_mesh_exact_obj(file_path, feature_preset, endpoint_order, endpoint_seed)
-    return _process_mesh_legacy_uv_remap(file_path, feature_preset, endpoint_order, endpoint_seed)
+        return _process_mesh_exact_obj(file_path, feature_selection, endpoint_order, endpoint_seed)
+    return _process_mesh_legacy_uv_remap(file_path, feature_selection, endpoint_order, endpoint_seed)
 
 
 def print_stats(data: Data, file_name: str) -> None:
@@ -456,7 +503,17 @@ def main(argv: list[str] | None = None) -> None:
         help='Output path when --save is set; exact_obj defaults to dataset_v2_exact_labels.pt',
     )
     parser.add_argument('--overwrite', action='store_true', help='Replace an existing output file')
-    parser.add_argument('--feature-preset', choices=FEATURE_PRESETS, default='extended18')
+    parser.add_argument(
+        '--feature-preset',
+        choices=FEATURE_PRESETS,
+        default='extended18',
+        help='Deprecated alias for --feature-group paper14/extended18; kept for compatibility',
+    )
+    parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default=None)
+    parser.add_argument('--enable-ao', action='store_true', help='Enable AO endpoint features for custom group')
+    parser.add_argument('--enable-dihedral', action='store_true', help='Enable signed dihedral for custom group')
+    parser.add_argument('--enable-symmetry', action='store_true', help='Enable symmetry distance for custom group')
+    parser.add_argument('--enable-density', action='store_true', help='Enable topology-local relative density for custom group')
     parser.add_argument('--endpoint-order', choices=('auto', *ENDPOINT_ORDERS), default='auto')
     parser.add_argument('--endpoint-seed', type=int, default=42)
     parser.add_argument(
@@ -466,7 +523,18 @@ def main(argv: list[str] | None = None) -> None:
         help='Seam label source: exact OBJ face-corner topology or deprecated legacy trimesh UV remap',
     )
     args = parser.parse_args(argv)
-    endpoint_order = resolve_endpoint_order(args.feature_preset, args.endpoint_order)
+    try:
+        feature_selection = resolve_feature_cli_selection(
+            feature_preset=args.feature_preset,
+            feature_group=args.feature_group,
+            enable_ao=args.enable_ao,
+            enable_dihedral=args.enable_dihedral,
+            enable_symmetry=args.enable_symmetry,
+            enable_density=args.enable_density,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    endpoint_order = resolve_endpoint_order(feature_selection.feature_group, args.endpoint_order)
 
     mesh_dir = Path(args.mesh_dir)
     if not mesh_dir.is_dir():
@@ -480,6 +548,10 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"\nfound {len(obj_files)} .obj file(s) in '{mesh_dir}'.")
     print(f"label source: {args.label_source}")
+    print(
+        f"features: {feature_selection.feature_group} "
+        f"({feature_selection.feature_count}) [{', '.join(feature_selection.feature_names)}]"
+    )
     print(f"processing first {min(args.max_meshes, len(obj_files))} ...\n")
 
     dataset: list[Data] = []
@@ -491,6 +563,11 @@ def main(argv: list[str] | None = None) -> None:
         data = process_mesh(
             obj_file,
             feature_preset=args.feature_preset,
+            feature_group=args.feature_group,
+            enable_ao=args.enable_ao,
+            enable_dihedral=args.enable_dihedral,
+            enable_symmetry=args.enable_symmetry,
+            enable_density=args.enable_density,
             endpoint_order=endpoint_order,
             endpoint_seed=args.endpoint_seed,
             label_source=args.label_source,

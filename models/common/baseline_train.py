@@ -19,9 +19,19 @@ from models.utils.dataset import (
 from models.utils.experiment_log import ExperimentLogger
 from models.utils.losses import focal_bce_with_logits, seam_loss_with_connectivity
 from models.utils.metrics import RECALL_TPR_LABEL, edge_f1, threshold_sweep
+from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection
 
 
-METADATA_KEYS = ('label_source', 'feature_preset', 'endpoint_order', 'weld_mode')
+METADATA_KEYS = (
+    'label_source',
+    'feature_preset',
+    'feature_group',
+    'feature_names',
+    'feature_flags',
+    'density_config',
+    'endpoint_order',
+    'weld_mode',
+)
 
 
 def set_random_seeds(seed: int) -> None:
@@ -84,6 +94,78 @@ def dataset_metadata_summary(dataset: list[Data]) -> dict:
     return summary
 
 
+def resolve_runtime_feature_selection(args: argparse.Namespace) -> ResolvedFeatureSet:
+    feature_group = getattr(args, 'feature_group', None)
+    if feature_group is None:
+        feature_group = 'paper14' if getattr(args, 'preset', None) == 'paper' else 'extended18'
+
+    return resolve_feature_selection(
+        feature_group,
+        enable_ao=bool(getattr(args, 'enable_ao', False)),
+        enable_dihedral=bool(getattr(args, 'enable_dihedral', False)),
+        enable_symmetry=bool(getattr(args, 'enable_symmetry', False)),
+        enable_density=bool(getattr(args, 'enable_density', False)),
+    )
+
+
+def _coerce_feature_names(value) -> list[str] | None:
+    if value in (None, ''):
+        return None
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return None
+
+
+def _legacy_feature_names(data: Data) -> list[str] | None:
+    preset = _metadata_value(data, 'feature_preset')
+    if preset == 'paper14' and getattr(data.x, 'shape', (0, 0))[1] == 14:
+        return list(PAPER14_FEATURE_NAMES)
+    return None
+
+
+def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeatureSet) -> list[Data]:
+    requested = list(selection.feature_names)
+    for graph_idx, data in enumerate(dataset):
+        feature_names = _coerce_feature_names(_metadata_value(data, 'feature_names'))
+        if feature_names is None:
+            feature_names = _legacy_feature_names(data)
+
+        current_dim = int(data.x.shape[1])
+        if feature_names is None:
+            if current_dim == selection.feature_count and selection.feature_group in {'paper14', 'extended18'}:
+                continue
+            raise ValueError(
+                f"dataset graph {graph_idx} is missing feature_names metadata; "
+                f"cannot select requested features {requested}"
+            )
+        if len(feature_names) != current_dim:
+            raise ValueError(
+                f"dataset graph {graph_idx} feature_names length {len(feature_names)} "
+                f"does not match x feature dim {current_dim}"
+            )
+
+        missing = [name for name in requested if name not in feature_names]
+        if missing:
+            raise ValueError(
+                f"dataset graph {graph_idx} is missing requested feature(s): {missing}; "
+                f"available feature_names={feature_names}"
+            )
+
+        if feature_names == requested:
+            continue
+
+        indices = [feature_names.index(name) for name in requested]
+        data.x = data.x[:, indices]
+        data.feature_names = requested
+        data.feature_group = selection.feature_group
+        data.feature_preset = selection.feature_preset
+        data.feature_flags = selection.feature_flags.as_dict()
+        if selection.density_config is not None:
+            data.density_config = dict(selection.density_config)
+
+    return dataset
+
+
 def validate_strict_paper_protocol(args: argparse.Namespace, dataset: list[Data]) -> None:
     failures = []
     if args.preset != 'paper':
@@ -92,6 +174,9 @@ def validate_strict_paper_protocol(args: argparse.Namespace, dataset: list[Data]
         failures.append('resolution_tag must be set')
     if args.in_dim != 14:
         failures.append('in_dim must be 14')
+    feature_group = getattr(args, 'feature_group', None)
+    if feature_group not in (None, 'paper14'):
+        failures.append("feature_group must be 'paper14'")
     if args.aggr != 'lstm':
         failures.append("aggr must be 'lstm'")
     if args.skip_connections != 'all':
@@ -260,6 +345,13 @@ def _logger_config(
         'focal_gamma': config.focal_gamma,
         'patience': config.patience,
         'dataset': args.dataset,
+        'feature_group': getattr(args, 'feature_group', None),
+        'feature_flags': {
+            'ao': bool(getattr(args, 'enable_ao', False)),
+            'signed_dihedral': bool(getattr(args, 'enable_dihedral', False)),
+            'symmetry': bool(getattr(args, 'enable_symmetry', False)),
+            'density': bool(getattr(args, 'enable_density', False)),
+        },
         'resolution_tag': args.resolution_tag,
         'resolution_selector': args.resolution_tag,
         'filtered_graph_count': filtered_graph_count,
@@ -298,6 +390,9 @@ def _print_threshold_sweep(title: str, rows: list[dict], best_t: float, marker_l
 
 def train_baseline(args: argparse.Namespace) -> None:
     apply_paper_preset(args)
+    feature_selection = resolve_runtime_feature_selection(args)
+    args.feature_group = feature_selection.feature_group
+    args.in_dim = feature_selection.feature_count
     config = build_runtime_config(args)
     definition = get_baseline(config.model_name)
 
@@ -314,6 +409,10 @@ def train_baseline(args: argparse.Namespace) -> None:
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"device: {device}")
+    print(
+        f"features: {feature_selection.feature_group} "
+        f"({feature_selection.feature_count}) [{', '.join(feature_selection.feature_names)}]"
+    )
 
     dataset = load_dataset(args.dataset)
     dataset = filter_dataset_by_resolution(dataset, args.resolution_tag)
@@ -323,6 +422,7 @@ def train_baseline(args: argparse.Namespace) -> None:
     if args.strict_paper_protocol:
         validate_strict_paper_protocol(args, dataset)
 
+    dataset = apply_runtime_feature_selection(dataset, feature_selection)
     metadata_summary = dataset_metadata_summary(dataset)
     train, val, test, split_info = split_dataset(
         dataset,

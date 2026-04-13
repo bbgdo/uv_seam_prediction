@@ -48,6 +48,11 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'split_json_out': None,
         'resolution_tag': 'all',
         'strict_paper_protocol': False,
+        'feature_group': None,
+        'enable_ao': False,
+        'enable_dihedral': False,
+        'enable_symmetry': False,
+        'enable_density': False,
     }
     for key, value in shared_defaults.items():
         if not hasattr(args, key):
@@ -95,6 +100,16 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
                         help='focal loss gamma (0=plain BCE, 2=standard focal)')
     parser.add_argument('--strict-paper-protocol', action='store_true',
                         help='fail unless dataset and options match the paper-faithful GraphSeam protocol')
+    parser.add_argument('--feature-group', choices=['paper14', 'extended18', 'custom'], default=None,
+                        help='feature bundle to train on (default: paper14 for --preset paper, otherwise extended18)')
+    parser.add_argument('--enable-ao', action='store_true',
+                        help='enable AO endpoint features for --feature-group custom')
+    parser.add_argument('--enable-dihedral', action='store_true',
+                        help='enable signed dihedral for --feature-group custom')
+    parser.add_argument('--enable-symmetry', action='store_true',
+                        help='enable symmetry distance for --feature-group custom')
+    parser.add_argument('--enable-density', action='store_true',
+                        help='enable topology-local density features for --feature-group custom')
     return parser
 
 

@@ -14,8 +14,24 @@ import trimesh  # noqa: E402
 
 try:
     from preprocessing.topology import canonical_edge_key
+    from preprocessing.feature_registry import (
+        ALL_ATOMIC_FEATURE_NAMES,
+        DENSITY_CONFIG,
+        EXTENDED18_FEATURE_NAMES,
+        PAPER14_FEATURE_NAMES,
+        ResolvedFeatureSet,
+        resolve_feature_selection,
+    )
 except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/compute_features.py`
     from topology import canonical_edge_key
+    from feature_registry import (
+        ALL_ATOMIC_FEATURE_NAMES,
+        DENSITY_CONFIG,
+        EXTENDED18_FEATURE_NAMES,
+        PAPER14_FEATURE_NAMES,
+        ResolvedFeatureSet,
+        resolve_feature_selection,
+    )
 
 FEATURE_PRESETS = ('paper14', 'extended18')
 ENDPOINT_ORDERS = ('fixed', 'random')
@@ -332,6 +348,71 @@ def compute_symmetry_distance(
     return distances.astype(np.float32)
 
 
+def compute_vertex_support_area(mesh: trimesh.Trimesh) -> np.ndarray:
+    """One-third incident face area per vertex on the feature mesh topology."""
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    n_verts = len(mesh.vertices)
+    support = np.zeros(n_verts, dtype=np.float64)
+    if len(faces) == 0:
+        return support
+
+    face_areas = np.asarray(mesh.area_faces, dtype=np.float64)
+    weights = np.repeat(face_areas / 3.0, 3)
+    np.add.at(support, faces.reshape(-1), weights)
+    return support
+
+
+def _build_vertex_adjacency(faces: np.ndarray, n_verts: int) -> list[set[int]]:
+    adjacency = [set() for _ in range(n_verts)]
+    for face in faces:
+        a, b, c = (int(face[0]), int(face[1]), int(face[2]))
+        adjacency[a].update((b, c))
+        adjacency[b].update((a, c))
+        adjacency[c].update((a, b))
+    return adjacency
+
+
+def _two_ring_neighborhood(adjacency: list[set[int]], vertex_idx: int) -> set[int]:
+    neighborhood = set(adjacency[vertex_idx])
+    for neighbor in adjacency[vertex_idx]:
+        neighborhood.update(adjacency[neighbor])
+    neighborhood.discard(vertex_idx)
+    if not neighborhood:
+        neighborhood.add(vertex_idx)
+    return neighborhood
+
+
+def compute_vertex_relative_density(mesh: trimesh.Trimesh, eps: float = DENSITY_CONFIG['eps']) -> np.ndarray:
+    """Topology-local relative density from 2-ring median scale versus local scale."""
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    n_verts = len(mesh.vertices)
+    support_area = compute_vertex_support_area(mesh)
+    local_scale = np.sqrt(support_area + eps)
+    adjacency = _build_vertex_adjacency(faces, n_verts)
+
+    density = np.zeros(n_verts, dtype=np.float64)
+    for vertex_idx in range(n_verts):
+        neighborhood = _two_ring_neighborhood(adjacency, vertex_idx)
+        median_scale = float(np.median(local_scale[list(neighborhood)]))
+        density[vertex_idx] = np.log(median_scale + eps) - np.log(local_scale[vertex_idx] + eps)
+    return density.astype(np.float32)
+
+
+def compute_edge_relative_density(
+    mesh: trimesh.Trimesh,
+    unique_edges: np.ndarray,
+    eps: float = DENSITY_CONFIG['eps'],
+) -> tuple[np.ndarray, np.ndarray]:
+    vertex_density = compute_vertex_relative_density(mesh, eps=eps)
+    vi = unique_edges[:, 0]
+    vj = unique_edges[:, 1]
+    density_i = vertex_density[vi]
+    density_j = vertex_density[vj]
+    density_mean = ((density_i + density_j) * 0.5).astype(np.float32)
+    density_diff = np.abs(density_i - density_j).astype(np.float32)
+    return density_mean, density_diff
+
+
 def _normalized_vertex_basics(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64).astype(np.float32)
@@ -364,83 +445,102 @@ def _ordered_endpoint_features(
     return vertex_features[vi], vertex_features[vj]
 
 
+def _resolve_endpoint_order_for_features(feature_group: str, endpoint_order: str) -> str:
+    if endpoint_order != 'auto':
+        return endpoint_order
+    return 'random' if feature_group == 'paper14' else 'fixed'
+
+
+def _compute_atomic_edge_columns(
+    mesh: trimesh.Trimesh,
+    unique_edges: np.ndarray,
+    edge_to_faces: dict,
+    feature_names: tuple[str, ...],
+    endpoint_order: str,
+    rng_seed: int,
+) -> dict[str, np.ndarray]:
+    unknown = sorted(set(feature_names) - set(ALL_ATOMIC_FEATURE_NAMES))
+    if unknown:
+        raise ValueError(f"unknown atomic feature name(s): {unknown}")
+
+    columns: dict[str, np.ndarray] = {}
+    pos_norm, normals_f32, gauss_curv_norm = _normalized_vertex_basics(mesh)
+    base_vertex_features = np.concatenate([
+        pos_norm,
+        normals_f32,
+        gauss_curv_norm[:, None],
+    ], axis=1).astype(np.float32)
+    vi_base, vj_base = _ordered_endpoint_features(base_vertex_features, unique_edges, endpoint_order, rng_seed)
+
+    base_i_names = PAPER14_FEATURE_NAMES[:7]
+    base_j_names = PAPER14_FEATURE_NAMES[7:]
+    for col_idx, name in enumerate(base_i_names):
+        columns[name] = vi_base[:, col_idx].astype(np.float32)
+    for col_idx, name in enumerate(base_j_names):
+        columns[name] = vj_base[:, col_idx].astype(np.float32)
+
+    if 'ao_i' in feature_names or 'ao_j' in feature_names:
+        ao = compute_vertex_ao(mesh, n_rays=32)[:, None]
+        vi_ao, vj_ao = _ordered_endpoint_features(ao, unique_edges, endpoint_order, rng_seed)
+        columns['ao_i'] = vi_ao[:, 0].astype(np.float32)
+        columns['ao_j'] = vj_ao[:, 0].astype(np.float32)
+
+    if 'signed_dihedral' in feature_names:
+        columns['signed_dihedral'] = compute_signed_dihedral(mesh, unique_edges, edge_to_faces)
+
+    if 'symmetry_dist' in feature_names:
+        columns['symmetry_dist'] = compute_symmetry_distance(mesh, unique_edges)
+
+    if 'density_mean' in feature_names or 'density_diff' in feature_names:
+        density_mean, density_diff = compute_edge_relative_density(mesh, unique_edges)
+        columns['density_mean'] = density_mean
+        columns['density_diff'] = density_diff
+
+    return columns
+
+
+def compute_edge_features_for_selection(
+    mesh: trimesh.Trimesh,
+    selection: ResolvedFeatureSet,
+    endpoint_order: str = 'auto',
+    rng_seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    endpoint_order = _resolve_endpoint_order_for_features(selection.feature_group, endpoint_order)
+    unique_edges, edge_to_faces = build_edge_topology(mesh)
+    columns = _compute_atomic_edge_columns(
+        mesh,
+        unique_edges,
+        edge_to_faces,
+        selection.feature_names,
+        endpoint_order,
+        rng_seed,
+    )
+    features = np.stack([columns[name] for name in selection.feature_names], axis=1).astype(np.float32)
+    return features, unique_edges, edge_to_faces
+
+
 def compute_edge_features(
     mesh: trimesh.Trimesh,
     feature_preset: str = 'extended18',
     endpoint_order: str = 'auto',
     rng_seed: int = 42,
+    *,
+    feature_group: str | None = None,
+    enable_ao: bool = False,
+    enable_dihedral: bool = False,
+    enable_symmetry: bool = False,
+    enable_density: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Compute edge features for the paper baseline or the extended path.
-
-    Returns:
-        edge_features: [E, 14] or [E, 18] float32 array
-        unique_edges: [E, 2] int64 array (vi < vj)
-        edge_to_faces: dict mapping (vi, vj) -> [face_idx, ...]
-    """
-    if feature_preset not in FEATURE_PRESETS:
-        raise ValueError(f"feature_preset must be one of {FEATURE_PRESETS}, got: {feature_preset}")
-    if endpoint_order == 'auto':
-        endpoint_order = 'random' if feature_preset == 'paper14' else 'fixed'
-
-    unique_edges, edge_to_faces = build_edge_topology(mesh)
-
-    pos_norm, normals_f32, gauss_curv_norm = _normalized_vertex_basics(mesh)
-
-    if feature_preset == 'paper14':
-        vertex_features = np.concatenate([
-            pos_norm,
-            normals_f32,
-            gauss_curv_norm[:, None],
-        ], axis=1).astype(np.float32)
-        vi_feats, vj_feats = _ordered_endpoint_features(vertex_features, unique_edges, endpoint_order, rng_seed)
-        features = np.concatenate([vi_feats, vj_feats], axis=1).astype(np.float32)
-        return features, unique_edges, edge_to_faces
-
-    ao = compute_vertex_ao(mesh, n_rays=32)
-
-    vertex_features = np.concatenate([
-        pos_norm,
-        normals_f32,
-        gauss_curv_norm[:, None],
-        ao[:, None],
-    ], axis=1).astype(np.float32)
-
-    vi_feats, vj_feats = _ordered_endpoint_features(vertex_features, unique_edges, endpoint_order, rng_seed)
-
-    dihedral = compute_signed_dihedral(mesh, unique_edges, edge_to_faces)
-    symmetry = compute_symmetry_distance(mesh, unique_edges)
-
-    features = np.concatenate([
-        vi_feats,
-        vj_feats,
-        dihedral[:, None],
-        symmetry[:, None],
-    ], axis=1).astype(np.float32)
-
-    return features, unique_edges, edge_to_faces
-
-
-PAPER14_FEATURE_NAMES = [
-    'pos_x_i', 'pos_y_i', 'pos_z_i',
-    'normal_x_i', 'normal_y_i', 'normal_z_i',
-    'gauss_curv_i',
-    'pos_x_j', 'pos_y_j', 'pos_z_j',
-    'normal_x_j', 'normal_y_j', 'normal_z_j',
-    'gauss_curv_j',
-]
-
-EXTENDED18_FEATURE_NAMES = [
-    # vertex i (lower index)
-    'pos_x_i', 'pos_y_i', 'pos_z_i',
-    'normal_x_i', 'normal_y_i', 'normal_z_i',
-    'gauss_curv_i', 'ao_i',
-    # vertex j (higher index)
-    'pos_x_j', 'pos_y_j', 'pos_z_j',
-    'normal_x_j', 'normal_y_j', 'normal_z_j',
-    'gauss_curv_j', 'ao_j',
-    # edge-level
-    'signed_dihedral', 'symmetry_dist',
-]
+    """Backward-compatible wrapper for resolved edge feature computation."""
+    group = feature_group if feature_group is not None else feature_preset
+    selection = resolve_feature_selection(
+        group,
+        enable_ao=enable_ao,
+        enable_dihedral=enable_dihedral,
+        enable_symmetry=enable_symmetry,
+        enable_density=enable_density,
+    )
+    return compute_edge_features_for_selection(mesh, selection, endpoint_order=endpoint_order, rng_seed=rng_seed)
 
 FEATURE_NAMES = EXTENDED18_FEATURE_NAMES
 

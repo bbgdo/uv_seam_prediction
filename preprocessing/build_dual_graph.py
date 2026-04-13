@@ -60,6 +60,11 @@ def build_dual_graph_data(original_data: Data) -> Data:
     dual.file_path = getattr(original_data, 'file_path', '')
     dual.label_source = getattr(original_data, 'label_source', '')
     dual.feature_preset = getattr(original_data, 'feature_preset', '')
+    dual.feature_group = getattr(original_data, 'feature_group', getattr(original_data, 'feature_preset', ''))
+    dual.feature_names = list(getattr(original_data, 'feature_names', []))
+    dual.feature_flags = dict(getattr(original_data, 'feature_flags', {}))
+    if hasattr(original_data, 'density_config'):
+        dual.density_config = dict(getattr(original_data, 'density_config'))
     dual.endpoint_order = getattr(original_data, 'endpoint_order', '')
     dual.weld_mode = getattr(original_data, 'weld_mode', '')
     dual.seam_edge_count = getattr(original_data, 'seam_edge_count', int(dual_y.sum().item()))

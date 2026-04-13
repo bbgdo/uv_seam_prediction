@@ -11,11 +11,13 @@ from torch_geometric.data import Data
 
 from models.dual_graphsage.model import DualGraphSAGE
 from models.dual_graphsage.train import validate_strict_paper_protocol
+from models.common.baseline_train import apply_runtime_feature_selection
 from models.baselines.registry import get_baseline
 from tools.run_baseline import parse_args as parse_baseline_args
 from models.utils.experiment_log import ExperimentLogger
+from preprocessing.build_dual_graph import build_dual_graph_data
 from preprocessing.compute_features import compute_edge_features
-from preprocessing.feature_registry import get_feature_group
+from preprocessing.feature_registry import get_feature_group, resolve_feature_selection
 
 
 def _tiny_mesh() -> trimesh.Trimesh:
@@ -62,6 +64,87 @@ class GraphSeamBaselineTests(unittest.TestCase):
     def test_feature_registry_scaffold_lists_existing_baselines(self):
         self.assertEqual(get_feature_group('paper14').feature_preset, 'paper14')
         self.assertEqual(len(get_feature_group('extended18').feature_names), 18)
+
+    def test_feature_registry_resolves_custom_toggles(self):
+        paper = resolve_feature_selection('paper14')
+        extended = resolve_feature_selection('extended18')
+        ao_only = resolve_feature_selection('custom', enable_ao=True)
+        symmetry_only = resolve_feature_selection('custom', enable_symmetry=True)
+        density_only = resolve_feature_selection('custom', enable_density=True)
+        combined = resolve_feature_selection(
+            'custom',
+            enable_ao=True,
+            enable_symmetry=True,
+            enable_density=True,
+        )
+
+        self.assertEqual(paper.feature_count, 14)
+        self.assertEqual(extended.feature_count, 18)
+        self.assertEqual(ao_only.feature_names[-1], 'ao_j')
+        self.assertEqual(symmetry_only.feature_names[-1], 'symmetry_dist')
+        self.assertEqual(density_only.feature_names[-2:], ('density_mean', 'density_diff'))
+        self.assertEqual(combined.feature_count, 19)
+
+    def test_feature_registry_rejects_toggles_on_locked_bundle(self):
+        with self.assertRaisesRegex(ValueError, 'require feature_group=.custom.'):
+            resolve_feature_selection('paper14', enable_density=True)
+
+    def test_density_features_are_finite_on_tiny_mesh(self):
+        mesh = _tiny_mesh()
+
+        features, edges, _ = compute_edge_features(
+            mesh,
+            feature_group='custom',
+            enable_density=True,
+        )
+
+        self.assertEqual(features.shape, (len(edges), 16))
+        self.assertTrue(np.isfinite(features[:, -2:]).all())
+
+    def test_dual_graph_preserves_feature_metadata(self):
+        data = Data(
+            edge_index=torch.tensor([[0, 1, 1, 0], [1, 0, 0, 1]], dtype=torch.long),
+            edge_attr=torch.zeros(4, 16),
+            y=torch.tensor([1.0, 0.0, 1.0, 0.0]),
+            num_nodes=2,
+        )
+        data.feature_names = list(resolve_feature_selection('custom', enable_density=True).feature_names)
+        data.feature_group = 'custom'
+        data.feature_preset = 'custom'
+        data.feature_flags = {'ao': False, 'signed_dihedral': False, 'symmetry': False, 'density': True}
+        data.density_config = {'neighborhood': '2-ring'}
+
+        dual = build_dual_graph_data(data)
+
+        self.assertEqual(dual.feature_names, data.feature_names)
+        self.assertEqual(dual.feature_group, 'custom')
+        self.assertEqual(dual.feature_flags['density'], True)
+        self.assertEqual(dual.density_config['neighborhood'], '2-ring')
+
+    def test_runtime_feature_slicing_uses_metadata_superset(self):
+        superset = resolve_feature_selection(
+            'custom',
+            enable_ao=True,
+            enable_symmetry=True,
+            enable_density=True,
+        )
+        requested = resolve_feature_selection('custom', enable_symmetry=True)
+        data = Data(x=torch.arange(2 * superset.feature_count, dtype=torch.float32).reshape(2, -1))
+        data.feature_names = list(superset.feature_names)
+
+        apply_runtime_feature_selection([data], requested)
+
+        expected_idx = [superset.feature_names.index(name) for name in requested.feature_names]
+        expected = torch.arange(2 * superset.feature_count, dtype=torch.float32).reshape(2, -1)[:, expected_idx]
+        self.assertTrue(torch.equal(data.x, expected))
+        self.assertEqual(data.feature_names, list(requested.feature_names))
+
+    def test_runtime_feature_slicing_requires_metadata_for_missing_columns(self):
+        requested = resolve_feature_selection('custom', enable_density=True)
+        data = Data(x=torch.zeros(2, 18))
+
+        with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
+            apply_runtime_feature_selection([data], requested)
 
     def test_lstm_graphsage_forward(self):
         model = DualGraphSAGE(
