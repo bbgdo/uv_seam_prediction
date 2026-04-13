@@ -1,4 +1,4 @@
-````# UV Seam Predictor — ML Pipeline
+# UV Seam Predictor — ML Pipeline
 
 An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks, deployed as a Blender add-on. Three architectures are compared: DualGraphSAGE, DualGATv2 (both on the dual graph), and MeshCNN (fixed 4-neighbor edge convolution on the original mesh).
 
@@ -179,4 +179,3 @@ python models/utils/postprocess.py \
 - `torch`, `torch-geometric`, `trimesh`, `scipy`, `matplotlib`
 - Blender 4.5 LTS (might work with Blender 4.0+) (for preprocessing scripts and the add-on)
 - Optional: `pyembree` (faster AO raycasting; falls back to normal-based approximation without it)
-````
