@@ -145,7 +145,8 @@ class GraphSeamBaselineRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual(command[0], sys.executable)
-        self.assertIn(str(Path('models') / 'dual_graphsage' / 'train.py'), command)
+        self.assertIn(str(Path('tools') / 'run_baseline.py'), command)
+        self.assertEqual(command[command.index('--model') + 1], 'graphsage')
         self.assertIn('--strict-paper-protocol', command)
         self.assertEqual(command[command.index('--resolution-tag') + 1], '10000f')
         self.assertEqual(command[command.index('--seed') + 1], '7')
@@ -185,7 +186,7 @@ class GraphSeamBaselineRunnerTests(unittest.TestCase):
             records = run_batch(_args(root, [1, 2], keep_going=True), runner=fake_runner)
 
         self.assertEqual([record['status'] for record in records], ['failed', 'completed'])
-        self.assertIn('train.py exited with 2', records[0]['error'])
+        self.assertIn('baseline runner exited with 2', records[0]['error'])
 
     def test_default_failure_handling_stops_batch(self):
         with TemporaryDirectory() as tmp:

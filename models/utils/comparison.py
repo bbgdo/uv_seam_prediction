@@ -42,7 +42,7 @@ def plot_comparison_f1(runs: dict[str, tuple[dict, list[dict]]], output_dir: Pat
 
     ax.set_xlabel('Epoch', fontsize=FONT_LABEL)
     ax.set_ylabel('Val F1', fontsize=FONT_LABEL)
-    ax.set_title('Model Comparison — Validation F1', fontsize=FONT_LABEL + 2)
+    ax.set_title('Model Comparison - Validation F1', fontsize=FONT_LABEL + 2)
     ax.legend(fontsize=FONT_TICK)
     ax.tick_params(labelsize=FONT_TICK)
     fig.tight_layout()
@@ -58,7 +58,7 @@ def plot_comparison_table(runs: dict[str, tuple[dict, list[dict]]], output_dir: 
 
     from models.utils.experiment_log import DPI, FONT_TICK
 
-    columns = ['Model', 'F1', 'Precision', 'Recall', 'Accuracy', 'Best Epoch']
+    columns = ['Model', 'F1', 'Precision', 'rec(tpr)', 'Accuracy', 'Best Epoch']
     rows = []
     for name, (summary, _) in runs.items():
         rows.append([

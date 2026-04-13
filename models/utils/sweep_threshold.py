@@ -14,8 +14,26 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from models.baselines.registry import get_baseline
+from models.common.config import baseline_config
 from models.utils.dataset import load_dataset, split_dataset
-from models.utils.metrics import edge_f1
+from models.utils.metrics import RECALL_TPR_LABEL, edge_f1
+
+
+def _default_model_kwargs(model_type: str) -> dict:
+    definition = get_baseline(model_type)
+    config = baseline_config(model_type, definition.default_config_overrides)
+    kwargs = {
+        'in_dim': config.in_dim,
+        'hidden_dim': config.hidden_size,
+        'num_layers': config.num_layers,
+        'dropout': config.dropout,
+    }
+    if model_type == 'graphsage':
+        kwargs.update({'aggr': config.aggr, 'skip_connections': config.skip_connections})
+    elif model_type == 'gatv2':
+        kwargs['heads'] = config.heads
+    return kwargs
 
 
 def main():
@@ -34,12 +52,8 @@ def main():
     print(f"val meshes:  {split_info['val']}")
     print(f"test meshes: {split_info['test']}")
 
-    if args.model_type == 'graphsage':
-        from models.dual_graphsage.model import DualGraphSAGE
-        model = DualGraphSAGE().to(device)
-    else:
-        from models.gatv2.model import DualGATv2
-        model = DualGATv2().to(device)
+    definition = get_baseline(args.model_type)
+    model = definition.model_class(**_default_model_kwargs(args.model_type)).to(device)
 
     model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
     model.eval()
@@ -61,7 +75,7 @@ def main():
         neg_mask = labels_cat == 0
 
         print(f"\n{'='*65}")
-        print(f"{split_name} set — probability distribution:")
+        print(f"{split_name} set - probability distribution:")
         print(f"  seam edges    ({pos_mask.sum():>7d}):  "
               f"mean={probs[pos_mask].mean():.4f}  "
               f"median={probs[pos_mask].median():.4f}  "
@@ -74,7 +88,10 @@ def main():
               f"p90={probs[neg_mask].quantile(0.90):.4f}")
 
         print(f"\n{split_name} threshold sweep:")
-        print(f"  {'t':>5s}  {'P':>7s}  {'R':>7s}  {'F1':>7s}  {'TP':>7s}  {'FP':>7s}  {'FN':>7s}")
+        print(
+            f"  {'t':>5s}  {'P':>7s}  {RECALL_TPR_LABEL:>8s}  "
+            f"{'F1':>7s}  {'TP':>7s}  {'FP':>7s}  {'FN':>7s}"
+        )
         best_f1 = 0.0
         best_t = 0.5
         for t in thresholds:
@@ -89,7 +106,7 @@ def main():
                 best_f1 = m['f1']
                 best_t = t
                 marker = ' <--'
-            print(f"  {t:>5.2f}  {m['precision']:>7.4f}  {m['recall']:>7.4f}  {m['f1']:>7.4f}  "
+            print(f"  {t:>5.2f}  {m['precision']:>7.4f}  {m['recall']:>8.4f}  {m['f1']:>7.4f}  "
                   f"{tp:>7d}  {fp:>7d}  {fn:>7d}{marker}")
 
         print(f"\n  best threshold: {best_t:.2f}  F1={best_f1:.4f}")

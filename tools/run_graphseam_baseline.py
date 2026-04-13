@@ -9,6 +9,8 @@ from typing import Any
 
 
 METRIC_KEYS = ('f1', 'precision', 'recall', 'fpr', 'tpr', 'accuracy')
+DISPLAY_METRIC_KEYS = ('f1', 'precision', 'recall', 'fpr', 'accuracy')
+DISPLAY_METRIC_LABELS = {'recall': 'rec(tpr)'}
 THRESHOLD_05_PREFIX = 'test_0_5'
 VAL_BEST_PREFIX = 'test_val_best'
 
@@ -26,7 +28,9 @@ def build_train_command(
 ) -> list[str]:
     return [
         sys.executable,
-        str(Path('models') / 'dual_graphsage' / 'train.py'),
+        str(Path('tools') / 'run_baseline.py'),
+        '--model',
+        'graphsage',
         '--dataset',
         dataset,
         '--run-dir',
@@ -49,6 +53,10 @@ def build_train_command(
 
 def _metric_columns(prefix: str) -> list[str]:
     return [f'{prefix}_{metric}' for metric in METRIC_KEYS]
+
+
+def _display_metric_label(metric: str) -> str:
+    return DISPLAY_METRIC_LABELS.get(metric, metric)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -199,10 +207,10 @@ def _markdown_summary(payload: dict[str, Any]) -> str:
         '| metric | mean @0.5 | std @0.5 | mean @val-best | std @val-best |',
         '|---|---:|---:|---:|---:|',
     ])
-    for metric in METRIC_KEYS:
+    for metric in DISPLAY_METRIC_KEYS:
         lines.append(
             '| '
-            f'{metric} | '
+            f'{_display_metric_label(metric)} | '
             f"{_fmt(aggregates[THRESHOLD_05_PREFIX][metric]['mean'])} | "
             f"{_fmt(aggregates[THRESHOLD_05_PREFIX][metric]['std'])} | "
             f"{_fmt(aggregates[VAL_BEST_PREFIX][metric]['mean'])} | "
@@ -228,9 +236,9 @@ def print_aggregate_table(payload: dict[str, Any]) -> None:
     print('metric     mean@0.5  std@0.5  mean@val-best  std@val-best')
     print('--------  --------  -------  -------------  ------------')
     aggregates = payload['aggregates']
-    for metric in METRIC_KEYS:
+    for metric in DISPLAY_METRIC_KEYS:
         print(
-            f'{metric:<8}  '
+            f'{_display_metric_label(metric):<8}  '
             f"{_fmt(aggregates[THRESHOLD_05_PREFIX][metric]['mean']):>8}  "
             f"{_fmt(aggregates[THRESHOLD_05_PREFIX][metric]['std']):>7}  "
             f"{_fmt(aggregates[VAL_BEST_PREFIX][metric]['mean']):>13}  "
@@ -263,7 +271,7 @@ def run_batch(args: argparse.Namespace, runner=subprocess.run) -> list[dict[str,
             runner(command, check=True)
             record = collect_success_record(seed, run_dir, split_json)
         except subprocess.CalledProcessError as exc:
-            record = failure_record(seed, run_dir, split_json, f'train.py exited with {exc.returncode}')
+            record = failure_record(seed, run_dir, split_json, f'baseline runner exited with {exc.returncode}')
             records.append(record)
             print_seed_table(record)
             if not args.keep_going:

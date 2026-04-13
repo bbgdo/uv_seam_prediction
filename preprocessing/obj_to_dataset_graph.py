@@ -23,9 +23,20 @@ except ModuleNotFoundError:  # pragma: no cover - supports direct script executi
     from seam_labels import extract_seam_truth
     from topology import WeldConfig, build_topology, canonical_edge_key
 
-LABEL_SOURCES = ('legacy_uv_remap', 'exact_obj')
+LABEL_SOURCES = ('exact_obj', 'legacy_uv_remap')
 LEGACY_DATASET_OUTPUT = 'dataset.pt'
 EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
+_LEGACY_LABEL_WARNING_SHOWN = False
+
+
+def _warn_legacy_label_source() -> None:
+    global _LEGACY_LABEL_WARNING_SHOWN
+    if _LEGACY_LABEL_WARNING_SHOWN:
+        return
+    message = 'legacy_uv_remap is deprecated; exact_obj is the default seam-label path.'
+    warnings.warn(message, FutureWarning, stacklevel=3)
+    print(f"[warning] {message}")
+    _LEGACY_LABEL_WARNING_SHOWN = True
 
 
 def resolve_endpoint_order(feature_preset: str, endpoint_order: str) -> str:
@@ -218,7 +229,7 @@ def write_dataset_manifest(dataset: list[Data], dataset_path: Path) -> Path:
     return manifest_path
 
 
-def _process_mesh_legacy_uv_remap(
+def _process_mesh_deprecated_legacy_uv_remap(
     file_path: Path,
     feature_preset: str,
     endpoint_order: str,
@@ -296,6 +307,16 @@ def _process_mesh_legacy_uv_remap(
         endpoint_order=endpoint_order,
         label_source='legacy_uv_remap',
     )
+
+
+def _process_mesh_legacy_uv_remap(
+    file_path: Path,
+    feature_preset: str,
+    endpoint_order: str,
+    endpoint_seed: int,
+) -> Data | None:
+    _warn_legacy_label_source()
+    return _process_mesh_deprecated_legacy_uv_remap(file_path, feature_preset, endpoint_order, endpoint_seed)
 
 
 def _build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
@@ -378,11 +399,10 @@ def process_mesh(
     feature_preset: str = 'extended18',
     endpoint_order: str = 'auto',
     endpoint_seed: int = 42,
-    label_source: str = 'legacy_uv_remap',
+    label_source: str = 'exact_obj',
 ) -> Data | None:
     """Load an .obj file and return a PyG Data object.
 
-    The default label source preserves the legacy trimesh UV-remap behavior.
     exact_obj derives labels from parsed OBJ face-corner topology and uses
     trimesh only for geometric feature computation.
     """
@@ -442,8 +462,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         '--label-source',
         choices=LABEL_SOURCES,
-        default='legacy_uv_remap',
-        help='Seam label source: legacy trimesh UV remap or exact OBJ face-corner topology',
+        default='exact_obj',
+        help='Seam label source: exact OBJ face-corner topology or deprecated legacy trimesh UV remap',
     )
     args = parser.parse_args(argv)
     endpoint_order = resolve_endpoint_order(args.feature_preset, args.endpoint_order)

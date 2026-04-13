@@ -15,7 +15,7 @@ def threshold_and_clean(
 ) -> np.ndarray:
     """Threshold probabilities and remove tiny disconnected seam components.
 
-    Returns boolean mask [E] — True = seam edge.
+    Returns boolean mask [E], where True means seam edge.
     """
     seam_mask = probs >= threshold
     seam_indices = np.where(seam_mask)[0]
@@ -216,6 +216,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     import torch
+    from models.baselines.registry import get_baseline
+    from models.common.config import baseline_config
     from models.utils.dataset import load_dataset
 
     orig_dataset = load_dataset(args.dataset)
@@ -230,12 +232,19 @@ if __name__ == '__main__':
 
     device = torch.device('cpu')
 
+    definition = get_baseline(args.model_type)
+    config = baseline_config(args.model_type, definition.default_config_overrides)
+    model_kwargs = {
+        'in_dim': config.in_dim,
+        'hidden_dim': config.hidden_size,
+        'num_layers': config.num_layers,
+        'dropout': config.dropout,
+    }
     if args.model_type == 'graphsage':
-        from models.dual_graphsage.model import DualGraphSAGE
-        model = DualGraphSAGE().to(device)
-    else:
-        from models.gatv2.model import DualGATv2
-        model = DualGATv2().to(device)
+        model_kwargs.update({'aggr': config.aggr, 'skip_connections': config.skip_connections})
+    elif args.model_type == 'gatv2':
+        model_kwargs['heads'] = config.heads
+    model = definition.model_class(**model_kwargs).to(device)
 
     state = torch.load(args.weights, map_location=device, weights_only=True)
     model.load_state_dict(state)

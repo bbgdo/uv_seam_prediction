@@ -1,6 +1,6 @@
 """Grid search over loss hyperparameters for DualGraphSAGE.
 
-Searches pos_weight × focal_gamma × lr × threshold jointly.
+Searches pos_weight, focal_gamma, lr, and threshold jointly.
 Each combo trains for up to --epochs with early stopping on val F1
 at the best threshold (not fixed 0.5).
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from models.dual_graphsage.model import DualGraphSAGE
 from models.utils.dataset import load_dataset, split_dataset
 from models.utils.losses import focal_bce_with_logits
-from models.utils.metrics import edge_f1
+from models.utils.metrics import RECALL_TPR_LABEL, edge_f1
 
 
 GRID = {
@@ -168,7 +168,7 @@ def main() -> None:
 
     print(f'\nrunning {len(configs)} configurations ({args.epochs} epochs each, patience={args.patience})...\n')
     print(f'{"pw":>5s}  {"gamma":>5s}  {"lr":>8s}  {"val_F1":>7s}  {"thr":>5s}  '
-          f'{"test_F1":>7s}  {"P":>7s}  {"R":>7s}  {"ep":>4s}  {"time":>6s}')
+          f'{"test_F1":>7s}  {"P":>7s}  {RECALL_TPR_LABEL:>8s}  {"ep":>4s}  {"time":>6s}')
     print('-' * 80)
 
     for pw, gamma, lr in configs:
@@ -179,7 +179,7 @@ def main() -> None:
 
         print(f'{pw:>5.0f}  {gamma:>5.1f}  {lr:>8.4f}  {result["best_val_f1"]:>7.4f}  '
               f'{result["best_threshold"]:>5.2f}  {result["test_f1_at_val_threshold"]:>7.4f}  '
-              f'{result["test_precision"]:>7.4f}  {result["test_recall"]:>7.4f}  '
+              f'{result["test_precision"]:>7.4f}  {result["test_recall"]:>8.4f}  '
               f'{result["epochs_trained"]:>4d}  {elapsed:>5.0f}s')
 
     results.sort(key=lambda r: r['best_val_f1'], reverse=True)
@@ -190,7 +190,7 @@ def main() -> None:
         print(f'  {i+1}. pw={r["pos_weight"]}, gamma={r["focal_gamma"]}, lr={r["lr"]}, '
               f'val_F1={r["best_val_f1"]:.4f} (t={r["best_threshold"]:.2f}), '
               f'test_F1={r["test_f1_at_val_threshold"]:.4f} '
-              f'(P={r["test_precision"]:.4f} R={r["test_recall"]:.4f})')
+              f'(P={r["test_precision"]:.4f} {RECALL_TPR_LABEL}={r["test_recall"]:.4f})')
 
     best = results[0]
     print(f'\nrecommended next run:')

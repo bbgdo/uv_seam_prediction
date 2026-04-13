@@ -11,8 +11,11 @@ from torch_geometric.data import Data
 
 from models.dual_graphsage.model import DualGraphSAGE
 from models.dual_graphsage.train import validate_strict_paper_protocol
+from models.baselines.registry import get_baseline
+from tools.run_baseline import parse_args as parse_baseline_args
 from models.utils.experiment_log import ExperimentLogger
 from preprocessing.compute_features import compute_edge_features
+from preprocessing.feature_registry import get_feature_group
 
 
 def _tiny_mesh() -> trimesh.Trimesh:
@@ -32,6 +35,21 @@ def _tiny_mesh() -> trimesh.Trimesh:
 
 
 class GraphSeamBaselineTests(unittest.TestCase):
+    def test_baseline_registry_exposes_supported_models(self):
+        self.assertIs(get_baseline('graphsage').model_class, DualGraphSAGE)
+        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 64)
+
+    def test_unified_runner_defaults_graphsage_and_gatv2(self):
+        graphsage_args = parse_baseline_args(['--epochs', '1'])
+        gatv2_args = parse_baseline_args(['--model', 'gatv2', '--epochs', '1'])
+
+        self.assertEqual(graphsage_args.model, 'graphsage')
+        self.assertEqual(graphsage_args.hidden, 128)
+        self.assertEqual(graphsage_args.lr, 1e-3)
+        self.assertEqual(gatv2_args.model, 'gatv2')
+        self.assertEqual(gatv2_args.hidden, 64)
+        self.assertEqual(gatv2_args.lr, 5e-4)
+
     def test_feature_preset_shapes(self):
         mesh = _tiny_mesh()
 
@@ -40,6 +58,10 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
         self.assertEqual(paper.shape, (len(edges), 14))
         self.assertEqual(extended.shape, (len(extended_edges), 18))
+
+    def test_feature_registry_scaffold_lists_existing_baselines(self):
+        self.assertEqual(get_feature_group('paper14').feature_preset, 'paper14')
+        self.assertEqual(len(get_feature_group('extended18').feature_names), 18)
 
     def test_lstm_graphsage_forward(self):
         model = DualGraphSAGE(

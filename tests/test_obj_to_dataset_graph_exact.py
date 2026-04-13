@@ -118,6 +118,16 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertEqual(data.seam_edge_count, int(data.y[:edge_count].sum().item()))
             self.assertEqual(data.boundary_edge_count, 4)
 
+    def test_exact_obj_is_default_label_source(self):
+        with _obj_file(NON_SEAM_SHARED_EDGE) as path:
+            data = process_mesh(
+                path,
+                feature_preset='paper14',
+                endpoint_order='fixed',
+            )
+
+            self.assertEqual(data.label_source, 'exact_obj')
+
     def test_legacy_path_remains_importable_and_callable(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             data = process_mesh(
