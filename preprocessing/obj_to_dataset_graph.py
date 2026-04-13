@@ -1,3 +1,4 @@
+import json
 import sys
 import warnings
 from pathlib import Path
@@ -23,6 +24,8 @@ except ModuleNotFoundError:  # pragma: no cover - supports direct script executi
     from topology import WeldConfig, build_topology, canonical_edge_key
 
 LABEL_SOURCES = ('legacy_uv_remap', 'exact_obj')
+LEGACY_DATASET_OUTPUT = 'dataset.pt'
+EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
 
 
 def resolve_endpoint_order(feature_preset: str, endpoint_order: str) -> str:
@@ -132,6 +135,87 @@ def _build_graph_data(
     data.endpoint_order = endpoint_order
     data.unique_edges = torch.from_numpy(unique_edges.astype(np.int64))
     return data
+
+
+def resolve_output_path(label_source: str, output: str | None) -> Path:
+    if output is not None:
+        return Path(output)
+    if label_source == 'exact_obj':
+        return Path(EXACT_DATASET_OUTPUT)
+    return Path(LEGACY_DATASET_OUTPUT)
+
+
+def manifest_path_for_dataset(dataset_path: Path) -> Path:
+    return dataset_path.with_name(f'{dataset_path.stem}_manifest.json')
+
+
+def _unique_edge_count(data: Data) -> int:
+    unique_edges = getattr(data, 'unique_edges', None)
+    if unique_edges is not None:
+        return int(unique_edges.shape[0])
+    return int(data.edge_index.shape[1] // 2)
+
+
+def _unique_labels(data: Data) -> torch.Tensor:
+    return data.y[:_unique_edge_count(data)]
+
+
+def _mesh_summary(data: Data) -> dict:
+    unique_edges = _unique_edge_count(data)
+    seam_edges = int(getattr(data, 'seam_edge_count', int(_unique_labels(data).sum().item())))
+    boundary_edges = int(getattr(data, 'boundary_edge_count', 0))
+    return {
+        'file_path': getattr(data, 'file_path', ''),
+        'nodes': int(data.num_nodes),
+        'unique_edges': unique_edges,
+        'seam_edges': seam_edges,
+        'boundary_edges': boundary_edges,
+        'feature_dim': int(data.edge_attr.shape[1]),
+    }
+
+
+def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
+    if not dataset:
+        raise ValueError('cannot build a manifest for an empty dataset')
+
+    label_source = getattr(dataset[0], 'label_source', '')
+    feature_preset = getattr(dataset[0], 'feature_preset', '')
+    endpoint_order = getattr(dataset[0], 'endpoint_order', '')
+    weld_mode = getattr(dataset[0], 'weld_mode', '')
+
+    summaries = [_mesh_summary(data) for data in dataset]
+    total_nodes = sum(item['nodes'] for item in summaries)
+    total_unique_edges = sum(item['unique_edges'] for item in summaries)
+    total_directed_edges = sum(int(data.edge_index.shape[1]) for data in dataset)
+    total_seam_edges = sum(item['seam_edges'] for item in summaries)
+    total_boundary_edges = sum(item['boundary_edges'] for item in summaries)
+    total_nonseam_edges = total_unique_edges - total_seam_edges
+
+    return {
+        'dataset_path': str(dataset_path),
+        'label_source': label_source,
+        'feature_preset': feature_preset,
+        'endpoint_order': endpoint_order,
+        'weld_mode': weld_mode,
+        'mesh_count': len(dataset),
+        'total_nodes': total_nodes,
+        'total_unique_edges': total_unique_edges,
+        'total_directed_edges': total_directed_edges,
+        'total_seam_edges': total_seam_edges,
+        'total_boundary_edges': total_boundary_edges,
+        'aggregate_seam_ratio': total_seam_edges / max(total_unique_edges, 1),
+        'aggregate_pos_weight': total_nonseam_edges / max(total_seam_edges, 1),
+        'meshes': summaries,
+    }
+
+
+def write_dataset_manifest(dataset: list[Data], dataset_path: Path) -> Path:
+    manifest_path = manifest_path_for_dataset(dataset_path)
+    manifest = build_dataset_manifest(dataset, dataset_path)
+    with manifest_path.open('w', encoding='utf-8') as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.write('\n')
+    return manifest_path
 
 
 def _process_mesh_legacy_uv_remap(
@@ -339,14 +423,19 @@ def print_stats(data: Data, file_name: str) -> None:
     print(f"{'='*60}")
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description='Build PyG UV-seam dataset from .obj files.')
     parser.add_argument('mesh_dir', nargs='?', default='./meshes', help='Directory with .obj files (default: ./meshes)')
     parser.add_argument('--max-meshes', type=int, default=5, help='Max meshes to process (default: 5)')
-    parser.add_argument('--save', action='store_true', help='Save dataset as dataset.pt')
-    parser.add_argument('--output', default='dataset.pt', help='Output path when --save is set')
+    parser.add_argument('--save', action='store_true', help='Save the dataset')
+    parser.add_argument(
+        '--output',
+        default=None,
+        help='Output path when --save is set; exact_obj defaults to dataset_v2_exact_labels.pt',
+    )
+    parser.add_argument('--overwrite', action='store_true', help='Replace an existing output file')
     parser.add_argument('--feature-preset', choices=FEATURE_PRESETS, default='extended18')
     parser.add_argument('--endpoint-order', choices=('auto', *ENDPOINT_ORDERS), default='auto')
     parser.add_argument('--endpoint-seed', type=int, default=42)
@@ -356,7 +445,7 @@ if __name__ == "__main__":
         default='legacy_uv_remap',
         help='Seam label source: legacy trimesh UV remap or exact OBJ face-corner topology',
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     endpoint_order = resolve_endpoint_order(args.feature_preset, args.endpoint_order)
 
     mesh_dir = Path(args.mesh_dir)
@@ -416,9 +505,24 @@ if __name__ == "__main__":
         print(f"{'#'*60}\n")
 
     if args.save and dataset:
-        out_path = Path(args.output)
+        out_path = resolve_output_path(args.label_source, args.output)
+        if out_path.exists() and not args.overwrite:
+            print(f"[error] output exists, pass --overwrite to replace: {out_path}")
+            sys.exit(1)
+        manifest_path = manifest_path_for_dataset(out_path)
+        if args.label_source == 'exact_obj' and manifest_path.exists() and not args.overwrite:
+            print(f"[error] manifest exists, pass --overwrite to replace: {manifest_path}")
+            sys.exit(1)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(dataset, out_path)
         print(f"dataset saved -> {out_path.resolve()}  ({len(dataset)} graphs)")
+        if args.label_source == 'exact_obj':
+            manifest_path = write_dataset_manifest(dataset, out_path)
+            print(f"manifest saved -> {manifest_path.resolve()}")
+            print(
+                "sanity check: "
+                f"python tools/validate_seam_truth.py --mesh-dir {mesh_dir} --max-meshes {len(dataset)}"
+            )
 
     if outliers:
         print(f"\n{'!'*60}")
@@ -431,3 +535,7 @@ if __name__ == "__main__":
         print(f"\n[warning] {failed} file(s) failed to load.")
 
     print("\ndone.")
+
+
+if __name__ == "__main__":
+    main()

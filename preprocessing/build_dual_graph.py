@@ -58,8 +58,12 @@ def build_dual_graph_data(original_data: Data) -> Data:
         num_nodes=num_unique,
     )
     dual.file_path = getattr(original_data, 'file_path', '')
+    dual.label_source = getattr(original_data, 'label_source', '')
     dual.feature_preset = getattr(original_data, 'feature_preset', '')
     dual.endpoint_order = getattr(original_data, 'endpoint_order', '')
+    dual.weld_mode = getattr(original_data, 'weld_mode', '')
+    dual.seam_edge_count = getattr(original_data, 'seam_edge_count', int(dual_y.sum().item()))
+    dual.boundary_edge_count = getattr(original_data, 'boundary_edge_count', 0)
     return dual
 
 

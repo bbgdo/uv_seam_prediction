@@ -1,13 +1,21 @@
 from contextlib import contextmanager
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
+import torch
 
+from preprocessing.build_dual_graph import build_dual_graph_data
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.obj_parser import parse_obj
-from preprocessing.obj_to_dataset_graph import _build_feature_mesh_from_topology, process_mesh
+from preprocessing.obj_to_dataset_graph import (
+    _build_feature_mesh_from_topology,
+    main as build_dataset_main,
+    manifest_path_for_dataset,
+    process_mesh,
+)
 from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import WeldConfig, build_topology
 
@@ -32,6 +40,15 @@ def _obj_file(text: str):
         path = Path(temp_dir) / 'fixture.obj'
         path.write_text(text, encoding='utf-8')
         yield path
+
+
+@contextmanager
+def _mesh_dir(text: str):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mesh_dir = Path(temp_dir) / 'meshes'
+        mesh_dir.mkdir()
+        (mesh_dir / 'fixture.obj').write_text(text, encoding='utf-8')
+        yield mesh_dir
 
 
 def _topology_and_truth(path: Path):
@@ -126,6 +143,121 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
 
             expected_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
             self.assertTrue(np.array_equal(unique_edges, expected_edges))
+
+    def test_saving_exact_obj_dataset_writes_manifest(self):
+        with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
+            output_path = mesh_dir.parent / 'dataset_v2_exact_labels.pt'
+
+            build_dataset_main([
+                str(mesh_dir),
+                '--max-meshes', '1',
+                '--label-source', 'exact_obj',
+                '--feature-preset', 'paper14',
+                '--endpoint-order', 'fixed',
+                '--save',
+                '--output', str(output_path),
+            ])
+
+            manifest_path = manifest_path_for_dataset(output_path)
+            self.assertTrue(output_path.exists())
+            self.assertTrue(manifest_path.exists())
+
+            dataset = torch.load(output_path, weights_only=False)
+            self.assertEqual(len(dataset), 1)
+            self.assertEqual(dataset[0].label_source, 'exact_obj')
+
+    def test_exact_obj_manifest_has_required_fields(self):
+        required_top_level = {
+            'dataset_path',
+            'label_source',
+            'feature_preset',
+            'endpoint_order',
+            'weld_mode',
+            'mesh_count',
+            'total_nodes',
+            'total_unique_edges',
+            'total_directed_edges',
+            'total_seam_edges',
+            'total_boundary_edges',
+            'aggregate_seam_ratio',
+            'aggregate_pos_weight',
+            'meshes',
+        }
+        required_mesh_fields = {
+            'file_path',
+            'nodes',
+            'unique_edges',
+            'seam_edges',
+            'boundary_edges',
+            'feature_dim',
+        }
+
+        with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
+            output_path = mesh_dir.parent / 'dataset_v2_exact_labels.pt'
+            build_dataset_main([
+                str(mesh_dir),
+                '--max-meshes', '1',
+                '--label-source', 'exact_obj',
+                '--feature-preset', 'paper14',
+                '--endpoint-order', 'fixed',
+                '--save',
+                '--output', str(output_path),
+            ])
+
+            manifest = json.loads(manifest_path_for_dataset(output_path).read_text(encoding='utf-8'))
+
+            self.assertTrue(required_top_level.issubset(manifest.keys()))
+            self.assertTrue(required_mesh_fields.issubset(manifest['meshes'][0].keys()))
+            self.assertEqual(manifest['label_source'], 'exact_obj')
+            self.assertEqual(manifest['feature_preset'], 'paper14')
+            self.assertEqual(manifest['endpoint_order'], 'fixed')
+            self.assertEqual(manifest['weld_mode'], 'exact')
+            self.assertEqual(manifest['mesh_count'], 1)
+            self.assertEqual(manifest['total_unique_edges'], 5)
+            self.assertEqual(manifest['total_directed_edges'], 10)
+            self.assertEqual(manifest['total_seam_edges'], 4)
+            self.assertEqual(manifest['total_boundary_edges'], 4)
+            self.assertAlmostEqual(manifest['aggregate_seam_ratio'], 4 / 5)
+            self.assertAlmostEqual(manifest['aggregate_pos_weight'], 1 / 4)
+
+    def test_dual_graph_preserves_exact_obj_metadata(self):
+        with _obj_file(NON_SEAM_SHARED_EDGE) as path:
+            data = process_mesh(
+                path,
+                feature_preset='paper14',
+                endpoint_order='fixed',
+                label_source='exact_obj',
+            )
+
+            dual = build_dual_graph_data(data)
+
+            self.assertEqual(dual.file_path, str(path))
+            self.assertEqual(dual.label_source, 'exact_obj')
+            self.assertEqual(dual.feature_preset, 'paper14')
+            self.assertEqual(dual.endpoint_order, 'fixed')
+            self.assertEqual(dual.weld_mode, 'exact')
+            self.assertEqual(dual.seam_edge_count, data.seam_edge_count)
+            self.assertEqual(dual.boundary_edge_count, data.boundary_edge_count)
+
+    def test_legacy_dataset_output_path_still_works_when_explicit(self):
+        with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
+            output_path = mesh_dir.parent / 'dataset.pt'
+
+            build_dataset_main([
+                str(mesh_dir),
+                '--max-meshes', '1',
+                '--label-source', 'legacy_uv_remap',
+                '--feature-preset', 'paper14',
+                '--endpoint-order', 'fixed',
+                '--save',
+                '--output', str(output_path),
+            ])
+
+            self.assertTrue(output_path.exists())
+            self.assertFalse(manifest_path_for_dataset(output_path).exists())
+            dataset = torch.load(output_path, weights_only=False)
+            self.assertEqual(len(dataset), 1)
+            self.assertEqual(dataset[0].label_source, 'legacy_uv_remap')
 
 
 if __name__ == '__main__':

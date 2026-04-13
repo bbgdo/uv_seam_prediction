@@ -60,7 +60,7 @@ def compute_signed_dihedral(
     angles = np.zeros(len(unique_edges), dtype=np.float32)
 
     for idx, (vi, vj) in enumerate(unique_edges):
-        key = (min(vi, vj), max(vi, vj))
+        key = canonical_edge_key(int(vi), int(vj))
         face_list = edge_to_faces.get(key, [])
         if len(face_list) < 2:
             continue
