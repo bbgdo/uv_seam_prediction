@@ -12,6 +12,11 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
+try:
+    from preprocessing.topology import canonical_edge_key
+except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/compute_features.py`
+    from topology import canonical_edge_key
+
 FEATURE_PRESETS = ('paper14', 'extended18')
 ENDPOINT_ORDERS = ('fixed', 'random')
 
@@ -34,7 +39,7 @@ def build_edge_topology(mesh: trimesh.Trimesh) -> tuple[np.ndarray, dict]:
     for f_idx, face in enumerate(faces):
         for k in range(3):
             vi, vj = int(face[k]), int(face[(k + 1) % 3])
-            key = (min(vi, vj), max(vi, vj))
+            key = canonical_edge_key(vi, vj)
             edge_to_faces.setdefault(key, []).append(f_idx)
 
     unique_edges = np.array(sorted(edge_to_faces.keys()), dtype=np.int64)

@@ -11,7 +11,18 @@ import trimesh  # noqa: E402
 
 # support running both as `python preprocessing/obj_to_dataset_graph.py` and as a module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features
+try:
+    from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features
+    from preprocessing.obj_parser import parse_obj
+    from preprocessing.seam_labels import extract_seam_truth
+    from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
+except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
+    from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features
+    from obj_parser import parse_obj
+    from seam_labels import extract_seam_truth
+    from topology import WeldConfig, build_topology, canonical_edge_key
+
+LABEL_SOURCES = ('legacy_uv_remap', 'exact_obj')
 
 
 def resolve_endpoint_order(feature_preset: str, endpoint_order: str) -> str:
@@ -34,7 +45,7 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
         for k in range(3):
             vi = face[k]
             vj = face[(k + 1) % 3]
-            key = (min(vi, vj), max(vi, vj))
+            key = canonical_edge_key(int(vi), int(vj))
             edge_to_faces.setdefault(key, []).append(f_idx)
 
     seam_map: dict[tuple, bool] = {}
@@ -77,29 +88,60 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
             split_j = np.linalg.norm(uv_vj_f0 - uv_vj_f1) > UV_EPS
             seam_map[edge] = bool(split_i or split_j)
         else:
-            # non-manifold — treat as seam
+            # Keep legacy behavior for the transition period.
             seam_map[edge] = True
 
     return seam_map
 
 
-def process_mesh(
-    file_path: str | Path,
-    feature_preset: str = 'extended18',
-    endpoint_order: str = 'auto',
-    endpoint_seed: int = 42,
+def _build_graph_data(
+    mesh: trimesh.Trimesh,
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    edge_features: np.ndarray,
+    unique_edges: np.ndarray,
+    labels: np.ndarray,
+    file_path: Path,
+    feature_preset: str,
+    endpoint_order: str,
+    label_source: str,
+) -> Data:
+    vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
+    x = torch.from_numpy(np.concatenate([vertices, vert_nrms], axis=1))
+
+    vi_idx = unique_edges[:, 0]
+    vj_idx = unique_edges[:, 1]
+
+    src = np.concatenate([vi_idx, vj_idx])
+    dst = np.concatenate([vj_idx, vi_idx])
+    edge_index = torch.from_numpy(np.stack([src, dst], axis=0).astype(np.int64))
+    edge_attr = torch.from_numpy(np.tile(edge_features, (2, 1)))
+    y = torch.from_numpy(np.tile(labels.astype(np.float32), 2))
+
+    data = Data(
+        x=x,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        y=y,
+        num_nodes=len(vertices),
+    )
+    data.faces = torch.from_numpy(faces)
+    data.file_path = str(file_path)
+    data.label_source = label_source
+    data.feature_preset = feature_preset
+    data.endpoint_order = endpoint_order
+    data.unique_edges = torch.from_numpy(unique_edges.astype(np.int64))
+    return data
+
+
+def _process_mesh_legacy_uv_remap(
+    file_path: Path,
+    feature_preset: str,
+    endpoint_order: str,
+    endpoint_seed: int,
 ) -> Data | None:
-    """Load an .obj file and return a PyG Data object, or None on failure.
-
-    Detects UV seams on the UV-split topology (as loaded by trimesh),
-    then merges duplicate vertices to get the geometric topology that
-    matches Blender's representation at inference time. Features are
-    computed on the merged mesh.
-    """
+    """Legacy seam labels from trimesh UV splits, vertex merge, and KDTree remap."""
     from scipy.spatial import cKDTree
-
-    file_path = Path(file_path)
-    endpoint_order = resolve_endpoint_order(feature_preset, endpoint_order)
 
     try:
         mesh = trimesh.load(str(file_path), process=False, force='mesh')
@@ -135,7 +177,7 @@ def process_mesh(
         geo_vi, geo_vj = int(old_to_new[vi]), int(old_to_new[vj])
         if geo_vi == geo_vj:
             continue
-        key = (min(geo_vi, geo_vj), max(geo_vi, geo_vj))
+        key = canonical_edge_key(geo_vi, geo_vj)
         # any split edge being a seam -> geometric edge is a seam
         if is_seam:
             seam_map[key] = True
@@ -144,44 +186,131 @@ def process_mesh(
 
     # 5. Compute features on the merged (geometric) mesh
     vertices = np.asarray(mesh.vertices, dtype=np.float32)
-    vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
     faces = np.asarray(mesh.faces, dtype=np.int64)
 
-    edge_features, unique_edges, edge_to_faces = compute_edge_features(
+    edge_features, unique_edges, _ = compute_edge_features(
         mesh,
         feature_preset=feature_preset,
         endpoint_order=endpoint_order,
         rng_seed=endpoint_seed,
     )
 
-    x = torch.from_numpy(np.concatenate([vertices, vert_nrms], axis=1))
-
-    vi_idx = unique_edges[:, 0]
-    vj_idx = unique_edges[:, 1]
-
     labels = np.array(
         [1.0 if seam_map.get((int(e[0]), int(e[1])), False) else 0.0 for e in unique_edges],
         dtype=np.float32,
     )
 
-    src = np.concatenate([vi_idx, vj_idx])
-    dst = np.concatenate([vj_idx, vi_idx])
-    edge_index = torch.from_numpy(np.stack([src, dst], axis=0).astype(np.int64))
-    edge_attr = torch.from_numpy(np.tile(edge_features, (2, 1)))
-    y = torch.from_numpy(np.tile(labels, 2))
-
-    data = Data(
-        x=x,
-        edge_index=edge_index,
-        edge_attr=edge_attr,
-        y=y,
-        num_nodes=len(vertices),
+    return _build_graph_data(
+        mesh=mesh,
+        vertices=vertices,
+        faces=faces,
+        edge_features=edge_features,
+        unique_edges=unique_edges,
+        labels=labels,
+        file_path=file_path,
+        feature_preset=feature_preset,
+        endpoint_order=endpoint_order,
+        label_source='legacy_uv_remap',
     )
-    data.faces = torch.from_numpy(faces)
-    data.file_path = str(file_path)
-    data.feature_preset = feature_preset
-    data.endpoint_order = endpoint_order
+
+
+def _build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
+    vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
+    faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
+    if len(vertices) == 0 or len(faces) == 0:
+        raise ValueError('exact_obj requires a non-empty OBJ mesh')
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:
+    expected_edges = np.asarray(canonical_edges, dtype=np.int64).reshape((-1, 2))
+    if np.array_equal(unique_edges, expected_edges):
+        return
+
+    detail = ''
+    if unique_edges.shape == expected_edges.shape:
+        mismatch_rows = np.flatnonzero(np.any(unique_edges != expected_edges, axis=1))
+        if len(mismatch_rows) > 0:
+            idx = int(mismatch_rows[0])
+            detail = f'; first mismatch at {idx}: features={tuple(unique_edges[idx])}, topology={tuple(expected_edges[idx])}'
+    else:
+        detail = f'; features shape={unique_edges.shape}, topology shape={expected_edges.shape}'
+
+    raise ValueError(
+        f'exact_obj edge order mismatch for {file_path.name}: '
+        f'feature_edges={len(unique_edges)}, topology_edges={len(expected_edges)}{detail}'
+    )
+
+
+def _process_mesh_exact_obj(
+    file_path: Path,
+    feature_preset: str,
+    endpoint_order: str,
+    endpoint_seed: int,
+) -> Data:
+    obj_mesh = parse_obj(file_path)
+    topology = build_topology(obj_mesh, WeldConfig.exact())
+    seam_truth = extract_seam_truth(topology)
+    if seam_truth.audit.missing_uv_occurrences:
+        raise ValueError(
+            f'exact_obj requires vt indices for every face corner; '
+            f'missing occurrences={seam_truth.audit.missing_uv_occurrences}'
+        )
+    feature_mesh = _build_feature_mesh_from_topology(topology)
+
+    edge_features, unique_edges, _ = compute_edge_features(
+        feature_mesh,
+        feature_preset=feature_preset,
+        endpoint_order=endpoint_order,
+        rng_seed=endpoint_seed,
+    )
+    _assert_exact_edge_order(unique_edges, topology.canonical_edges, file_path)
+
+    labels = np.array(
+        [1.0 if seam_truth.seam_map[(int(e[0]), int(e[1]))] else 0.0 for e in unique_edges],
+        dtype=np.float32,
+    )
+
+    data = _build_graph_data(
+        mesh=feature_mesh,
+        vertices=np.asarray(feature_mesh.vertices, dtype=np.float32),
+        faces=np.asarray(feature_mesh.faces, dtype=np.int64),
+        edge_features=edge_features,
+        unique_edges=unique_edges,
+        labels=labels,
+        file_path=file_path,
+        feature_preset=feature_preset,
+        endpoint_order=endpoint_order,
+        label_source='exact_obj',
+    )
+    data.seam_edge_count = int(seam_truth.audit.seam_edges)
+    data.boundary_edge_count = int(seam_truth.audit.boundary_edges)
+    data.weld_mode = topology.weld_audit.mode
     return data
+
+
+def process_mesh(
+    file_path: str | Path,
+    feature_preset: str = 'extended18',
+    endpoint_order: str = 'auto',
+    endpoint_seed: int = 42,
+    label_source: str = 'legacy_uv_remap',
+) -> Data | None:
+    """Load an .obj file and return a PyG Data object.
+
+    The default label source preserves the legacy trimesh UV-remap behavior.
+    exact_obj derives labels from parsed OBJ face-corner topology and uses
+    trimesh only for geometric feature computation.
+    """
+    if label_source not in LABEL_SOURCES:
+        raise ValueError(f"label_source must be one of {LABEL_SOURCES}, got: {label_source}")
+
+    file_path = Path(file_path)
+    endpoint_order = resolve_endpoint_order(feature_preset, endpoint_order)
+
+    if label_source == 'exact_obj':
+        return _process_mesh_exact_obj(file_path, feature_preset, endpoint_order, endpoint_seed)
+    return _process_mesh_legacy_uv_remap(file_path, feature_preset, endpoint_order, endpoint_seed)
 
 
 def print_stats(data: Data, file_name: str) -> None:
@@ -221,6 +350,12 @@ if __name__ == "__main__":
     parser.add_argument('--feature-preset', choices=FEATURE_PRESETS, default='extended18')
     parser.add_argument('--endpoint-order', choices=('auto', *ENDPOINT_ORDERS), default='auto')
     parser.add_argument('--endpoint-seed', type=int, default=42)
+    parser.add_argument(
+        '--label-source',
+        choices=LABEL_SOURCES,
+        default='legacy_uv_remap',
+        help='Seam label source: legacy trimesh UV remap or exact OBJ face-corner topology',
+    )
     args = parser.parse_args()
     endpoint_order = resolve_endpoint_order(args.feature_preset, args.endpoint_order)
 
@@ -235,19 +370,21 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print(f"\nfound {len(obj_files)} .obj file(s) in '{mesh_dir}'.")
-    print(f"processing first {min(args.max_meshes, len(obj_files))} …\n")
+    print(f"label source: {args.label_source}")
+    print(f"processing first {min(args.max_meshes, len(obj_files))} ...\n")
 
     dataset: list[Data] = []
     outliers: list[str] = []
     failed = 0
 
     for obj_file in obj_files[:args.max_meshes]:
-        print(f"processing: {obj_file.name} …", end=" ", flush=True)
+        print(f"processing: {obj_file.name} ...", end=" ", flush=True)
         data = process_mesh(
             obj_file,
             feature_preset=args.feature_preset,
             endpoint_order=endpoint_order,
             endpoint_seed=args.endpoint_seed,
+            label_source=args.label_source,
         )
         if data is None:
             failed += 1
@@ -255,7 +392,7 @@ if __name__ == "__main__":
         print("ok")
         if data.y.sum().item() == 0:
             outliers.append(obj_file.name)
-            print(f"  [outlier] {obj_file.name}: 0 seam edges — skipped.")
+            print(f"  [outlier] {obj_file.name}: 0 seam edges - skipped.")
             continue
         dataset.append(data)
         print_stats(data, obj_file.name)
@@ -285,9 +422,9 @@ if __name__ == "__main__":
 
     if outliers:
         print(f"\n{'!'*60}")
-        print(f"  outliers — {len(outliers)} file(s) with 0 seam edges (excluded):")
+        print(f"  outliers - {len(outliers)} file(s) with 0 seam edges (excluded):")
         for name in outliers:
-            print(f"    • {name}")
+            print(f"    - {name}")
         print(f"{'!'*60}")
 
     if failed:
