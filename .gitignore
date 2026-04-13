@@ -6,3 +6,4 @@
 .claude/
 runs/
 __pycache__/
+*ModuleAnalysisCache*
