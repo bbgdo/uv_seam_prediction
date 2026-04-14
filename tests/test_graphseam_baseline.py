@@ -36,6 +36,22 @@ def _tiny_mesh() -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
+def _skewed_density_mesh() -> trimesh.Trimesh:
+    vertices = np.array([
+        [0.0, 0.0, 0.0],
+        [1e-9, 0.0, 0.0],
+        [0.0, 1e-9, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    faces = np.array([
+        [0, 1, 2],
+        [1, 3, 4],
+        [1, 4, 2],
+    ])
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
 class GraphSeamBaselineTests(unittest.TestCase):
     def test_baseline_registry_exposes_supported_models(self):
         self.assertIs(get_baseline('graphsage').model_class, DualGraphSAGE)
@@ -100,6 +116,24 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
         self.assertEqual(features.shape, (len(edges), 16))
         self.assertTrue(np.isfinite(features[:, -2:]).all())
+
+    def test_density_features_are_bounded_after_normalization(self):
+        mesh = _skewed_density_mesh()
+
+        features, _, _ = compute_edge_features(
+            mesh,
+            feature_group='custom',
+            enable_density=True,
+        )
+        density_mean = features[:, -2]
+        density_diff = features[:, -1]
+        tol = 1e-6
+
+        self.assertTrue(np.isfinite(features[:, -2:]).all())
+        self.assertTrue(np.all(density_mean >= -1.0 - tol))
+        self.assertTrue(np.all(density_mean <= 1.0 + tol))
+        self.assertTrue(np.all(density_diff >= 0.0 - tol))
+        self.assertTrue(np.all(density_diff <= 1.0 + tol))
 
     def test_dual_graph_preserves_feature_metadata(self):
         data = Data(

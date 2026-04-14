@@ -398,18 +398,29 @@ def compute_vertex_relative_density(mesh: trimesh.Trimesh, eps: float = DENSITY_
     return density.astype(np.float32)
 
 
+def _normalize_vertex_relative_density(
+    vertex_density: np.ndarray,
+    density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
+) -> np.ndarray:
+    """Bound raw log-ratio density before edge-level aggregation."""
+    clipped = np.clip(vertex_density, -density_log_clip, density_log_clip)
+    return (clipped / density_log_clip).astype(np.float32)
+
+
 def compute_edge_relative_density(
     mesh: trimesh.Trimesh,
     unique_edges: np.ndarray,
     eps: float = DENSITY_CONFIG['eps'],
+    density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
 ) -> tuple[np.ndarray, np.ndarray]:
-    vertex_density = compute_vertex_relative_density(mesh, eps=eps)
+    vertex_density_raw = compute_vertex_relative_density(mesh, eps=eps)
+    vertex_density = _normalize_vertex_relative_density(vertex_density_raw, density_log_clip)
     vi = unique_edges[:, 0]
     vj = unique_edges[:, 1]
     density_i = vertex_density[vi]
     density_j = vertex_density[vj]
     density_mean = ((density_i + density_j) * 0.5).astype(np.float32)
-    density_diff = np.abs(density_i - density_j).astype(np.float32)
+    density_diff = (0.5 * np.abs(density_i - density_j)).astype(np.float32)
     return density_mean, density_diff
 
 

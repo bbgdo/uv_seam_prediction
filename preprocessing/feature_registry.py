@@ -44,6 +44,7 @@ DENSITY_CONFIG = {
     'neighborhood': '2-ring',
     'support_area': 'one_third_incident_face_area',
     'eps': 1e-12,
+    'density_log_clip': 3.0,
 }
 
 
