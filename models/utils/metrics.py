@@ -30,7 +30,12 @@ def threshold_sweep(
 
 @torch.no_grad()
 def edge_f1(logits: torch.Tensor, labels: torch.Tensor, threshold: float = 0.5) -> dict:
-    preds = (torch.sigmoid(logits) >= threshold).long()
+    return binary_metrics_from_probs(torch.sigmoid(logits), labels, threshold)
+
+
+@torch.no_grad()
+def binary_metrics_from_probs(probs: torch.Tensor, labels: torch.Tensor, threshold: float = 0.5) -> dict:
+    preds = (probs >= threshold).long()
     gt = labels.long()
 
     tp = (preds & gt).sum().item()
