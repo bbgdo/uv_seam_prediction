@@ -54,6 +54,7 @@ def resolve_feature_cli_selection(
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
     enable_density: bool = False,
+    enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
     return resolve_feature_selection(
         feature_group or feature_preset,
@@ -61,6 +62,7 @@ def resolve_feature_cli_selection(
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,
         enable_density=enable_density,
+        enable_thickness_sdf=enable_thickness_sdf,
     )
 
 
@@ -436,6 +438,7 @@ def process_mesh(
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
     enable_density: bool = False,
+    enable_thickness_sdf: bool = False,
     endpoint_order: str = 'auto',
     endpoint_seed: int = 42,
     label_source: str = 'exact_obj',
@@ -456,6 +459,7 @@ def process_mesh(
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,
         enable_density=enable_density,
+        enable_thickness_sdf=enable_thickness_sdf,
     )
     endpoint_order = resolve_endpoint_order(feature_selection.feature_group, endpoint_order)
 
@@ -514,6 +518,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--enable-dihedral', action='store_true', help='Enable signed dihedral for custom group')
     parser.add_argument('--enable-symmetry', action='store_true', help='Enable symmetry distance for custom group')
     parser.add_argument('--enable-density', action='store_true', help='Enable topology-local relative density for custom group')
+    parser.add_argument('--enable-thickness-sdf', action='store_true', help='Enable inward ray thickness for custom group')
     parser.add_argument('--endpoint-order', choices=('auto', *ENDPOINT_ORDERS), default='auto')
     parser.add_argument('--endpoint-seed', type=int, default=42)
     parser.add_argument(
@@ -531,6 +536,7 @@ def main(argv: list[str] | None = None) -> None:
             enable_dihedral=args.enable_dihedral,
             enable_symmetry=args.enable_symmetry,
             enable_density=args.enable_density,
+            enable_thickness_sdf=args.enable_thickness_sdf,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -568,6 +574,7 @@ def main(argv: list[str] | None = None) -> None:
             enable_dihedral=args.enable_dihedral,
             enable_symmetry=args.enable_symmetry,
             enable_density=args.enable_density,
+            enable_thickness_sdf=args.enable_thickness_sdf,
             endpoint_order=endpoint_order,
             endpoint_seed=args.endpoint_seed,
             label_source=args.label_source,

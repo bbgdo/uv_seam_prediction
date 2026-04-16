@@ -200,6 +200,34 @@ def _rotation_matrix_to_align(from_vec: np.ndarray, to_vec: np.ndarray) -> np.nd
     return np.eye(3) + skew + skew @ skew / (1 + dot)
 
 
+def _build_ray_intersector(mesh: trimesh.Trimesh, test_origin: np.ndarray, test_direction: np.ndarray):
+    for loader in [
+        lambda: __import__('trimesh.ray.ray_pyembree', fromlist=['RayMeshIntersector']).RayMeshIntersector,
+        lambda: __import__('trimesh.ray.ray_triangle', fromlist=['RayMeshIntersector']).RayMeshIntersector,
+    ]:
+        try:
+            cls = loader()
+            candidate = cls(mesh)
+            candidate.intersects_any(test_origin, test_direction)
+            return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _orthonormal_basis(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    ref = np.zeros(3, dtype=np.float64)
+    ref[int(np.argmin(np.abs(direction)))] = 1.0
+
+    t1 = np.cross(direction, ref)
+    if np.linalg.norm(t1) < 1e-12:
+        ref = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        t1 = np.cross(direction, ref)
+    t1 = _safe_normalize(t1[None, :])[0]
+    t2 = _safe_normalize(np.cross(direction, t1)[None, :])[0]
+    return t1, t2
+
+
 def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
     """Ambient occlusion per vertex via raycasting.
 
@@ -299,6 +327,129 @@ def _ao_normal_approximation(mesh: trimesh.Trimesh) -> np.ndarray:
     return np.clip(np.mean(np.maximum(alignment, 0), axis=1), 0, 1).astype(np.float32)
 
 
+
+
+def compute_edge_sdf(
+    mesh: trimesh.Trimesh,
+    unique_edges: np.ndarray,
+    edge_to_faces: dict,
+) -> np.ndarray:
+    """Inward ray thickness proxy per edge, normalized by bounding-box diagonal."""
+    n_edges = len(unique_edges)
+    if n_edges == 0:
+        return np.zeros(0, dtype=np.float32)
+
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    face_normals = np.asarray(mesh.face_normals, dtype=np.float64)
+    if len(vertices) == 0:
+        return np.ones(n_edges, dtype=np.float32)
+
+    bounds = np.asarray(mesh.bounds, dtype=np.float64)
+    bbox_diag = float(np.linalg.norm(bounds[1] - bounds[0])) if bounds.shape == (2, 3) else 0.0
+    if not np.isfinite(bbox_diag) or bbox_diag < 1e-12:
+        bbox_diag = 1e-12
+    epsilon = 1e-4 * bbox_diag
+    min_hit_distance = max(2.0 * epsilon, 1e-12)
+
+    edge_vi = unique_edges[:, 0].astype(np.int64)
+    edge_vj = unique_edges[:, 1].astype(np.int64)
+    midpoints = 0.5 * (vertices[edge_vi] + vertices[edge_vj])
+    edge_lengths = np.linalg.norm(vertices[edge_vj] - vertices[edge_vi], axis=1)
+
+    base_normals = np.zeros((n_edges, 3), dtype=np.float64)
+    source_face_sets: list[set[int]] = []
+    for edge_idx, (vi, vj) in enumerate(unique_edges):
+        key = canonical_edge_key(int(vi), int(vj))
+        faces = [
+            int(face_idx)
+            for face_idx in edge_to_faces.get(key, [])
+            if 0 <= int(face_idx) < len(face_normals)
+        ]
+        source_face_sets.append(set(faces))
+        if len(faces) >= 2:
+            base_normals[edge_idx] = face_normals[faces[0]] + face_normals[faces[1]]
+        elif len(faces) == 1:
+            base_normals[edge_idx] = face_normals[faces[0]]
+
+    normal_lengths = np.linalg.norm(base_normals, axis=1)
+    valid_edges = (normal_lengths > 1e-8) & (edge_lengths > 1e-12 * bbox_diag)
+    if not np.any(valid_edges):
+        return np.ones(n_edges, dtype=np.float32)
+
+    directions = -_safe_normalize(base_normals)
+    directions[~valid_edges] = np.array([0.0, 0.0, -1.0], dtype=np.float64)
+
+    cone_angle = np.deg2rad(17.5)
+    cos_a = float(np.cos(cone_angle))
+    sin_a = float(np.sin(cone_angle))
+    ray_directions = np.empty((n_edges, 5, 3), dtype=np.float64)
+    for edge_idx, direction in enumerate(directions):
+        if not valid_edges[edge_idx]:
+            ray_directions[edge_idx] = direction
+            continue
+
+        t1, t2 = _orthonormal_basis(direction)
+        rays = np.array([
+            direction,
+            cos_a * direction + sin_a * t1,
+            cos_a * direction - sin_a * t1,
+            cos_a * direction + sin_a * t2,
+            cos_a * direction - sin_a * t2,
+        ], dtype=np.float64)
+        ray_directions[edge_idx] = _safe_normalize(rays)
+
+    origins = midpoints + epsilon * directions
+    flat_origins = np.repeat(origins, 5, axis=0)
+    flat_directions = ray_directions.reshape((-1, 3))
+    valid_ray_mask = np.repeat(valid_edges, 5)
+    first_valid_ray = int(np.flatnonzero(valid_ray_mask)[0])
+
+    intersector = _build_ray_intersector(
+        mesh,
+        flat_origins[first_valid_ray:first_valid_ray + 1],
+        flat_directions[first_valid_ray:first_valid_ray + 1],
+    )
+    if intersector is None:
+        print('  [thickness_sdf] raycasting unavailable, using fallback distance')
+        return np.ones(n_edges, dtype=np.float32)
+
+    try:
+        hit_faces, hit_rays, hit_locations = intersector.intersects_id(
+            flat_origins,
+            flat_directions,
+            multiple_hits=True,
+            return_locations=True,
+        )
+    except Exception:
+        print('  [thickness_sdf] raycasting failed, using fallback distance')
+        return np.ones(n_edges, dtype=np.float32)
+
+    nearest_by_ray = np.full(len(flat_origins), np.inf, dtype=np.float64)
+    for face_idx, ray_idx, location in zip(hit_faces, hit_rays, hit_locations):
+        ray_idx = int(ray_idx)
+        if ray_idx < 0 or ray_idx >= len(flat_origins) or not valid_ray_mask[ray_idx]:
+            continue
+
+        edge_idx = ray_idx // 5
+        if int(face_idx) in source_face_sets[edge_idx]:
+            continue
+
+        distance = float(np.linalg.norm(np.asarray(location, dtype=np.float64) - flat_origins[ray_idx]))
+        if not np.isfinite(distance) or distance <= min_hit_distance:
+            continue
+        if distance < nearest_by_ray[ray_idx]:
+            nearest_by_ray[ray_idx] = distance
+
+    distances = np.full(n_edges, bbox_diag, dtype=np.float64)
+    nearest_by_edge = nearest_by_ray.reshape((n_edges, 5))
+    for edge_idx in np.flatnonzero(valid_edges):
+        valid_distances = nearest_by_edge[edge_idx][np.isfinite(nearest_by_edge[edge_idx])]
+        if len(valid_distances) > 0:
+            distances[edge_idx] = float(np.median(valid_distances))
+
+    thickness = np.clip(distances / bbox_diag, 0.0, 1.0)
+    thickness[~np.isfinite(thickness)] = 1.0
+    return thickness.astype(np.float32)
 
 
 def detect_symmetry_axis(
@@ -507,6 +658,9 @@ def _compute_atomic_edge_columns(
         columns['density_mean'] = density_mean
         columns['density_diff'] = density_diff
 
+    if 'thickness_sdf' in feature_names:
+        columns['thickness_sdf'] = compute_edge_sdf(mesh, unique_edges, edge_to_faces)
+
     return columns
 
 
@@ -541,6 +695,7 @@ def compute_edge_features(
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
     enable_density: bool = False,
+    enable_thickness_sdf: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """Backward-compatible wrapper for resolved edge feature computation."""
     group = feature_group if feature_group is not None else feature_preset
@@ -550,6 +705,7 @@ def compute_edge_features(
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,
         enable_density=enable_density,
+        enable_thickness_sdf=enable_thickness_sdf,
     )
     return compute_edge_features_for_selection(mesh, selection, endpoint_order=endpoint_order, rng_seed=rng_seed)
 

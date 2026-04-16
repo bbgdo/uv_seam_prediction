@@ -19,6 +19,7 @@ AO_FEATURE_NAMES = ('ao_i', 'ao_j')
 SIGNED_DIHEDRAL_FEATURE_NAMES = ('signed_dihedral',)
 SYMMETRY_FEATURE_NAMES = ('symmetry_dist',)
 DENSITY_FEATURE_NAMES = ('density_mean', 'density_diff')
+THICKNESS_SDF_FEATURE_NAMES = ('thickness_sdf',)
 
 EXTENDED18_FEATURE_NAMES = (
     *_I_BASE,
@@ -38,6 +39,7 @@ ALL_ATOMIC_FEATURE_NAMES = (
     'symmetry_dist',
     'density_mean',
     'density_diff',
+    'thickness_sdf',
 )
 
 DENSITY_CONFIG = {
@@ -54,6 +56,7 @@ class FeatureFlags:
     signed_dihedral: bool = False
     symmetry: bool = False
     density: bool = False
+    thickness_sdf: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {
@@ -61,6 +64,7 @@ class FeatureFlags:
             'signed_dihedral': self.signed_dihedral,
             'symmetry': self.symmetry,
             'density': self.density,
+            'thickness_sdf': self.thickness_sdf,
         }
 
     def any_enabled(self) -> bool:
@@ -142,6 +146,8 @@ def _custom_feature_names(flags: FeatureFlags) -> tuple[str, ...]:
         names.extend(SYMMETRY_FEATURE_NAMES)
     if flags.density:
         names.extend(DENSITY_FEATURE_NAMES)
+    if flags.thickness_sdf:
+        names.extend(THICKNESS_SDF_FEATURE_NAMES)
     return tuple(names)
 
 
@@ -153,6 +159,7 @@ def resolve_feature_selection(
     enable_signed_dihedral: bool | None = None,
     enable_symmetry: bool = False,
     enable_density: bool = False,
+    enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
     """Resolve a named bundle plus explicit extras into ordered feature names."""
     group_name = _normalize_group_name(feature_group)
@@ -162,6 +169,7 @@ def resolve_feature_selection(
         signed_dihedral=bool(signed_dihedral),
         symmetry=bool(enable_symmetry),
         density=bool(enable_density),
+        thickness_sdf=bool(enable_thickness_sdf),
     )
 
     if group_name != 'custom':
