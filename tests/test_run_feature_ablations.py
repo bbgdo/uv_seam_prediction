@@ -242,13 +242,29 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             group_mode='family',
             epochs=3,
         )
+        gatv2_paper_command = build_train_command(
+            spec=EXPERIMENT_SPECS['paper14_locked'],
+            paper_dataset='paper.pt',
+            custom_dataset='custom.pt',
+            run_dir=Path('runs') / 'gatv2_paper',
+            split_json=Path('splits') / 'seed_7.json',
+            seed=7,
+            resolution_tag='all',
+            group_mode='family',
+            epochs=3,
+            model='gatv2',
+        )
 
         self.assertEqual(paper_command[0], sys.executable)
         self.assertIn(str(Path('tools') / 'run_baseline.py'), paper_command)
         self.assertIn('--split-json-in', paper_command)
         self.assertNotIn('--split-json-out', paper_command)
+        self.assertEqual(paper_command[paper_command.index('--model') + 1], 'graphsage')
         self.assertIn('--strict-paper-protocol', paper_command)
         self.assertNotIn('--strict-paper-protocol', custom_command)
+        self.assertEqual(gatv2_paper_command[gatv2_paper_command.index('--model') + 1], 'gatv2')
+        self.assertEqual(gatv2_paper_command[gatv2_paper_command.index('--preset') + 1], 'extended')
+        self.assertNotIn('--strict-paper-protocol', gatv2_paper_command)
         self.assertIn('--enable-ao', custom_command)
         self.assertIn('--enable-dihedral', custom_command)
         self.assertIn('--enable-symmetry', custom_command)

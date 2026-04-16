@@ -168,6 +168,8 @@ def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeat
 
 def validate_strict_paper_protocol(args: argparse.Namespace, dataset: list[Data]) -> None:
     failures = []
+    if getattr(args, 'model', 'graphsage') != 'graphsage':
+        failures.append('strict paper protocol is only supported for GraphSAGE')
     if args.preset != 'paper':
         failures.append("preset must be 'paper'")
     if not getattr(args, 'resolution_tag', None):
@@ -336,6 +338,7 @@ def _logger_config(
     payload = {
         'model': display_name,
         'model_name': config.model_name,
+        'hidden': config.hidden_size,
         'in_dim': config.in_dim,
         'hidden_dim': config.hidden_size,
         'num_layers': config.num_layers,
@@ -562,6 +565,13 @@ def train_baseline(args: argparse.Namespace) -> None:
         best_epoch=best_epoch,
         extra_summary={
             'seed': seed,
+            'model_name': config.model_name,
+            'hidden': config.hidden_size,
+            'hidden_dim': config.hidden_size,
+            'heads': config.heads if config.model_name == 'gatv2' else None,
+            'num_layers': config.num_layers,
+            'dropout': config.dropout,
+            'lr': config.lr,
             'group_mode': effective_group_mode,
             'split_json_in': str(args.split_json_in) if args.split_json_in else None,
             'split_json_out': str(args.split_json_out) if args.split_json_out else None,

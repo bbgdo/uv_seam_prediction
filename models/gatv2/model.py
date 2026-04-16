@@ -8,41 +8,53 @@ class DualGATv2(nn.Module):
     """GATv2 for edge classification via dual graph node classification.
 
     On the dual graph, each node = original edge, each edge = face adjacency.
-    Node features = 18-dim edge features (endpoint concatenation).
-    Output = per-node (= per-original-edge) seam probability logit.
+    Output is one seam logit per dual node / original edge.
     """
 
     def __init__(
         self,
         in_dim: int = 18,
-        hidden_dim: int = 64,
-        heads: int = 8,
+        hidden_dim: int = 32,
+        heads: int = 4,
         num_layers: int = 3,
         dropout: float = 0.3,
     ):
         super().__init__()
+        if num_layers < 1:
+            raise ValueError('num_layers must be at least 1')
+        if hidden_dim < 2:
+            raise ValueError('hidden_dim must be at least 2')
+        if heads < 1:
+            raise ValueError('heads must be at least 1')
+
         self.num_layers = num_layers
         self.dropout = dropout
 
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList()
 
-        # first layer: in_dim -> hidden_dim * heads
-        self.convs.append(GATv2Conv(in_dim, hidden_dim, heads=heads, dropout=dropout))
-        self.norms.append(nn.LayerNorm(hidden_dim * heads))
+        layer_in_dim = in_dim
+        for layer_idx in range(num_layers):
+            is_last_attention = layer_idx == num_layers - 1
+            layer_heads = 1 if is_last_attention else heads
+            concat = not is_last_attention
+            layer_out_dim = hidden_dim if is_last_attention else hidden_dim * heads
 
-        # middle layers: hidden_dim * heads -> hidden_dim * heads (with residuals)
-        for _ in range(num_layers - 2):
-            self.convs.append(GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, dropout=dropout))
-            self.norms.append(nn.LayerNorm(hidden_dim * heads))
-
-        # final conv: single head for output
-        self.convs.append(GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, dropout=dropout))
-        self.norms.append(nn.LayerNorm(hidden_dim))
+            self.convs.append(
+                GATv2Conv(
+                    layer_in_dim,
+                    hidden_dim,
+                    heads=layer_heads,
+                    concat=concat,
+                    dropout=dropout,
+                )
+            )
+            self.norms.append(nn.LayerNorm(layer_out_dim))
+            layer_in_dim = layer_out_dim
 
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
+            nn.ELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 2, 1),
         )
@@ -54,7 +66,6 @@ class DualGATv2(nn.Module):
             h = F.elu(h)
             h = F.dropout(h, p=self.dropout, training=self.training)
 
-            # residual for layers where dims match (middle layers)
             if i > 0 and h.shape == x.shape:
                 h = h + x
             x = h

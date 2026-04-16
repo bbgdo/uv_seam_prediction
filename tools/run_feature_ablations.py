@@ -16,6 +16,7 @@ from models.utils.dataset import (  # noqa: E402
     load_split_json_metadata,
     split_dataset,
 )
+from models.baselines.registry import SUPPORTED_BASELINES  # noqa: E402
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection  # noqa: E402
 
 
@@ -380,22 +381,24 @@ def build_train_command(
     resolution_tag: str,
     group_mode: str,
     epochs: int,
+    model: str = 'graphsage',
 ) -> list[str]:
     dataset = paper_dataset if spec.dataset_role == 'paper' else custom_dataset
     if not dataset:
         raise ValueError(f"{spec.name} requires a {spec.dataset_role} dataset")
 
+    preset = 'paper' if model == 'graphsage' else 'extended'
     command = [
         sys.executable,
         str(Path('tools') / 'run_baseline.py'),
         '--model',
-        'graphsage',
+        model,
         '--dataset',
         dataset,
         '--run-dir',
         str(run_dir),
         '--preset',
-        'paper',
+        preset,
         '--resolution-tag',
         resolution_tag,
         '--group-mode',
@@ -417,7 +420,7 @@ def build_train_command(
         command.append('--enable-symmetry')
     if spec.enable_density:
         command.append('--enable-density')
-    if spec.strict_paper_protocol:
+    if spec.strict_paper_protocol and model == 'graphsage':
         command.append('--strict-paper-protocol')
     return command
 
@@ -547,10 +550,10 @@ def build_experiment_payload(
     selection = experiment_feature_selection(spec.name)
     return {
         'experiment': spec.name,
-        'model': 'graphsage',
+        'model': getattr(args, 'model', 'graphsage'),
         'dataset_role': spec.dataset_role,
         'dataset': args.paper_dataset if spec.dataset_role == 'paper' else args.custom_dataset,
-        'preset': 'paper',
+        'preset': 'paper' if getattr(args, 'model', 'graphsage') == 'graphsage' else 'extended',
         'strict_paper_protocol': spec.strict_paper_protocol,
         'feature_group': spec.feature_group,
         'feature_flags': selection.feature_flags.as_dict(),
@@ -646,6 +649,7 @@ def run_experiment(
             resolution_tag=args.resolution_tag,
             group_mode=args.group_mode,
             epochs=args.epochs,
+            model=getattr(args, 'model', 'graphsage'),
         )
 
         print(f"{spec.name} seed {seed}: running")
@@ -741,8 +745,9 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Run fixed-split GraphSAGE feature ablations with endpoint-order safety checks.'
+        description='Run fixed-split baseline feature ablations with endpoint-order safety checks.'
     )
+    parser.add_argument('--model', choices=SUPPORTED_BASELINES, default='graphsage')
     parser.add_argument('--paper-dataset', default=None, help='locked paper14 dual dataset')
     parser.add_argument('--custom-dataset', default=None, help='custom superset dual dataset')
     parser.add_argument(

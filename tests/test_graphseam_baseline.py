@@ -9,9 +9,10 @@ import torch
 import trimesh
 from torch_geometric.data import Data
 
+from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
 from models.dual_graphsage.train import validate_strict_paper_protocol
-from models.common.baseline_train import apply_runtime_feature_selection
+from models.common.baseline_train import _model_kwargs, apply_runtime_feature_selection, build_runtime_config
 from models.baselines.registry import get_baseline
 from tools.run_baseline import parse_args as parse_baseline_args
 from models.utils.experiment_log import ExperimentLogger
@@ -55,7 +56,9 @@ def _skewed_density_mesh() -> trimesh.Trimesh:
 class GraphSeamBaselineTests(unittest.TestCase):
     def test_baseline_registry_exposes_supported_models(self):
         self.assertIs(get_baseline('graphsage').model_class, DualGraphSAGE)
-        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 64)
+        self.assertIs(get_baseline('gatv2').model_class, DualGATv2)
+        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 32)
+        self.assertEqual(get_baseline('gatv2').default_config_overrides['heads'], 4)
 
     def test_unified_runner_defaults_graphsage_and_gatv2(self):
         graphsage_args = parse_baseline_args(['--epochs', '1'])
@@ -65,7 +68,8 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(graphsage_args.hidden, 128)
         self.assertEqual(graphsage_args.lr, 1e-3)
         self.assertEqual(gatv2_args.model, 'gatv2')
-        self.assertEqual(gatv2_args.hidden, 64)
+        self.assertEqual(gatv2_args.hidden, 32)
+        self.assertEqual(gatv2_args.heads, 4)
         self.assertEqual(gatv2_args.lr, 5e-4)
 
     def test_feature_preset_shapes(self):
@@ -180,6 +184,49 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
             apply_runtime_feature_selection([data], requested)
 
+    def test_runtime_feature_selection_accepts_paper14_locked_shape(self):
+        requested = resolve_feature_selection('paper14')
+        data = Data(x=torch.zeros(2, 14))
+        data.feature_preset = 'paper14'
+
+        apply_runtime_feature_selection([data], requested)
+
+        self.assertEqual(data.x.shape, (2, 14))
+
+    def test_gatv2_forward_returns_one_logit_per_dual_node(self):
+        model = DualGATv2(in_dim=14, hidden_dim=32, heads=4, num_layers=3, dropout=0.1)
+        x = torch.randn(5, 14)
+        edge_index = torch.tensor([
+            [0, 1, 2, 3, 4, 0],
+            [1, 2, 3, 4, 0, 2],
+        ], dtype=torch.long)
+
+        out = model(x, edge_index)
+
+        self.assertEqual(out.shape, (5,))
+
+    def test_shared_trainer_instantiates_gatv2_with_runtime_dims(self):
+        args = parse_baseline_args([
+            '--model', 'gatv2',
+            '--epochs', '1',
+            '--feature-group', 'custom',
+            '--enable-ao',
+            '--enable-density',
+        ])
+        selection = resolve_feature_selection('custom', enable_ao=True, enable_density=True)
+        args.in_dim = selection.feature_count
+        config = build_runtime_config(args)
+        definition = get_baseline(config.model_name)
+
+        model = definition.model_class(**_model_kwargs(config))
+        x = torch.randn(4, selection.feature_count)
+        edge_index = torch.tensor([
+            [0, 1, 2, 3],
+            [1, 2, 3, 0],
+        ], dtype=torch.long)
+
+        self.assertEqual(model(x, edge_index).shape, (4,))
+
     def test_lstm_graphsage_forward(self):
         model = DualGraphSAGE(
             in_dim=14,
@@ -240,6 +287,22 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, 'resolution_tag must be set'):
+            validate_strict_paper_protocol(args, [data])
+
+    def test_strict_paper_protocol_is_graphsage_specific(self):
+        data = Data(x=torch.zeros(3, 14))
+        data.label_source = 'exact_obj'
+        data.feature_preset = 'paper14'
+        args = Namespace(
+            model='gatv2',
+            preset='paper',
+            resolution_tag='all',
+            in_dim=14,
+            aggr='lstm',
+            skip_connections='all',
+        )
+
+        with self.assertRaisesRegex(ValueError, 'only supported for GraphSAGE'):
             validate_strict_paper_protocol(args, [data])
 
     def test_summary_export_contains_threshold_metrics(self):
