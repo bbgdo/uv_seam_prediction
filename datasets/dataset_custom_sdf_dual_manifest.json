@@ -1,0 +1,82 @@
+{
+  "aggregate_pos_weight": 40.55466351829988,
+  "aggregate_seam_ratio": 0.024064687698881718,
+  "dataset_path": "datasets\\dataset_custom_sdf_dual.pt",
+  "endpoint_order": "fixed",
+  "feature_flags": {
+    "ao": false,
+    "density": false,
+    "signed_dihedral": false,
+    "symmetry": false,
+    "thickness_sdf": true
+  },
+  "feature_group": "custom",
+  "feature_names": [
+    "pos_x_i",
+    "pos_y_i",
+    "pos_z_i",
+    "normal_x_i",
+    "normal_y_i",
+    "normal_z_i",
+    "gauss_curv_i",
+    "pos_x_j",
+    "pos_y_j",
+    "pos_z_j",
+    "normal_x_j",
+    "normal_y_j",
+    "normal_z_j",
+    "gauss_curv_j",
+    "thickness_sdf"
+  ],
+  "feature_preset": "custom",
+  "label_source": "exact_obj",
+  "mesh_count": 5,
+  "meshes": [
+    {
+      "boundary_edges": 58,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001.obj",
+      "nodes": 5629,
+      "seam_edges": 615,
+      "unique_edges": 16832
+    },
+    {
+      "boundary_edges": 58,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_aug0.obj",
+      "nodes": 5629,
+      "seam_edges": 615,
+      "unique_edges": 16832
+    },
+    {
+      "boundary_edges": 58,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_aug1.obj",
+      "nodes": 5629,
+      "seam_edges": 615,
+      "unique_edges": 16832
+    },
+    {
+      "boundary_edges": 112,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_h.obj",
+      "nodes": 20951,
+      "seam_edges": 1195,
+      "unique_edges": 62744
+    },
+    {
+      "boundary_edges": 112,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_h_aug0.obj",
+      "nodes": 20951,
+      "seam_edges": 1195,
+      "unique_edges": 62744
+    }
+  ],
+  "total_boundary_edges": 398,
+  "total_directed_edges": 351968,
+  "total_nodes": 58789,
+  "total_seam_edges": 4235,
+  "total_unique_edges": 175984,
+  "weld_mode": "exact"
+}
