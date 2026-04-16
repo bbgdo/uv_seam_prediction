@@ -111,14 +111,6 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
             validate_custom_dataset_metadata([_custom_data(list(PAPER14_FEATURE_NAMES))], ['full_custom'])
 
-    def test_ablation_selection_requires_custom_control(self):
-        validate_experiment_selection(['paper14_locked'])
-        validate_experiment_selection(['custom14_control'])
-        validate_experiment_selection(['custom14_control', 'ao_only'])
-
-        with self.assertRaisesRegex(ValueError, 'custom14_control'):
-            validate_experiment_selection(['ao_only'])
-
     def test_split_generation_and_validation_reuse_dataset_agnostic_files(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

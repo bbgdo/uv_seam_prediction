@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import math
 import statistics
@@ -27,6 +28,7 @@ from tools.run_feature_ablations import EXPERIMENT_SPECS, split_path_for_seed  #
 
 METRIC_KEYS = ('precision', 'recall', 'f1', 'fpr', 'tpr', 'accuracy')
 DELTA_KEYS = ('fpr', 'recall', 'f1', 'accuracy')
+PAIRED_DELTA_KEYS = METRIC_KEYS
 DEFAULT_REPORT_GRID = tuple([round(value / 100, 2) for value in range(90, 100)] + [0.995, 0.999])
 REEVAL_FILENAME = 'reeval_exact_threshold.json'
 AGGREGATE_FILENAME = 'reeval_aggregate.json'
@@ -51,6 +53,13 @@ class SavedRun:
     seed: int
     config: dict[str, Any]
     summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ReferenceControlSet:
+    reference_control_dir: Path
+    experiment_name: str
+    by_seed: dict[int, dict[str, Any]]
 
 
 def _read_json(path: Path) -> Any:
@@ -85,6 +94,123 @@ def _metric_delta(new_metrics: dict[str, Any] | None, old_metrics: dict[str, Any
         )
         for metric in DELTA_KEYS
     }
+
+
+def _canonicalize_for_hash(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _canonicalize_for_hash(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        normalized = [_canonicalize_for_hash(item) for item in value]
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(',', ':')),
+        )
+    return value
+
+
+def _split_fingerprint(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    payload = _read_json(path)
+    canonical = json.dumps(_canonicalize_for_hash(payload), sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def _resolve_existing_split_path(raw_path: str | None, *, reeval_path: Path | None = None) -> Path | None:
+    if not raw_path:
+        return None
+    split_path = Path(raw_path)
+    candidates = [split_path]
+    if not split_path.is_absolute():
+        candidates.append(Path.cwd() / split_path)
+        if reeval_path is not None:
+            candidates.append(reeval_path.parent / split_path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _split_identity(row: dict[str, Any], *, reeval_path: Path | None = None) -> dict[str, Any]:
+    existing = row.get('split_identity') if isinstance(row.get('split_identity'), dict) else {}
+    raw_path = row.get('split_path') or existing.get('split_path')
+    seed = int(row['run_identity']['seed'])
+    split_path = _resolve_existing_split_path(raw_path, reeval_path=reeval_path)
+    basename = Path(raw_path).name if raw_path else None
+    fingerprint = existing.get('fingerprint')
+    if fingerprint is None and split_path is not None:
+        fingerprint = _split_fingerprint(split_path)
+    return {
+        'seed': seed,
+        'split_path': str(raw_path) if raw_path else None,
+        'split_path_basename': basename,
+        'fingerprint': fingerprint,
+    }
+
+
+def _split_identities_match(target: dict[str, Any], control: dict[str, Any]) -> tuple[bool, str, str]:
+    if int(target['seed']) != int(control['seed']):
+        return False, 'seed_mismatch', 'seed'
+    if target.get('fingerprint') and control.get('fingerprint'):
+        if target['fingerprint'] == control['fingerprint']:
+            return True, 'matched', 'split_content_fingerprint'
+        return False, 'split_content_fingerprint_mismatch', 'split_content_fingerprint'
+    if (
+        target.get('split_path_basename')
+        and control.get('split_path_basename')
+        and target['split_path_basename'] == control['split_path_basename']
+    ):
+        return True, 'matched', 'split_path_basename_plus_seed'
+    return False, 'split_identity_unavailable_or_mismatch', 'split_path_basename_plus_seed'
+
+
+def _exact_test_metrics(row: dict[str, Any], *, source: str) -> dict[str, float]:
+    try:
+        metrics = row['metrics']['test']['exact_val_best']
+    except KeyError as exc:
+        raise ValueError(f'{source} is missing metrics.test.exact_val_best') from exc
+    missing = [metric for metric in PAIRED_DELTA_KEYS if metrics.get(metric) is None]
+    if missing:
+        raise ValueError(f'{source} missing exact-threshold test metric(s): {", ".join(missing)}')
+    return {metric: float(metrics[metric]) for metric in PAIRED_DELTA_KEYS}
+
+
+def load_reference_control_reevaluations(reference_control_dir: str | Path) -> ReferenceControlSet:
+    root = Path(reference_control_dir)
+    if not root.exists():
+        raise ValueError(f'--reference-control-dir does not exist: {root}')
+
+    by_seed: dict[int, dict[str, Any]] = {}
+    experiment_names = []
+    for reeval_path in sorted(root.rglob(REEVAL_FILENAME)):
+        payload = _read_json(reeval_path)
+        if not isinstance(payload, dict) or payload.get('status') != 'completed':
+            continue
+        if 'run_identity' not in payload or payload['run_identity'].get('seed') is None:
+            raise ValueError(f'{reeval_path} is missing run_identity.seed')
+        seed = int(payload['run_identity']['seed'])
+        if seed in by_seed:
+            raise ValueError(f'duplicate reference control reevaluation for seed {seed}: {reeval_path}')
+        _exact_test_metrics(payload, source=str(reeval_path))
+        by_seed[seed] = {
+            'payload': payload,
+            'reeval_path': str(reeval_path),
+            'split_identity': _split_identity(payload, reeval_path=reeval_path),
+        }
+        experiment = payload['run_identity'].get('experiment')
+        if experiment:
+            experiment_names.append(str(experiment))
+
+    if not by_seed:
+        raise ValueError(f'no authoritative {REEVAL_FILENAME} files found under {root}')
+
+    unique_names = sorted(set(experiment_names))
+    experiment_name = unique_names[0] if len(unique_names) == 1 else root.name
+    return ReferenceControlSet(
+        reference_control_dir=root,
+        experiment_name=experiment_name,
+        by_seed=by_seed,
+    )
 
 
 def build_report_grid(spec: str | None = None) -> list[float]:
@@ -559,6 +685,7 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
             },
         },
     }
+    payload['split_identity'] = _split_identity(payload)
     return payload
 
 
@@ -611,7 +738,7 @@ def _paired_delta_vs_control(
         row = {'seed': seed}
         metrics = by_seed[seed]['metrics']['test']['exact_val_best']
         control_metrics = control_by_seed[seed]['metrics']['test']['exact_val_best']
-        for metric in DELTA_KEYS:
+        for metric in PAIRED_DELTA_KEYS:
             row[metric] = float(metrics[metric]) - float(control_metrics[metric])
         per_seed.append(row)
     return {
@@ -620,11 +747,74 @@ def _paired_delta_vs_control(
         'paired_seed_count': len(per_seed),
         'paired_seeds': paired_seeds,
         'per_seed': per_seed,
-        'summary': {metric: _mean_std([float(row[metric]) for row in per_seed]) for metric in DELTA_KEYS},
+        'summary': {metric: _mean_std([float(row[metric]) for row in per_seed]) for metric in PAIRED_DELTA_KEYS},
     }
 
 
-def aggregate_reevaluations(results: list[dict[str, Any]]) -> dict[str, Any]:
+def _paired_delta_vs_reference_control(
+    experiment: str,
+    rows: list[dict[str, Any]],
+    reference_control: ReferenceControlSet,
+) -> dict[str, Any]:
+    by_seed = {int(row['run_identity']['seed']): row for row in rows}
+    per_seed = []
+    skipped = []
+
+    for seed in sorted(by_seed):
+        target = by_seed[seed]
+        control = reference_control.by_seed.get(seed)
+        if control is None:
+            skipped.append({'seed': seed, 'reason': 'missing_reference_control_seed'})
+            continue
+
+        target_identity = _split_identity(target)
+        control_identity = control['split_identity']
+        matched, reason, method = _split_identities_match(target_identity, control_identity)
+        if not matched:
+            skipped.append({
+                'seed': seed,
+                'reason': reason,
+                'identity_check': method,
+                'target_split_identity': target_identity,
+                'control_split_identity': control_identity,
+            })
+            continue
+
+        metrics = _exact_test_metrics(target, source=f'{experiment} seed {seed}')
+        control_metrics = _exact_test_metrics(
+            control['payload'],
+            source=f'{reference_control.experiment_name} seed {seed}',
+        )
+        row = {
+            'seed': seed,
+            'identity_check': method,
+        }
+        for metric in PAIRED_DELTA_KEYS:
+            row[metric] = float(metrics[metric]) - float(control_metrics[metric])
+        per_seed.append(row)
+
+    if not per_seed:
+        raise ValueError(
+            f'no valid external control pairings remain for experiment {experiment}; '
+            f'skipped seeds: {skipped}'
+        )
+
+    return {
+        'experiment': experiment,
+        'control': reference_control.experiment_name,
+        'paired_seed_count': len(per_seed),
+        'paired_seeds': [int(row['seed']) for row in per_seed],
+        'skipped_seeds': skipped,
+        'per_seed': per_seed,
+        'summary': {metric: _mean_std([float(row[metric]) for row in per_seed]) for metric in PAIRED_DELTA_KEYS},
+    }
+
+
+def aggregate_reevaluations(
+    results: list[dict[str, Any]],
+    *,
+    reference_control: ReferenceControlSet | None = None,
+) -> dict[str, Any]:
     completed = [row for row in results if row.get('status') == 'completed']
     experiments = sorted({row['run_identity'].get('experiment') or 'unscoped' for row in completed})
     by_experiment = {
@@ -656,11 +846,32 @@ def aggregate_reevaluations(results: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             paired_vs_control[experiment] = _paired_delta_vs_control(experiment, rows, control_rows)
 
-    return {
+    payload = {
         'run_count': len(completed),
         'experiments': experiment_summaries,
         'paired_delta_vs_custom14_control': paired_vs_control,
     }
+
+    if reference_control is not None:
+        paired_vs_reference = {}
+        for experiment, rows in by_experiment.items():
+            if experiment == reference_control.experiment_name:
+                continue
+            paired_vs_reference[experiment] = _paired_delta_vs_reference_control(
+                experiment,
+                rows,
+                reference_control,
+            )
+        if not paired_vs_reference and completed:
+            raise ValueError('no target experiments remain for external reference control pairing')
+        payload['external_reference_control'] = {
+            'reference_control_dir': str(reference_control.reference_control_dir),
+            'reference_experiment_name': reference_control.experiment_name,
+            'seeds_loaded': sorted(reference_control.by_seed),
+        }
+        payload['paired_delta_vs_reference_control'] = paired_vs_reference
+
+    return payload
 
 
 def resolve_device(name: str) -> torch.device:
@@ -681,6 +892,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--seeds', type=int, nargs='+', default=None, help='seed numbers to reevaluate')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='auto')
     parser.add_argument('--report-grid', default=None, help='comma list or start:stop:step threshold grid')
+    parser.add_argument('--reference-control-dir', default=None, help='previously reevaluated control experiment dir')
     parser.add_argument('--write-json', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--dry-run', action='store_true', help='show matching runs without running inference')
     return parser.parse_args(argv)
@@ -699,6 +911,11 @@ def main(argv: list[str] | None = None) -> None:
                 )
             return
 
+        reference_control = (
+            load_reference_control_reevaluations(args.reference_control_dir)
+            if args.reference_control_dir
+            else None
+        )
         device = resolve_device(args.device)
         results = []
         for target in targets:
@@ -709,11 +926,18 @@ def main(argv: list[str] | None = None) -> None:
                 _write_json(target.run_dir / REEVAL_FILENAME, payload)
                 print(f"  wrote {target.run_dir / REEVAL_FILENAME}")
 
-        if args.write_json and len(results) > 1:
-            aggregate = aggregate_reevaluations(results)
+        if args.write_json and (len(results) > 1 or reference_control is not None):
+            aggregate = aggregate_reevaluations(results, reference_control=reference_control)
             output_path = Path(args.runs_root) / AGGREGATE_FILENAME
             _write_json(output_path, aggregate)
             print(f"aggregate written -> {output_path}")
+            for experiment, delta in aggregate.get('paired_delta_vs_reference_control', {}).items():
+                skipped = delta.get('skipped_seeds') or []
+                if skipped:
+                    print(
+                        f"warning: external control pairing for {experiment} skipped {len(skipped)} seed(s)",
+                        file=sys.stderr,
+                    )
     except ValueError as exc:
         raise SystemExit(f'error: {exc}') from exc
 

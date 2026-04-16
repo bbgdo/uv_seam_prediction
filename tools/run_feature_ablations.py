@@ -144,15 +144,7 @@ def get_experiment_spec(name: str) -> ExperimentSpec:
 
 
 def validate_experiment_selection(experiment_names: list[str]) -> None:
-    ablations = [
-        name for name in experiment_names
-        if name not in {'paper14_locked', 'custom14_control'}
-    ]
-    if ablations and 'custom14_control' not in experiment_names:
-        raise ValueError(
-            "custom feature ablations require 'custom14_control' in --experiments "
-            "so paired deltas use the proper control"
-        )
+    return None
 
 
 def split_path_for_seed(splits_dir: Path, seed: int) -> Path:

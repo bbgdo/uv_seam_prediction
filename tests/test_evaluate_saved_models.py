@@ -14,22 +14,42 @@ from tools.evaluate_saved_models import (
     compute_threshold_metrics_fast,
     discover_saved_runs,
     exact_validation_threshold,
+    load_reference_control_reevaluations,
 )
 
 
-def _metrics(f1: float, fpr: float) -> dict:
+def _metrics(
+    f1: float,
+    fpr: float,
+    *,
+    precision: float = 0.7,
+    recall: float = 0.6,
+    accuracy: float = 0.8,
+) -> dict:
     return {
-        'precision': 0.7,
-        'recall': 0.6,
+        'precision': precision,
+        'recall': recall,
         'f1': f1,
         'fpr': fpr,
-        'tpr': 0.6,
-        'accuracy': 0.8,
+        'tpr': recall,
+        'accuracy': accuracy,
         'threshold': 0.9,
     }
 
 
-def _reeval(experiment: str, seed: int, exact_f1: float, half_f1: float, delta_f1: float) -> dict:
+def _reeval(
+    experiment: str,
+    seed: int,
+    exact_f1: float,
+    half_f1: float,
+    delta_f1: float,
+    *,
+    split_path: Path | None = None,
+    precision: float = 0.7,
+    recall: float = 0.6,
+    fpr: float = 0.05,
+    accuracy: float = 0.8,
+) -> dict:
     return {
         'status': 'completed',
         'run_identity': {
@@ -38,9 +58,16 @@ def _reeval(experiment: str, seed: int, exact_f1: float, half_f1: float, delta_f
             'run_dir': f'runs/{experiment}/seed_{seed}',
             'dataset_role': 'custom',
         },
+        'split_path': str(split_path) if split_path is not None else f'splits/seed_{seed}.json',
         'metrics': {
             'test': {
-                'exact_val_best': _metrics(exact_f1, 0.05),
+                'exact_val_best': _metrics(
+                    exact_f1,
+                    fpr,
+                    precision=precision,
+                    recall=recall,
+                    accuracy=accuracy,
+                ),
                 'threshold_0_5': _metrics(half_f1, 0.1),
             },
         },
@@ -55,6 +82,41 @@ def _reeval(experiment: str, seed: int, exact_f1: float, half_f1: float, delta_f
             },
         },
     }
+
+
+def _write_split(path: Path, *, seed: int, train: list[str] | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        'train_group_ids': train or ['train'],
+        'val_group_ids': ['val'],
+        'test_group_ids': ['test'],
+        'seed': seed,
+        'group_mode': 'family',
+        'dataset_path': None,
+        'resolution_tag': 'all',
+    }))
+
+
+def _write_reference_reeval(
+    reference_dir: Path,
+    *,
+    seed: int,
+    split_path: Path,
+    f1: float,
+    precision: float = 0.7,
+) -> None:
+    run_dir = reference_dir / f'seed_{seed}'
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = _reeval(
+        'custom14_control',
+        seed,
+        exact_f1=f1,
+        half_f1=0.1,
+        delta_f1=0.0,
+        split_path=split_path,
+        precision=precision,
+    )
+    (run_dir / 'reeval_exact_threshold.json').write_text(json.dumps(payload))
 
 
 def _metrics_at_threshold_numpy(probs: np.ndarray, labels: np.ndarray, threshold: float) -> dict:
@@ -251,6 +313,133 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             payload['paired_delta_vs_custom14_control']['ao_only']['paired_seed_count'],
             2,
         )
+        self.assertNotIn('external_reference_control', payload)
+
+    def test_load_reference_control_reevaluations_by_seed(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            split_path = root / 'splits' / 'seed_1.json'
+            _write_split(split_path, seed=1)
+            reference_dir = root / 'experiments' / 'custom14_control'
+            _write_reference_reeval(reference_dir, seed=1, split_path=split_path, f1=0.42)
+
+            reference = load_reference_control_reevaluations(reference_dir)
+
+        self.assertEqual(reference.experiment_name, 'custom14_control')
+        self.assertEqual(sorted(reference.by_seed), [1])
+        self.assertAlmostEqual(
+            reference.by_seed[1]['payload']['metrics']['test']['exact_val_best']['f1'],
+            0.42,
+        )
+        self.assertIsNotNone(reference.by_seed[1]['split_identity']['fingerprint'])
+
+    def test_external_control_pairing_succeeds_with_matching_seed_and_split(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            split_path = root / 'splits' / 'seed_1.json'
+            _write_split(split_path, seed=1)
+            reference_dir = root / 'experiments' / 'custom14_control'
+            _write_reference_reeval(
+                reference_dir,
+                seed=1,
+                split_path=split_path,
+                f1=0.50,
+                precision=0.60,
+            )
+            reference = load_reference_control_reevaluations(reference_dir)
+
+            payload = aggregate_reevaluations(
+                [
+                    _reeval(
+                        'ao_density',
+                        1,
+                        exact_f1=0.62,
+                        half_f1=0.30,
+                        delta_f1=0.0,
+                        split_path=split_path,
+                        precision=0.65,
+                    ),
+                ],
+                reference_control=reference,
+            )
+
+        delta = payload['paired_delta_vs_reference_control']['ao_density']
+        self.assertEqual(delta['paired_seed_count'], 1)
+        self.assertEqual(delta['paired_seeds'], [1])
+        self.assertAlmostEqual(delta['summary']['f1']['mean'], 0.12)
+        self.assertAlmostEqual(delta['summary']['precision']['mean'], 0.05)
+        self.assertEqual(delta['per_seed'][0]['identity_check'], 'split_content_fingerprint')
+
+    def test_external_control_pairing_records_split_mismatch_skip(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            split_1 = root / 'splits' / 'seed_1.json'
+            split_2_control = root / 'splits' / 'control_seed_2.json'
+            split_2_target = root / 'splits' / 'target_seed_2.json'
+            _write_split(split_1, seed=1)
+            _write_split(split_2_control, seed=2, train=['control_train'])
+            _write_split(split_2_target, seed=2, train=['target_train'])
+            reference_dir = root / 'experiments' / 'custom14_control'
+            _write_reference_reeval(reference_dir, seed=1, split_path=split_1, f1=0.50)
+            _write_reference_reeval(reference_dir, seed=2, split_path=split_2_control, f1=0.60)
+            reference = load_reference_control_reevaluations(reference_dir)
+
+            payload = aggregate_reevaluations(
+                [
+                    _reeval('ao_symmetry', 1, 0.55, 0.30, 0.0, split_path=split_1),
+                    _reeval('ao_symmetry', 2, 0.70, 0.30, 0.0, split_path=split_2_target),
+                ],
+                reference_control=reference,
+            )
+
+        delta = payload['paired_delta_vs_reference_control']['ao_symmetry']
+        self.assertEqual(delta['paired_seed_count'], 1)
+        self.assertEqual(delta['skipped_seeds'][0]['seed'], 2)
+        self.assertEqual(delta['skipped_seeds'][0]['reason'], 'split_content_fingerprint_mismatch')
+
+    def test_external_control_pairing_fails_when_all_splits_mismatch(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control_split = root / 'splits' / 'control_seed_1.json'
+            target_split = root / 'splits' / 'target_seed_1.json'
+            _write_split(control_split, seed=1, train=['control_train'])
+            _write_split(target_split, seed=1, train=['target_train'])
+            reference_dir = root / 'experiments' / 'custom14_control'
+            _write_reference_reeval(reference_dir, seed=1, split_path=control_split, f1=0.50)
+            reference = load_reference_control_reevaluations(reference_dir)
+
+            with self.assertRaisesRegex(ValueError, 'no valid external control pairings'):
+                aggregate_reevaluations(
+                    [_reeval('ao_density', 1, 0.55, 0.30, 0.0, split_path=target_split)],
+                    reference_control=reference,
+                )
+
+    def test_external_control_deltas_use_per_seed_metrics_not_control_aggregate(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reference_dir = root / 'experiments' / 'custom14_control'
+            target_rows = []
+            for seed, control_f1, target_f1 in [
+                (1, 0.10, 0.50),
+                (2, 0.70, 0.80),
+                (3, 0.99, None),
+            ]:
+                split_path = root / 'splits' / f'seed_{seed}.json'
+                _write_split(split_path, seed=seed)
+                _write_reference_reeval(reference_dir, seed=seed, split_path=split_path, f1=control_f1)
+                if target_f1 is not None:
+                    target_rows.append(
+                        _reeval('ao_density', seed, target_f1, 0.30, 0.0, split_path=split_path)
+                    )
+            reference = load_reference_control_reevaluations(reference_dir)
+
+            payload = aggregate_reevaluations(target_rows, reference_control=reference)
+
+        delta = payload['paired_delta_vs_reference_control']['ao_density']
+        self.assertEqual(delta['paired_seed_count'], 2)
+        self.assertAlmostEqual(delta['per_seed'][0]['f1'], 0.40)
+        self.assertAlmostEqual(delta['per_seed'][1]['f1'], 0.10)
+        self.assertAlmostEqual(delta['summary']['f1']['mean'], 0.25)
 
 
 if __name__ == '__main__':
