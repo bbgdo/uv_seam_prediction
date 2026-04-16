@@ -4,12 +4,18 @@ import argparse
 import json
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.nn.functional as F
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except (ImportError, ModuleNotFoundError):
+    SummaryWriter = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -59,6 +65,171 @@ def _loss_fn(
     raise ValueError(f'unknown loss: {loss_name}')
 
 
+def _safe_div(num: float, den: float, eps: float = 1e-8) -> float:
+    return float(num) / float(den + eps)
+
+
+def _mean_or_none(values):
+    values = [v for v in values if v is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _collect_pool_debug(model):
+    out = []
+    for module in model.modules():
+        getter = getattr(module, 'get_last_debug', None)
+        if getter is None:
+            continue
+        debug = getter()
+        if debug:
+            out.append(debug)
+    return out
+
+
+def _coerce_id_list(value) -> list[int] | None:
+    if value is None:
+        return None
+    if callable(value):
+        try:
+            value = value()
+        except TypeError:
+            return None
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().view(-1).tolist()
+    try:
+        return [int(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+
+
+def _restored_orig_edge_ids(model) -> list[int] | None:
+    for name in (
+        'get_restored_orig_edge_ids',
+        'get_last_restored_orig_edge_ids',
+        'restored_orig_edge_ids',
+        'last_restored_orig_edge_ids',
+    ):
+        value = getattr(model, name, None)
+        ids = _coerce_id_list(value)
+        if ids is not None:
+            return ids
+    return None
+
+
+def _append_seam_enrichment(
+    epoch_debug,
+    layer_idx: int,
+    labels: torch.Tensor,
+    survivor_orig_edge_ids,
+) -> None:
+    survivor_ids = _coerce_id_list(survivor_orig_edge_ids)
+    if survivor_ids is None:
+        return
+
+    labels_cpu = labels.detach().cpu().view(-1)
+    label_count = int(labels_cpu.numel())
+    if label_count == 0:
+        return
+
+    valid_ids = sorted({idx for idx in survivor_ids if 0 <= idx < label_count})
+    survivor_mask = torch.zeros(label_count, dtype=torch.bool)
+    if valid_ids:
+        survivor_mask[torch.as_tensor(valid_ids, dtype=torch.long)] = True
+
+    seam_mask = labels_cpu > 0.5
+    nonseam_mask = ~seam_mask
+    total_gt_seams = int(seam_mask.sum().item())
+    total_nonseams = int(nonseam_mask.sum().item())
+    surviving_gt_seams = int((survivor_mask & seam_mask).sum().item())
+    surviving_nonseams = int((survivor_mask & nonseam_mask).sum().item())
+
+    gt_retention = _safe_div(surviving_gt_seams, total_gt_seams)
+    nonseam_retention = _safe_div(surviving_nonseams, total_nonseams)
+    seam_enrichment = gt_retention / max(nonseam_retention, 1e-8)
+
+    epoch_debug[f'pool/layer{layer_idx}_gt_seam_retention'].append(gt_retention)
+    epoch_debug[f'pool/layer{layer_idx}_nonseam_retention'].append(nonseam_retention)
+    epoch_debug[f'pool/layer{layer_idx}_seam_enrichment'].append(float(seam_enrichment))
+
+
+def _append_debug_metrics(
+    epoch_debug,
+    pool_debug_list,
+    model,
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> None:
+    pool_metric_keys = (
+        'input_edges',
+        'output_edges',
+        'successful_collapses',
+        'rejected_collapses',
+        'reject_boundary',
+        'reject_nonmanifold',
+        'reject_degenerate',
+        'collapsed_norm_mean',
+        'retained_norm_mean',
+    )
+    for layer_idx, debug in enumerate(pool_debug_list):
+        _append_seam_enrichment(
+            epoch_debug,
+            layer_idx,
+            labels,
+            debug.get('survivor_orig_edge_ids'),
+        )
+        for key in pool_metric_keys:
+            epoch_debug[f'pool/layer{layer_idx}_{key}'].append(debug.get(key))
+
+    expected_count = int(labels.numel())
+    restored_ids = _restored_orig_edge_ids(model)
+    if restored_ids is not None:
+        restored_count = len(restored_ids)
+        unique_count = len(set(restored_ids))
+        missing_edge_ids = expected_count - unique_count
+        duplicate_edge_ids = restored_count - unique_count
+        final_edge_count_mismatch = abs(restored_count - expected_count)
+    else:
+        missing_edge_ids = None
+        duplicate_edge_ids = None
+        final_edge_count_mismatch = abs(int(logits.numel()) - expected_count)
+
+    epoch_debug['unpool/missing_edge_ids'].append(missing_edge_ids)
+    epoch_debug['unpool/duplicate_edge_ids'].append(duplicate_edge_ids)
+    epoch_debug['unpool/final_edge_count_mismatch'].append(final_edge_count_mismatch)
+
+
+def _finalize_debug(epoch_debug) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for tag, values in epoch_debug.items():
+        value = _mean_or_none(values)
+        if value is not None:
+            out[tag] = float(value)
+    return out
+
+
+def _log_debug_scalars(writer, debug_metrics: dict[str, float], epoch: int, prefix: str = '') -> None:
+    if writer is None:
+        return
+    for tag, value in debug_metrics.items():
+        writer.add_scalar(f'{prefix}/{tag}' if prefix else tag, value, epoch)
+
+
+def _format_debug_summary(debug_metrics: dict[str, float], metrics: dict[str, Any]) -> str:
+    parts = []
+    pred_pos_rate = metrics.get('pred_pos_rate')
+    if pred_pos_rate is not None:
+        parts.append(f'pred_pos_rate {pred_pos_rate:.4f}')
+    layer0_enrichment = debug_metrics.get('pool/layer0_seam_enrichment')
+    if layer0_enrichment is not None:
+        parts.append(f'layer0_seam_enrichment {layer0_enrichment:.4f}')
+    mismatch = debug_metrics.get('unpool/final_edge_count_mismatch')
+    if mismatch is not None:
+        parts.append(f'unpool_mismatch {mismatch:.2f}')
+    return ' | '.join(parts)
+
+
 def _run_epoch(
     model: MeshCNNSegmenter,
     samples: list[MeshCNNSample],
@@ -68,12 +239,13 @@ def _run_epoch(
     focal_gamma: float,
     optimizer: torch.optim.Optimizer | None = None,
     grad_accum_steps: int = 1,
-) -> tuple[float, dict[str, Any]]:
+) -> tuple[float, dict[str, Any], dict[str, float]]:
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
     all_logits: list[torch.Tensor] = []
     all_labels: list[torch.Tensor] = []
+    epoch_debug = defaultdict(list)
 
     if training:
         optimizer.zero_grad(set_to_none=True)
@@ -83,6 +255,8 @@ def _run_epoch(
         for idx, sample in enumerate(samples, start=1):
             labels = sample.edge_labels.to(device)
             logits = model(sample)
+            pool_debug_list = _collect_pool_debug(model)
+            _append_debug_metrics(epoch_debug, pool_debug_list, model, logits, labels)
             loss = _loss_fn(logits, labels, pos_weight, loss_name, focal_gamma)
 
             if training:
@@ -95,8 +269,11 @@ def _run_epoch(
             all_logits.append(logits.detach().cpu())
             all_labels.append(sample.edge_labels.detach().cpu())
 
-    metrics = edge_f1(torch.cat(all_logits), torch.cat(all_labels))
-    return total_loss / max(len(samples), 1), metrics
+    cat_logits = torch.cat(all_logits)
+    cat_labels = torch.cat(all_labels)
+    metrics = edge_f1(cat_logits, cat_labels)
+    metrics['pred_pos_rate'] = float((torch.sigmoid(cat_logits) >= 0.5).float().mean().item())
+    return total_loss / max(len(samples), 1), metrics, _finalize_debug(epoch_debug)
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -186,6 +363,9 @@ def main(argv: list[str] | None = None) -> None:
         'split': split_info,
     }
     _write_json(run_dir / 'config.json', config_payload)
+    writer = SummaryWriter(log_dir=str(run_dir)) if SummaryWriter is not None else None
+    if writer is None:
+        print('[info] tensorboard is unavailable; debug metrics will be shown in console only')
 
     print(f'device: {device}')
     print(f'split: train {len(train)}, val {len(val)}, test {len(test)}')
@@ -200,7 +380,7 @@ def main(argv: list[str] | None = None) -> None:
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
-        train_loss, train_metrics = _run_epoch(
+        train_loss, train_metrics, train_debug = _run_epoch(
             model,
             train,
             device,
@@ -210,7 +390,7 @@ def main(argv: list[str] | None = None) -> None:
             optimizer=optimizer,
             grad_accum_steps=args.grad_accum_steps,
         )
-        val_loss, val_metrics = _run_epoch(
+        val_loss, val_metrics, val_debug = _run_epoch(
             model,
             val,
             device,
@@ -219,6 +399,10 @@ def main(argv: list[str] | None = None) -> None:
             args.focal_gamma,
         )
         scheduler.step(val_metrics['f1'])
+        _log_debug_scalars(writer, train_debug, epoch)
+        _log_debug_scalars(writer, val_debug, epoch, prefix='val')
+        if writer is not None:
+            writer.flush()
         elapsed = time.time() - t0
         row = {
             'epoch': epoch,
@@ -240,6 +424,9 @@ def main(argv: list[str] | None = None) -> None:
             f'val {val_loss:.4f} f1 {val_metrics["f1"]:.4f} '
             f'p {val_metrics["precision"]:.4f} r {val_metrics["recall"]:.4f} | {elapsed:.1f}s'
         )
+        debug_summary = _format_debug_summary(train_debug, train_metrics)
+        if debug_summary:
+            print(f'  debug | {debug_summary}')
 
         if val_metrics['f1'] > best_val_f1:
             best_val_f1 = val_metrics['f1']
@@ -265,7 +452,14 @@ def main(argv: list[str] | None = None) -> None:
 
     payload = torch.load(best_path, map_location=device, weights_only=False)
     model.load_state_dict(payload['model_state'])
-    test_loss, test_metrics = _run_epoch(model, test, device, pos_weight, args.loss, args.focal_gamma)
+    test_loss, test_metrics, _test_debug = _run_epoch(
+        model,
+        test,
+        device,
+        pos_weight,
+        args.loss,
+        args.focal_gamma,
+    )
     summary = {
         'best_epoch': best_epoch,
         'best_val_f1': best_val_f1,
@@ -277,6 +471,8 @@ def main(argv: list[str] | None = None) -> None:
         f'test | loss {test_loss:.4f} f1 {test_metrics["f1"]:.4f} '
         f'p {test_metrics["precision"]:.4f} r {test_metrics["recall"]:.4f}'
     )
+    if writer is not None:
+        writer.close()
 
 
 if __name__ == '__main__':
