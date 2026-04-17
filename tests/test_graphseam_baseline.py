@@ -57,7 +57,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
     def test_baseline_registry_exposes_supported_models(self):
         self.assertIs(get_baseline('graphsage').model_class, DualGraphSAGE)
         self.assertIs(get_baseline('gatv2').model_class, DualGATv2)
-        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 32)
+        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 64)
         self.assertEqual(get_baseline('gatv2').default_config_overrides['heads'], 4)
 
     def test_unified_runner_defaults_graphsage_and_gatv2(self):
@@ -68,9 +68,9 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(graphsage_args.hidden, 128)
         self.assertEqual(graphsage_args.lr, 1e-3)
         self.assertEqual(gatv2_args.model, 'gatv2')
-        self.assertEqual(gatv2_args.hidden, 32)
+        self.assertEqual(gatv2_args.hidden, 64)
         self.assertEqual(gatv2_args.heads, 4)
-        self.assertEqual(gatv2_args.lr, 5e-4)
+        self.assertEqual(gatv2_args.lr, 3e-4)
 
     def test_feature_preset_shapes(self):
         mesh = _tiny_mesh()

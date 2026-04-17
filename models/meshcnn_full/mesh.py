@@ -190,6 +190,10 @@ class MutableMeshTopology:
             (int(edge[0]), int(edge[1])): idx
             for idx, edge in enumerate(self.unique_edges)
         }
+        self.vertex_to_faces: dict[int, set[int]] = {}
+        for face_idx, face in enumerate(self.faces):
+            for vertex in face:
+                self.vertex_to_faces.setdefault(int(vertex), set()).add(int(face_idx))
 
     def neighbors_tensor(self, device: torch.device | str) -> torch.Tensor:
         return torch.as_tensor(self.edge_neighbors, dtype=torch.long, device=device)
@@ -210,11 +214,19 @@ class MutableMeshTopology:
         a, b = (int(self.unique_edges[edge_idx, 0]), int(self.unique_edges[edge_idx, 1]))
         keep, remove = (a, b) if a < b else (b, a)
         removed_face_set = set(incident)
-        new_faces = self.faces.copy()
-        new_faces[new_faces == remove] = keep
 
-        kept_faces: list[np.ndarray] = []
-        for face_idx, face in enumerate(new_faces):
+        # Guard collapse validation to the finite local star affected by the merge.
+        affected_faces = set(self.vertex_to_faces.get(keep, ()))
+        affected_faces.update(self.vertex_to_faces.get(remove, ()))
+        if len(affected_faces) > len(self.faces) or not removed_face_set.issubset(affected_faces):
+            return 'inconsistent topology'
+
+        kept_faces: list[tuple[int, np.ndarray]] = []
+        for face_idx in affected_faces:
+            if face_idx < 0 or face_idx >= len(self.faces):
+                return 'inconsistent topology'
+            face = self.faces[face_idx].copy()
+            face[face == remove] = keep
             if len(set(int(v) for v in face)) != 3:
                 if face_idx not in removed_face_set:
                     return 'degenerate triangle result'
@@ -223,14 +235,14 @@ class MutableMeshTopology:
             area2 = np.linalg.norm(np.cross(coords[1] - coords[0], coords[2] - coords[0]))
             if not np.isfinite(area2) or area2 <= 1e-12:
                 return 'degenerate triangle result'
-            kept_faces.append(face)
+            kept_faces.append((face_idx, face))
 
-        if not kept_faces:
+        if len(self.faces) - len(affected_faces) + len(kept_faces) == 0:
             return 'collapse removes all faces'
 
         edge_counts: dict[tuple[int, int], int] = {}
         face_keys: set[tuple[int, int, int]] = set()
-        for face in kept_faces:
+        for _, face in kept_faces:
             face_key = tuple(sorted(int(v) for v in face))
             if face_key in face_keys:
                 return 'duplicate triangle result'
