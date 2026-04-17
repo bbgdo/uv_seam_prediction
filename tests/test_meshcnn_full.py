@@ -138,6 +138,28 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(history.new_edge_count, pooled.shape[0])
         self.assertTrue(any(param.grad is not None for param in pool.scorer.parameters()))
 
+    def test_pool_exhausts_invalid_candidates_without_spinning(self):
+        vertices = np.asarray([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ], dtype=np.float32)
+        faces = np.asarray([[0, 1, 2]], dtype=np.int64)
+        topology = MutableMeshTopology(vertices, faces)
+        x = torch.randn(topology.edge_count, 4)
+        pool = MeshPool(channels=4, target_ratio=0.1, min_edges=1, max_collapses=None)
+
+        pooled, pooled_topology, history = pool(x, topology)
+        debug = pool.get_last_debug()
+
+        self.assertEqual(pooled.shape[0], topology.edge_count)
+        self.assertEqual(pooled_topology.edge_count, topology.edge_count)
+        self.assertEqual(history.new_edge_count, topology.edge_count)
+        self.assertEqual(debug['attempted_collapses'], topology.edge_count)
+        self.assertEqual(debug['successful_collapses'], 0)
+        self.assertEqual(debug['rejected_collapses'], topology.edge_count)
+        self.assertEqual(debug['stop_reason'], 'stagnated_no_valid_collapses')
+
     def test_forward_pass_on_cached_meshcnn_sample(self):
         with _obj_file(OBJ_TETRA) as path:
             sample = build_meshcnn_sample(

@@ -45,13 +45,19 @@ class MeshPool(nn.Module):
         target_ratio: float = 0.85,
         min_edges: int = 32,
         max_collapses: int | None = 2048,
+        max_attempts: int | None = None,
     ):
         super().__init__()
         if not 0.0 < target_ratio <= 1.0:
             raise ValueError('target_ratio must be in (0, 1]')
+        if max_collapses is not None and int(max_collapses) < 0:
+            raise ValueError('max_collapses must be non-negative or None')
+        if max_attempts is not None and int(max_attempts) < 0:
+            raise ValueError('max_attempts must be non-negative or None')
         self.target_ratio = float(target_ratio)
         self.min_edges = int(min_edges)
-        self.max_collapses = max_collapses
+        self.max_collapses = None if max_collapses is None else int(max_collapses)
+        self.max_attempts = None if max_attempts is None else int(max_attempts)
         self.scorer = nn.Sequential(
             nn.LayerNorm(channels),
             nn.Linear(channels, channels),
@@ -71,11 +77,16 @@ class MeshPool(nn.Module):
         debug = {
             'input_edges': 0,
             'output_edges': 0,
+            'target_edges': 0,
+            'candidate_count': 0,
+            'attempted_collapses': 0,
+            'max_attempts': 0,
             'successful_collapses': 0,
             'rejected_collapses': 0,
             'reject_boundary': 0,
             'reject_nonmanifold': 0,
             'reject_degenerate': 0,
+            'stop_reason': None,
             'collapsed_norm_mean': None,
             'retained_norm_mean': None,
             'survivor_orig_edge_ids': None,
@@ -88,9 +99,11 @@ class MeshPool(nn.Module):
         debug['input_edges'] = old_count
         target_edges = max(self.min_edges, int(round(old_count * self.target_ratio)))
         target_edges = min(target_edges, old_count)
+        debug['target_edges'] = target_edges
 
         if target_edges >= old_count:
             debug['output_edges'] = old_count
+            debug['stop_reason'] = 'already_at_or_below_target'
             pooled_topology._meshcnn_orig_edge_ids = [list(values) for values in input_lineage]
             debug['survivor_orig_edge_ids'] = _flatten_lineage(input_lineage)
             self.last_debug = debug
@@ -111,6 +124,7 @@ class MeshPool(nn.Module):
             (int(old_edges[idx, 0]), int(old_edges[idx, 1]))
             for idx in candidate_order
         ]
+        debug['candidate_count'] = len(candidate_keys)
         old_edge_key_to_idx = {
             (int(edge[0]), int(edge[1])): idx
             for idx, edge in enumerate(old_edges)
@@ -120,10 +134,25 @@ class MeshPool(nn.Module):
         collapsed: list[tuple[int, int]] = []
         collapsed_old_indices: list[int] = []
         collapse_budget = self.max_collapses if self.max_collapses is not None else old_count
+        max_attempts = self.max_attempts if self.max_attempts is not None else len(candidate_keys)
+        max_attempts = min(max_attempts, len(candidate_keys))
+        debug['max_attempts'] = max_attempts
 
-        for edge_key in candidate_keys:
-            if pooled_topology.edge_count <= target_edges or len(collapsed) >= collapse_budget:
+        candidate_cursor = 0
+        while pooled_topology.edge_count > target_edges:
+            if len(collapsed) >= collapse_budget:
+                debug['stop_reason'] = 'collapse_budget_reached'
                 break
+            if candidate_cursor >= len(candidate_keys):
+                debug['stop_reason'] = 'candidate_exhausted'
+                break
+            if debug['attempted_collapses'] >= max_attempts:
+                debug['stop_reason'] = 'max_attempts_reached'
+                break
+
+            edge_key = candidate_keys[candidate_cursor]
+            candidate_cursor += 1
+            debug['attempted_collapses'] += 1
             edge_idx = pooled_topology.edge_key_to_idx.get(edge_key)
             if edge_idx is None:
                 debug['rejected_collapses'] += 1
@@ -140,13 +169,28 @@ class MeshPool(nn.Module):
                 else:
                     debug['reject_degenerate'] += 1
                 continue
+            before_edges = pooled_topology.edge_count
             record = pooled_topology.collapse_edge(edge_idx)
+            if pooled_topology.edge_count >= before_edges:
+                raise RuntimeError(
+                    f'edge collapse for {edge_key} did not reduce edge count '
+                    f'({before_edges} -> {pooled_topology.edge_count})'
+                )
             valid = old_to_current >= 0
             remapped = record.old_to_new[old_to_current[valid]]
             old_to_current[valid] = remapped
             collapsed.append(record.edge_key)
             collapsed_old_indices.append(old_edge_key_to_idx[edge_key])
             debug['successful_collapses'] += 1
+
+        if debug['stop_reason'] is None:
+            debug['stop_reason'] = 'target_reached'
+        elif (
+            debug['stop_reason'] == 'candidate_exhausted'
+            and pooled_topology.edge_count > target_edges
+            and debug['successful_collapses'] == 0
+        ):
+            debug['stop_reason'] = 'stagnated_no_valid_collapses'
 
         new_count = pooled_topology.edge_count
         old_to_new = torch.as_tensor(old_to_current, dtype=torch.long, device=device)
