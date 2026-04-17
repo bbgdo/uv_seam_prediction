@@ -265,7 +265,7 @@ def _run_epoch(
     all_logits: list[torch.Tensor] = []
     all_labels: list[torch.Tensor] = []
     epoch_debug = defaultdict(list)
-    progress_printed = False
+    is_tty = sys.stdout.isatty()
 
     if training:
         optimizer.zero_grad(set_to_none=True)
@@ -289,15 +289,34 @@ def _run_epoch(
             step_time = time.time() - step_t0
             loss_value = float(loss.detach().item())
             total_loss += loss_value
-            if training and progress_prefix and not progress_printed:
-                print(
-                    f'{progress_prefix} loss {total_loss / idx:.4f} | '
-                    f'step {idx:03d}/{len(samples)} [{step_time:.2f}s]',
-                    flush=True,
+            should_print = (
+                training
+                and progress_prefix
+                and (
+                    is_tty
+                    or idx % 20 == 0
+                    or idx == len(samples)
                 )
-                progress_printed = True
+            )
+            if should_print:
+                if is_tty:
+                    print(
+                        f'\r{progress_prefix} loss {total_loss / idx:.4f} | '
+                        f'step {idx:03d}/{len(samples)} [{step_time:.2f}s]',
+                        end='',
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f'{progress_prefix} loss {total_loss / idx:.4f} | '
+                        f'step {idx:03d}/{len(samples)} [{step_time:.2f}s]',
+                        flush=True,
+                    )
             all_logits.append(logits.detach().cpu())
             all_labels.append(sample.edge_labels.detach().cpu())
+
+    if training and progress_prefix and is_tty:
+        print()
 
     cat_logits = torch.cat(all_logits)
     cat_labels = torch.cat(all_labels)
