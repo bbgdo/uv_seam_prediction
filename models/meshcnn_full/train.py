@@ -273,6 +273,7 @@ def _run_epoch(
     context = torch.enable_grad() if training else torch.no_grad()
     with context:
         for idx, sample in enumerate(samples, start=1):
+            step_t0 = time.time()
             labels = sample.edge_labels.to(device)
             logits = model(sample)
             pool_debug_list = _collect_pool_debug(model)
@@ -285,10 +286,15 @@ def _run_epoch(
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
 
+            step_time = time.time() - step_t0
             loss_value = float(loss.detach().item())
             total_loss += loss_value
             if training and progress_prefix and not progress_printed:
-                print(f'{progress_prefix} loss {total_loss / idx:.4f} | step {idx:03d}/{len(samples)}', flush=True)
+                print(
+                    f'{progress_prefix} loss {total_loss / idx:.4f} | '
+                    f'step {idx:03d}/{len(samples)} [{step_time:.2f}s]',
+                    flush=True,
+                )
                 progress_printed = True
             all_logits.append(logits.detach().cpu())
             all_labels.append(sample.edge_labels.detach().cpu())

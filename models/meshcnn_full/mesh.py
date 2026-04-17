@@ -30,6 +30,7 @@ class MeshCNNSample:
     density_config: dict[str, Any] | None = None
     seam_edge_count: int = 0
     boundary_edge_count: int = 0
+    sparse_cache: dict[str, Any] | None = None
 
     @property
     def y(self) -> torch.Tensor:
