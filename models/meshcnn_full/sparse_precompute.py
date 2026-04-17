@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from typing import Any
 
 import torch
@@ -245,20 +246,48 @@ def coarsen_slot_matrices(
     return pool, unpool, next_slots
 
 
+def _iter_tensors(value: Any, path: str = 'cache') -> Iterator[tuple[str, torch.Tensor]]:
+    if isinstance(value, torch.Tensor):
+        yield path, value
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _iter_tensors(item, f'{path}.{key}')
+        return
+    if isinstance(value, (list, tuple)):
+        for idx, item in enumerate(value):
+            yield from _iter_tensors(item, f'{path}[{idx}]')
+
+
+def _drop_legacy_device_cache_entries(cache: dict[str, Any]) -> None:
+    # Older runs stored CUDA sparse tensors under these keys on the sample-owned cache.
+    cache.pop('_device_caches', None)
+    cache.pop('device_caches', None)
+
+
+def assert_sparse_cache_cpu_only(cpu_cache: dict[str, Any]) -> None:
+    for forbidden_key in ('_device_caches', 'device_caches'):
+        if forbidden_key in cpu_cache:
+            raise AssertionError(f'persistent sparse cache must not contain {forbidden_key}')
+    for path, tensor in _iter_tensors(cpu_cache):
+        if tensor.device.type != 'cpu':
+            raise AssertionError(f'persistent sparse cache tensor {path} is on {tensor.device}, expected cpu')
+
+
 def build_sparse_cache(
     sample: MeshCNNSample,
     pool_ratios: tuple[float, ...] = (0.80, 0.64, 0.48),
     min_edges_per_level: int = 32,
 ) -> dict[str, Any]:
     edge_count0 = int(sample.unique_edges.shape[0])
-    slot_levels: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
+    slot_levels: list[list[torch.Tensor]] = []
     line_adj_levels: list[torch.Tensor] = []
     pool_maps: list[torch.Tensor] = []
     unpool_maps: list[torch.Tensor] = []
     edge_counts: list[int] = [edge_count0]
 
     current_slots = build_slot_matrices(sample.unique_edges, sample.faces)
-    slot_levels.append(current_slots)
+    slot_levels.append(list(current_slots))
     line_adj_levels.append(build_line_adjacency(current_slots))
 
     for ratio in pool_ratios:
@@ -269,7 +298,7 @@ def build_sparse_cache(
         pool_maps.append(pool)
         unpool_maps.append(unpool)
         edge_counts.append(int(pool.shape[0]))
-        slot_levels.append(current_slots)
+        slot_levels.append(list(current_slots))
         line_adj_levels.append(build_line_adjacency(current_slots))
 
     cache: dict[str, Any] = {
@@ -285,28 +314,37 @@ def build_sparse_cache(
         },
     }
     sample.sparse_cache = cache
+    assert_sparse_cache_cpu_only(cache)
     return cache
 
 
-def sparse_cache_to_device(cache: dict[str, Any], device: torch.device | str) -> dict[str, Any]:
-    return {
-        'slot_adj_levels': [
-            tuple(slot.to(device=device).coalesce() for slot in slots)
-            for slots in cache['slot_adj_levels']
-        ],
-        'line_adj_levels': [adj.to(device=device).coalesce() for adj in cache['line_adj_levels']],
-        'pool_maps': [pool.to(device=device).coalesce() for pool in cache['pool_maps']],
-        'unpool_maps': [unpool.to(device=device).coalesce() for unpool in cache['unpool_maps']],
-        'edge_counts': list(cache['edge_counts']),
-        'config': dict(cache.get('config', {})),
-    }
+def move_sparse_tensor(tensor: torch.Tensor, device: torch.device | str) -> torch.Tensor:
+    if tensor.layout == torch.sparse_coo:
+        return tensor.coalesce().to(device=device, copy=True).coalesce()
+    return tensor.to(device=device, copy=True)
+
+
+def _materialize_entry_for_step(value: Any, device: torch.device | str) -> Any:
+    if isinstance(value, torch.Tensor):
+        return move_sparse_tensor(value, device)
+    if isinstance(value, dict):
+        return {key: _materialize_entry_for_step(item, device) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_materialize_entry_for_step(item, device) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_materialize_entry_for_step(item, device) for item in value)
+    return value
+
+
+def materialize_sparse_cache_for_step(cpu_cache: dict[str, Any], device: torch.device | str) -> dict[str, Any]:
+    assert_sparse_cache_cpu_only(cpu_cache)
+    return _materialize_entry_for_step(cpu_cache, device)
 
 
 def get_or_build_sparse_cache(
     sample: MeshCNNSample,
-    pool_ratios: tuple[float, ...],
-    min_edges_per_level: int,
-    device: torch.device | str,
+    pool_ratios: tuple[float, ...] = (0.80, 0.64, 0.48),
+    min_edges_per_level: int = 32,
 ) -> dict[str, Any]:
     expected = {
         'pool_ratios': tuple(float(r) for r in pool_ratios),
@@ -316,9 +354,8 @@ def get_or_build_sparse_cache(
     cache = getattr(sample, 'sparse_cache', None)
     if not isinstance(cache, dict) or cache.get('config') != expected:
         cache = build_sparse_cache(sample, pool_ratios=pool_ratios, min_edges_per_level=min_edges_per_level)
+    else:
+        _drop_legacy_device_cache_entries(cache)
 
-    device_key = str(device)
-    device_caches = cache.setdefault('_device_caches', {})
-    if device_key not in device_caches:
-        device_caches[device_key] = sparse_cache_to_device(cache, device)
-    return device_caches[device_key]
+    assert_sparse_cache_cpu_only(cache)
+    return cache

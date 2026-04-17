@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from models.meshcnn_full.mesh import MeshCNNSample
 from models.meshcnn_full.sparse_layers import SparseMeshConvBlock, SparseMeshPool, SparseMeshUnpool
-from models.meshcnn_full.sparse_precompute import get_or_build_sparse_cache
+from models.meshcnn_full.sparse_precompute import get_or_build_sparse_cache, materialize_sparse_cache_for_step
 
 
 def _channel_schedule(hidden_channels: int, levels: int) -> list[int]:
@@ -82,15 +82,15 @@ class SparseMeshUNetSegmenter(nn.Module):
     def forward(self, sample: MeshCNNSample) -> torch.Tensor:
         device = next(self.parameters()).device
         x = sample.edge_features.to(device=device, dtype=torch.float32)
-        cache = get_or_build_sparse_cache(
+        cpu_cache = get_or_build_sparse_cache(
             sample,
             pool_ratios=self.pool_ratios,
             min_edges_per_level=self.min_edges,
-            device=device,
         )
-        slot_levels = cache['slot_adj_levels']
-        pool_maps = cache['pool_maps']
-        unpool_maps = cache['unpool_maps']
+        step_cache = materialize_sparse_cache_for_step(cpu_cache, device)
+        slot_levels = step_cache['slot_adj_levels']
+        pool_maps = step_cache['pool_maps']
+        unpool_maps = step_cache['unpool_maps']
 
         h = self.stem(x)
         skips: list[torch.Tensor] = []

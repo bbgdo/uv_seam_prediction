@@ -3,11 +3,18 @@ import unittest
 from unittest import mock
 
 import torch
+import torch.nn.functional as F
 
 from models.meshcnn_full.mesh import MeshCNNSample
 from models.meshcnn_full.sparse_layers import SparseMeshConv, SparseMeshPool, SparseMeshUnpool
 from models.meshcnn_full.sparse_model import SparseMeshUNetSegmenter
-from models.meshcnn_full.sparse_precompute import build_slot_matrices, build_sparse_cache
+from models.meshcnn_full.sparse_precompute import (
+    assert_sparse_cache_cpu_only,
+    build_slot_matrices,
+    build_sparse_cache,
+    get_or_build_sparse_cache,
+    materialize_sparse_cache_for_step,
+)
 
 
 def _unique_edges_from_faces(faces: torch.Tensor) -> torch.Tensor:
@@ -52,6 +59,28 @@ def _toy_sample(fin: int = 15) -> MeshCNNSample:
         feature_flags={},
         endpoint_order='fixed',
     )
+
+
+def _iter_tensors(value):
+    if isinstance(value, torch.Tensor):
+        yield value
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_tensors(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_tensors(item)
+
+
+def _assert_persistent_cache_cpu_only(testcase: unittest.TestCase, sample: MeshCNNSample) -> None:
+    testcase.assertIsInstance(sample.sparse_cache, dict)
+    testcase.assertNotIn('_device_caches', sample.sparse_cache)
+    testcase.assertNotIn('device_caches', sample.sparse_cache)
+    assert_sparse_cache_cpu_only(sample.sparse_cache)
+    for tensor in _iter_tensors(sample.sparse_cache):
+        testcase.assertEqual(tensor.device.type, 'cpu')
 
 
 class SparsePrecomputeTests(unittest.TestCase):
@@ -109,6 +138,25 @@ class SparsePrecomputeTests(unittest.TestCase):
                 non_empty = row_sums > 0
                 self.assertTrue(torch.all(row_sums <= 1.0 + 1e-6))
                 self.assertTrue(torch.allclose(row_sums[non_empty], torch.ones_like(row_sums[non_empty])))
+
+    def test_persistent_sparse_cache_is_cpu_only(self):
+        sample = _toy_sample()
+        cache = get_or_build_sparse_cache(sample, pool_ratios=(0.6, 0.4), min_edges_per_level=1)
+
+        self.assertIs(cache, sample.sparse_cache)
+        _assert_persistent_cache_cpu_only(self, sample)
+
+    def test_materialized_step_cache_is_not_stored_back_into_sample(self):
+        sample = _toy_sample()
+        cpu_cache = get_or_build_sparse_cache(sample, pool_ratios=(0.6, 0.4), min_edges_per_level=1)
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+        step_cache = materialize_sparse_cache_for_step(cpu_cache, device)
+
+        _assert_persistent_cache_cpu_only(self, sample)
+        for cpu_tensor, step_tensor in zip(_iter_tensors(cpu_cache), _iter_tensors(step_cache)):
+            self.assertIsNot(cpu_tensor, step_tensor)
+            self.assertEqual(step_tensor.device, device)
 
 
 class SparseLayerTests(unittest.TestCase):
@@ -243,6 +291,91 @@ class SparseModelTests(unittest.TestCase):
             logits = model(sample)
 
         self.assertEqual(logits.shape, sample.edge_labels.shape)
+
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA sparse-cache lifecycle test requires a GPU')
+    def test_forward_does_not_persist_cuda_cache(self):
+        sample = _toy_sample(fin=15)
+        model = SparseMeshUNetSegmenter(
+            in_channels=15,
+            hidden_channels=8,
+            pool_ratios=(0.7, 0.5),
+            min_edges=1,
+        ).cuda()
+
+        logits = model(sample)
+
+        self.assertEqual(logits.device.type, 'cuda')
+        _assert_persistent_cache_cpu_only(self, sample)
+
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA sparse-cache lifecycle test requires a GPU')
+    def test_repeated_two_sample_forward_does_not_accumulate_persistent_cuda_refs(self):
+        sample_a = _toy_sample(fin=15)
+        sample_b = _toy_sample(fin=15)
+        model = SparseMeshUNetSegmenter(
+            in_channels=15,
+            hidden_channels=8,
+            pool_ratios=(0.7, 0.5),
+            min_edges=1,
+        ).cuda()
+
+        _ = model(sample_a)
+        _assert_persistent_cache_cpu_only(self, sample_a)
+        self.assertIsNone(sample_b.sparse_cache)
+
+        _ = model(sample_b)
+        _assert_persistent_cache_cpu_only(self, sample_a)
+        _assert_persistent_cache_cpu_only(self, sample_b)
+
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA two-step training smoke requires a GPU')
+    def test_training_two_steps_smoke_on_gpu(self):
+        samples = [_toy_sample(fin=15), _toy_sample(fin=15)]
+        model = SparseMeshUNetSegmenter(
+            in_channels=15,
+            hidden_channels=8,
+            pool_ratios=(0.7, 0.5),
+            min_edges=1,
+        ).cuda()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+        for sample in samples:
+            optimizer.zero_grad(set_to_none=True)
+            logits = model(sample)
+            loss = F.binary_cross_entropy_with_logits(logits, sample.edge_labels.cuda())
+            loss.backward()
+            optimizer.step()
+            for seen in samples:
+                if seen.sparse_cache is not None:
+                    _assert_persistent_cache_cpu_only(self, seen)
+
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA memory smoke requires a GPU')
+    def test_max_memory_stabilizes_across_steps(self):
+        device = torch.device('cuda')
+        samples = [_toy_sample(fin=15), _toy_sample(fin=15), _toy_sample(fin=15)]
+        model = SparseMeshUNetSegmenter(
+            in_channels=15,
+            hidden_channels=8,
+            pool_ratios=(0.7, 0.5),
+            min_edges=1,
+        ).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        after_step_allocated: list[int] = []
+
+        for sample in samples:
+            torch.cuda.reset_peak_memory_stats(device)
+            optimizer.zero_grad(set_to_none=True)
+            logits = model(sample)
+            labels = sample.edge_labels.to(device)
+            loss = F.binary_cross_entropy_with_logits(logits, labels)
+            self.assertGreater(torch.cuda.max_memory_allocated(device), torch.cuda.memory_allocated(device) - 1)
+            loss.backward()
+            optimizer.step()
+            del logits, labels, loss
+            torch.cuda.synchronize(device)
+            after_step_allocated.append(torch.cuda.memory_allocated(device))
+            _assert_persistent_cache_cpu_only(self, sample)
+
+        persistent_growth = max(after_step_allocated[1:]) - after_step_allocated[1]
+        self.assertLess(persistent_growth, 16 * 1024 * 1024)
 
 
 if __name__ == '__main__':
