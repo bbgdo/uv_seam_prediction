@@ -116,61 +116,122 @@ def canonical_edge(a: int, b: int) -> tuple[int, int]:
     return (a, b) if a < b else (b, a)
 
 
+def _edge_search_indices(unique_edges: np.ndarray, query_edges: np.ndarray) -> np.ndarray:
+    unique_edges = np.ascontiguousarray(unique_edges, dtype=np.int64)
+    query_edges = np.ascontiguousarray(query_edges, dtype=np.int64)
+    if len(unique_edges) > 1:
+        sorted_order = (
+            (unique_edges[:-1, 0] < unique_edges[1:, 0])
+            | (
+                (unique_edges[:-1, 0] == unique_edges[1:, 0])
+                & (unique_edges[:-1, 1] <= unique_edges[1:, 1])
+            )
+        )
+        if not bool(np.all(sorted_order)):
+            lookup = {
+                (int(edge[0]), int(edge[1])): idx
+                for idx, edge in enumerate(unique_edges)
+            }
+            return np.asarray(
+                [lookup.get((int(edge[0]), int(edge[1])), -1) for edge in query_edges],
+                dtype=np.int64,
+            )
+    key_dtype = np.dtype([('u', np.int64), ('v', np.int64)])
+    unique_keys = unique_edges.view(key_dtype).reshape(-1)
+    query_keys = query_edges.view(key_dtype).reshape(-1)
+    positions = np.searchsorted(unique_keys, query_keys)
+    found = positions < len(unique_keys)
+    safe_positions = np.minimum(positions, max(len(unique_keys) - 1, 0))
+    if len(unique_keys):
+        found &= unique_keys[safe_positions] == query_keys
+    out = np.full(len(query_edges), -1, dtype=np.int64)
+    out[found] = positions[found]
+    return out
+
+
 def build_mesh_adjacency(
     faces: np.ndarray,
     unique_edges: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     faces = np.asarray(faces, dtype=np.int64)
     if unique_edges is None:
-        edge_keys = sorted({
-            canonical_edge(int(face[k]), int(face[(k + 1) % 3]))
-            for face in faces
-            for k in range(3)
-        })
-        unique_edges = np.asarray(edge_keys, dtype=np.int64).reshape((-1, 2))
+        raw_edges = np.stack(
+            (
+                faces[:, [0, 1]],
+                faces[:, [1, 2]],
+                faces[:, [2, 0]],
+            ),
+            axis=1,
+        ).reshape((-1, 2))
+        edge_pairs = np.sort(raw_edges, axis=1)
+        degenerate = edge_pairs[:, 0] == edge_pairs[:, 1]
+        if np.any(degenerate):
+            vertex = int(edge_pairs[degenerate][0, 0])
+            raise ValueError(f'degenerate edge with repeated vertex id {vertex}')
+        unique_edges, inverse = np.unique(edge_pairs, axis=0, return_inverse=True)
+        face_to_edges = inverse.reshape((len(faces), 3)).astype(np.int64, copy=False)
     else:
         unique_edges = np.asarray(unique_edges, dtype=np.int64)
-
-    edge_key_to_idx = {
-        (int(edge[0]), int(edge[1])): idx
-        for idx, edge in enumerate(unique_edges)
-    }
-    edge_faces: list[list[int]] = [[] for _ in range(len(unique_edges))]
-    face_to_edges = np.full((len(faces), 3), -1, dtype=np.int64)
-
-    for face_idx, face in enumerate(faces):
-        for local_idx, (a_pos, b_pos) in enumerate(((0, 1), (1, 2), (2, 0))):
-            key = canonical_edge(int(face[a_pos]), int(face[b_pos]))
-            edge_idx = edge_key_to_idx[key]
-            face_to_edges[face_idx, local_idx] = edge_idx
-            edge_faces[edge_idx].append(face_idx)
+        raw_edges = np.stack(
+            (
+                faces[:, [0, 1]],
+                faces[:, [1, 2]],
+                faces[:, [2, 0]],
+            ),
+            axis=1,
+        ).reshape((-1, 2))
+        edge_pairs = np.sort(raw_edges, axis=1)
+        degenerate = edge_pairs[:, 0] == edge_pairs[:, 1]
+        if np.any(degenerate):
+            vertex = int(edge_pairs[degenerate][0, 0])
+            raise ValueError(f'degenerate edge with repeated vertex id {vertex}')
+        face_to_edges = _edge_search_indices(unique_edges, edge_pairs).reshape((len(faces), 3))
+        if np.any(face_to_edges < 0):
+            missing = edge_pairs[face_to_edges.reshape(-1) < 0][0]
+            raise KeyError((int(missing[0]), int(missing[1])))
 
     edge_to_faces = np.full((len(unique_edges), 2), -1, dtype=np.int64)
-    for edge_idx, incident in enumerate(edge_faces):
-        if len(incident) > 2:
-            raise ValueError(f'non-manifold edge {tuple(unique_edges[edge_idx])}: {len(incident)} incident faces')
-        for slot, face_idx in enumerate(incident):
-            edge_to_faces[edge_idx, slot] = int(face_idx)
+    occurrence_edges = face_to_edges.reshape(-1)
+    occurrence_faces = np.repeat(np.arange(len(faces), dtype=np.int64), 3)
+    incident_counts = np.bincount(occurrence_edges, minlength=len(unique_edges))
+    nonmanifold = np.flatnonzero(incident_counts > 2)
+    if len(nonmanifold):
+        edge_idx = int(nonmanifold[0])
+        raise ValueError(f'non-manifold edge {tuple(unique_edges[edge_idx])}: {int(incident_counts[edge_idx])} incident faces')
+
+    order = np.argsort(occurrence_edges, kind='stable')
+    sorted_edges = occurrence_edges[order]
+    sorted_faces = occurrence_faces[order]
+    first = np.ones(len(sorted_edges), dtype=bool)
+    first[1:] = sorted_edges[1:] != sorted_edges[:-1]
+    second = ~first
+    edge_to_faces[sorted_edges[first], 0] = sorted_faces[first]
+    edge_to_faces[sorted_edges[second], 1] = sorted_faces[second]
 
     edge_neighbors = np.full((len(unique_edges), 4), -1, dtype=np.int64)
-    for edge_idx, incident in enumerate(edge_faces):
-        a, b = (int(unique_edges[edge_idx, 0]), int(unique_edges[edge_idx, 1]))
-        for face_slot, face_idx in enumerate(incident[:2]):
-            face = faces[face_idx]
-            opposite = [int(v) for v in face if int(v) not in (a, b)]
-            if not opposite:
-                continue
-            c = opposite[0]
-            if face_slot == 0:
-                left = canonical_edge(a, c)
-                right = canonical_edge(c, b)
-                edge_neighbors[edge_idx, 0] = edge_key_to_idx.get(left, -1)
-                edge_neighbors[edge_idx, 1] = edge_key_to_idx.get(right, -1)
-            else:
-                left = canonical_edge(b, c)
-                right = canonical_edge(c, a)
-                edge_neighbors[edge_idx, 2] = edge_key_to_idx.get(left, -1)
-                edge_neighbors[edge_idx, 3] = edge_key_to_idx.get(right, -1)
+    if len(faces):
+        local_edges = face_to_edges
+        edge_ids = local_edges.reshape(-1)
+        left_neighbors = np.stack(
+            (
+                local_edges[:, 2],
+                local_edges[:, 0],
+                local_edges[:, 1],
+            ),
+            axis=1,
+        ).reshape(-1)
+        right_neighbors = np.stack(
+            (
+                local_edges[:, 1],
+                local_edges[:, 2],
+                local_edges[:, 0],
+            ),
+            axis=1,
+        ).reshape(-1)
+        face_ids = np.repeat(np.arange(len(faces), dtype=np.int64), 3)
+        base_slots = np.where(edge_to_faces[edge_ids, 0] == face_ids, 0, 2)
+        edge_neighbors[edge_ids, base_slots] = left_neighbors
+        edge_neighbors[edge_ids, base_slots + 1] = right_neighbors
 
     boundary_mask = edge_to_faces[:, 1] < 0
     return unique_edges, edge_to_faces, face_to_edges, edge_neighbors, boundary_mask
@@ -306,18 +367,13 @@ class MutableMeshTopology:
         self.faces = new_faces[keep_mask]
         self._rebuild()
 
-        new_lookup = {
-            (int(edge[0]), int(edge[1])): idx
-            for idx, edge in enumerate(self.unique_edges)
-        }
         old_to_new = np.full(len(old_edges), -1, dtype=np.int64)
-        for old_idx, (u_raw, v_raw) in enumerate(old_edges):
-            u = keep if int(u_raw) == remove else int(u_raw)
-            v = keep if int(v_raw) == remove else int(v_raw)
-            if u == v:
-                continue
-            key = canonical_edge(u, v)
-            old_to_new[old_idx] = new_lookup.get(key, -1)
+        remapped_edges = old_edges.copy()
+        remapped_edges[remapped_edges == remove] = keep
+        valid = remapped_edges[:, 0] != remapped_edges[:, 1]
+        if np.any(valid):
+            query_edges = np.sort(remapped_edges[valid], axis=1)
+            old_to_new[valid] = _edge_search_indices(self.unique_edges, query_edges)
 
         return EdgeCollapseRecord(
             edge_key=edge_key,

@@ -257,6 +257,7 @@ def _run_epoch(
     focal_gamma: float,
     optimizer: torch.optim.Optimizer | None = None,
     grad_accum_steps: int = 1,
+    progress_prefix: str | None = None,
 ) -> tuple[float, dict[str, Any], dict[str, float]]:
     training = optimizer is not None
     model.train(training)
@@ -264,6 +265,7 @@ def _run_epoch(
     all_logits: list[torch.Tensor] = []
     all_labels: list[torch.Tensor] = []
     epoch_debug = defaultdict(list)
+    progress_printed = False
 
     if training:
         optimizer.zero_grad(set_to_none=True)
@@ -283,7 +285,11 @@ def _run_epoch(
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
 
-            total_loss += float(loss.detach().item())
+            loss_value = float(loss.detach().item())
+            total_loss += loss_value
+            if training and progress_prefix and not progress_printed:
+                print(f'{progress_prefix} loss {total_loss / idx:.4f} | step {idx:03d}/{len(samples)}', flush=True)
+                progress_printed = True
             all_logits.append(logits.detach().cpu())
             all_labels.append(sample.edge_labels.detach().cpu())
 
@@ -409,6 +415,7 @@ def main(argv: list[str] | None = None) -> None:
             args.focal_gamma,
             optimizer=optimizer,
             grad_accum_steps=args.grad_accum_steps,
+            progress_prefix=f'epoch {epoch:03d} | train',
         )
         val_loss, val_metrics, val_debug = _run_epoch(
             model,
