@@ -51,6 +51,24 @@ def _feature_metadata(sample: MeshCNNSample, manifest: dict[str, Any]) -> dict[s
     }
 
 
+def _validate_dataset_tensors_cpu(dataset: list[MeshCNNSample]) -> None:
+    tensor_names = (
+        'vertices',
+        'faces',
+        'unique_edges',
+        'edge_features',
+        'edge_labels',
+    )
+    for sample_idx, sample in enumerate(dataset[: min(8, len(dataset))]):
+        for name in tensor_names:
+            tensor = getattr(sample, name)
+            if tensor.device.type != 'cpu':
+                raise RuntimeError(
+                    f'MeshCNNSample.{name} in sample {sample_idx} must be on CPU after dataset load, '
+                    f'got {tensor.device}. Dataset loading must normalize samples to CPU.'
+                )
+
+
 def _loss_fn(
     logits: torch.Tensor,
     labels: torch.Tensor,
@@ -308,6 +326,8 @@ def main(argv: list[str] | None = None) -> None:
 
     dataset_path = Path(args.dataset)
     dataset = load_meshcnn_dataset(dataset_path)
+    _validate_dataset_tensors_cpu(dataset)
+    print('[info] dataset tensors: cpu')
     manifest = _load_manifest(dataset_path)
     feature_metadata = _feature_metadata(dataset[0], manifest)
     in_channels = int(feature_metadata.get('feature_dim') or dataset[0].edge_features.shape[1])

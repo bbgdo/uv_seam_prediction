@@ -65,6 +65,30 @@ class MeshCNNSample:
         return MeshCNNSample(**values)
 
 
+def _sample_tensor_names() -> tuple[str, ...]:
+    return (
+        'vertices',
+        'faces',
+        'unique_edges',
+        'edge_features',
+        'edge_labels',
+        'edge_neighbors',
+        'edge_to_faces',
+        'face_to_edges',
+        'boundary_mask',
+    )
+
+
+def _ensure_sample_cpu(sample: MeshCNNSample) -> MeshCNNSample:
+    values = sample.__dict__.copy()
+    for name in _sample_tensor_names():
+        tensor = values[name]
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f'{name} is not a tensor: {type(tensor)}')
+        values[name] = tensor.detach().to(device='cpu', copy=False).contiguous()
+    return MeshCNNSample(**values)
+
+
 @dataclass
 class CollapseHistory:
     old_edges: torch.Tensor
@@ -165,10 +189,21 @@ class MutableMeshTopology:
 
     @classmethod
     def from_sample(cls, sample: MeshCNNSample) -> 'MutableMeshTopology':
+        tensors = {
+            'vertices': sample.vertices,
+            'faces': sample.faces,
+            'unique_edges': sample.unique_edges,
+        }
+        for name, tensor in tensors.items():
+            if tensor.device.type != 'cpu':
+                raise RuntimeError(
+                    f'MeshCNNSample.{name} must be on CPU before topology reconstruction, '
+                    f'got {tensor.device}. Dataset loading must normalize samples to CPU.'
+                )
         return cls(
-            vertices=sample.vertices.detach().cpu().numpy(),
-            faces=sample.faces.detach().cpu().numpy(),
-            unique_edges=sample.unique_edges.detach().cpu().numpy(),
+            vertices=sample.vertices.detach().numpy(),
+            faces=sample.faces.detach().numpy(),
+            unique_edges=sample.unique_edges.detach().numpy(),
         )
 
     def clone(self) -> 'MutableMeshTopology':
@@ -318,10 +353,10 @@ def make_collapse_history(
 
 
 def load_meshcnn_dataset(path: str | Path) -> list[MeshCNNSample]:
-    dataset = torch.load(Path(path), weights_only=False)
+    dataset = torch.load(Path(path), map_location='cpu', weights_only=False)
     if not isinstance(dataset, list) or not dataset:
         raise ValueError(f'expected a non-empty list of MeshCNNSample objects, got {type(dataset)}')
-    first = dataset[0]
-    if not isinstance(first, MeshCNNSample):
-        raise ValueError(f'expected MeshCNNSample objects, got {type(first)}')
-    return dataset
+    for sample in dataset:
+        if not isinstance(sample, MeshCNNSample):
+            raise ValueError(f'expected MeshCNNSample objects, got {type(sample)}')
+    return [_ensure_sample_cpu(sample) for sample in dataset]
