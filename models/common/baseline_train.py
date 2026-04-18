@@ -105,6 +105,7 @@ def resolve_runtime_feature_selection(args: argparse.Namespace) -> ResolvedFeatu
         enable_dihedral=bool(getattr(args, 'enable_dihedral', False)),
         enable_symmetry=bool(getattr(args, 'enable_symmetry', False)),
         enable_density=bool(getattr(args, 'enable_density', False)),
+        enable_thickness_sdf=bool(getattr(args, 'enable_thickness_sdf', False)),
     )
 
 
@@ -354,6 +355,7 @@ def _logger_config(
             'signed_dihedral': bool(getattr(args, 'enable_dihedral', False)),
             'symmetry': bool(getattr(args, 'enable_symmetry', False)),
             'density': bool(getattr(args, 'enable_density', False)),
+            'thickness_sdf': bool(getattr(args, 'enable_thickness_sdf', False)),
         },
         'resolution_tag': args.resolution_tag,
         'resolution_selector': args.resolution_tag,

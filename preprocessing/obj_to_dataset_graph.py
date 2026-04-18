@@ -355,12 +355,15 @@ def _process_mesh_legacy_uv_remap(
     return _process_mesh_deprecated_legacy_uv_remap(file_path, feature_selection, endpoint_order, endpoint_seed)
 
 
-def _build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
+def build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
     vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
     faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
     if len(vertices) == 0 or len(faces) == 0:
         raise ValueError('exact_obj requires a non-empty OBJ mesh')
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+_build_feature_mesh_from_topology = build_feature_mesh_from_topology
 
 
 def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:
@@ -397,7 +400,7 @@ def _process_mesh_exact_obj(
             f'exact_obj requires vt indices for every face corner; '
             f'missing occurrences={seam_truth.audit.missing_uv_occurrences}'
         )
-    feature_mesh = _build_feature_mesh_from_topology(topology)
+    feature_mesh = build_feature_mesh_from_topology(topology)
 
     edge_features, unique_edges, _ = compute_edge_features_for_selection(
         feature_mesh,

@@ -7,6 +7,31 @@ import torch
 from torch_geometric.data import Data
 
 
+def build_dual_edge_index_from_unique_edges(unique_edges: np.ndarray) -> torch.LongTensor:
+    """Build line-graph adjacency for canonical undirected mesh edges."""
+    unique_edges = np.asarray(unique_edges, dtype=np.int64)
+    if unique_edges.ndim != 2 or unique_edges.shape[1] != 2:
+        raise ValueError(f'unique_edges must have shape [E, 2], got {unique_edges.shape}')
+
+    vertex_to_edges: dict[int, list[int]] = {}
+    for idx, (vi, vj) in enumerate(unique_edges):
+        vertex_to_edges.setdefault(int(vi), []).append(idx)
+        vertex_to_edges.setdefault(int(vj), []).append(idx)
+
+    dual_edges_set: set[tuple[int, int]] = set()
+    for incident in vertex_to_edges.values():
+        for i in range(len(incident)):
+            for j in range(i + 1, len(incident)):
+                a, b = incident[i], incident[j]
+                dual_edges_set.add((a, b))
+                dual_edges_set.add((b, a))
+
+    if not dual_edges_set:
+        return torch.empty((2, 0), dtype=torch.long)
+    dual_edges = np.array(sorted(dual_edges_set), dtype=np.int64).T
+    return torch.from_numpy(dual_edges)
+
+
 def build_dual_graph_data(original_data: Data) -> Data:
     """Convert an original-graph Data object into a dual-graph Data object.
 
@@ -28,32 +53,15 @@ def build_dual_graph_data(original_data: Data) -> Data:
     num_directed = original_data.edge_index.shape[1]
     num_unique = num_directed // 2
 
-    src = original_data.edge_index[0, :num_unique].numpy()
-    dst = original_data.edge_index[1, :num_unique].numpy()
-
-    # Line graph: connect edges sharing a vertex (matches GraphSeam Section 4.2)
-    vertex_to_edges: dict[int, list[int]] = {}
-    for idx in range(num_unique):
-        vi, vj = int(src[idx]), int(dst[idx])
-        vertex_to_edges.setdefault(vi, []).append(idx)
-        vertex_to_edges.setdefault(vj, []).append(idx)
-
-    dual_edges_set: set[tuple[int, int]] = set()
-    for incident in vertex_to_edges.values():
-        for i in range(len(incident)):
-            for j in range(i + 1, len(incident)):
-                a, b = incident[i], incident[j]
-                dual_edges_set.add((a, b))
-                dual_edges_set.add((b, a))
-
-    dual_edges = np.array(sorted(dual_edges_set), dtype=np.int64).T  # [2, D]
+    unique_edges = original_data.edge_index[:, :num_unique].T.numpy()
+    dual_edges = build_dual_edge_index_from_unique_edges(unique_edges)
 
     dual_x = original_data.edge_attr[:num_unique]
     dual_y = original_data.y[:num_unique]
 
     dual = Data(
         x=dual_x,
-        edge_index=torch.from_numpy(dual_edges),
+        edge_index=dual_edges,
         y=dual_y,
         num_nodes=num_unique,
     )

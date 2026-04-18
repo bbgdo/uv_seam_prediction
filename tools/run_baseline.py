@@ -53,6 +53,7 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'enable_dihedral': False,
         'enable_symmetry': False,
         'enable_density': False,
+        'enable_thickness_sdf': False,
     }
     for key, value in shared_defaults.items():
         if not hasattr(args, key):
@@ -110,6 +111,8 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
                         help='enable symmetry distance for --feature-group custom')
     parser.add_argument('--enable-density', action='store_true',
                         help='enable topology-local density features for --feature-group custom')
+    parser.add_argument('--enable-thickness-sdf', action='store_true',
+                        help='enable inward ray thickness for --feature-group custom')
     return parser
 
 

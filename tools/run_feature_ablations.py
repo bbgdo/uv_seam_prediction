@@ -35,6 +35,7 @@ class ExperimentSpec:
     enable_dihedral: bool = False
     enable_symmetry: bool = False
     enable_density: bool = False
+    enable_thickness_sdf: bool = False
     strict_paper_protocol: bool = False
 
 
@@ -68,6 +69,12 @@ EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
         feature_group='custom',
         enable_density=True,
     ),
+    'sdf_only': ExperimentSpec(
+        name='sdf_only',
+        dataset_role='custom',
+        feature_group='custom',
+        enable_thickness_sdf=True,
+    ),
     'ao_symmetry': ExperimentSpec(
         name='ao_symmetry',
         dataset_role='custom',
@@ -81,6 +88,14 @@ EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
         feature_group='custom',
         enable_ao=True,
         enable_density=True,
+    ),
+    'ao_density_sdf': ExperimentSpec(
+        name='ao_density_sdf',
+        dataset_role='custom',
+        feature_group='custom',
+        enable_ao=True,
+        enable_density=True,
+        enable_thickness_sdf=True,
     ),
     'symmetry_density': ExperimentSpec(
         name='symmetry_density',
@@ -120,6 +135,16 @@ EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
         enable_symmetry=True,
         enable_density=True,
     ),
+    'full_custom_sdf': ExperimentSpec(
+        name='full_custom_sdf',
+        dataset_role='custom',
+        feature_group='custom',
+        enable_ao=True,
+        enable_dihedral=True,
+        enable_symmetry=True,
+        enable_density=True,
+        enable_thickness_sdf=True,
+    ),
 }
 
 FULL_ABLATION_SUITE = tuple(EXPERIMENT_SPECS)
@@ -133,6 +158,7 @@ def experiment_feature_selection(name: str):
         enable_dihedral=spec.enable_dihedral,
         enable_symmetry=spec.enable_symmetry,
         enable_density=spec.enable_density,
+        enable_thickness_sdf=spec.enable_thickness_sdf,
     )
 
 
@@ -144,8 +170,13 @@ def get_experiment_spec(name: str) -> ExperimentSpec:
         raise ValueError(f"unknown experiment {name!r}; choose one of: {choices}") from exc
 
 
-def validate_experiment_selection(experiment_names: list[str]) -> None:
-    return None
+def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
+    strict_experiments = [
+        name for name in experiment_names
+        if get_experiment_spec(name).strict_paper_protocol
+    ]
+    if model != 'graphsage' and strict_experiments:
+        raise ValueError('paper14_locked / strict paper protocol is GraphSAGE-only')
 
 
 def split_path_for_seed(splits_dir: Path, seed: int) -> Path:
@@ -420,6 +451,8 @@ def build_train_command(
         command.append('--enable-symmetry')
     if spec.enable_density:
         command.append('--enable-density')
+    if spec.enable_thickness_sdf:
+        command.append('--enable-thickness-sdf')
     if spec.strict_paper_protocol and model == 'graphsage':
         command.append('--strict-paper-protocol')
     return command
@@ -634,7 +667,8 @@ def run_experiment(
     runner=subprocess.run,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    experiment_dir = Path(args.output_root) / 'experiments' / spec.name
+    model = getattr(args, 'model', 'graphsage')
+    experiment_dir = Path(args.output_root) / model / 'experiments' / spec.name
     for seed in args.seeds:
         split_json = split_path_for_seed(Path(args.splits_dir), seed)
         run_dir = experiment_dir / f'seed_{seed}'
@@ -649,7 +683,7 @@ def run_experiment(
             resolution_tag=args.resolution_tag,
             group_mode=args.group_mode,
             epochs=args.epochs,
-            model=getattr(args, 'model', 'graphsage'),
+            model=model,
         )
 
         print(f"{spec.name} seed {seed}: running")
@@ -669,7 +703,7 @@ def run_experiment(
 
 def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict[str, Any]]:
     experiment_names = list(args.experiments)
-    validate_experiment_selection(experiment_names)
+    validate_experiment_selection(experiment_names, args.model)
     datasets = validate_dataset_roles(args, experiment_names)
     splits_dir = Path(args.splits_dir)
 
@@ -692,7 +726,7 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
         print(f"split files ready -> {splits_dir}")
         return {}
 
-    output_root = Path(args.output_root)
+    output_root = Path(args.output_root) / args.model
     output_root.mkdir(parents=True, exist_ok=True)
     payloads: dict[str, dict[str, Any]] = {}
     for name in experiment_names:
@@ -743,9 +777,20 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
         _write_json(output_root / 'paired_delta_custom14_control_vs_paper14_locked.json', delta)
 
 
+def parser_epilog() -> str:
+    return """Examples:
+  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --label-source exact_obj --feature-group paper14 --endpoint-order random --save --overwrite --output <paper_dataset.pt>
+  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --label-source exact_obj --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
+  python tools/run_feature_ablations.py --model graphsage --paper-dataset <paper_dataset.pt> --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf sdf_only --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+"""
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Run fixed-split baseline feature ablations with endpoint-order safety checks.'
+        description='Run fixed-split baseline feature ablations with endpoint-order safety checks.',
+        epilog=parser_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--model', choices=SUPPORTED_BASELINES, default='graphsage')
     parser.add_argument('--paper-dataset', default=None, help='locked paper14 dual dataset')
@@ -794,7 +839,7 @@ def main(argv: list[str] | None = None) -> None:
     ):
         raise SystemExit(1)
     if not args.only_generate_splits:
-        print(f"reports saved -> {Path(args.output_root)}")
+        print(f"reports saved -> {Path(args.output_root) / args.model}")
 
 
 if __name__ == '__main__':
