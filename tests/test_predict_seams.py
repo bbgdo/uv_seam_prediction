@@ -10,8 +10,8 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / 'uv_seam_prediction-master' / 'tools' / 'predict_seams.py'
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / 'tools' / 'predict_seams.py'
 spec = importlib.util.spec_from_file_location('predict_seams_bridge', MODULE_PATH)
 predict_seams = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = predict_seams

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from collections import defaultdict
@@ -9,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -21,9 +23,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.meshcnn_full.mesh import MeshCNNSample, load_meshcnn_dataset
 from models.meshcnn_full.model import MeshCNNSegmenter
-from models.utils.dataset import compute_pos_weight, split_dataset
+from models.utils.dataset import compute_pos_weight, load_split_json_metadata, split_dataset
 from models.utils.losses import focal_bce_with_logits
 from models.utils.metrics import edge_f1
+
+
+def set_global_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
 
 def _manifest_path(dataset_path: Path) -> Path:
@@ -349,11 +360,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--focal-gamma', type=float, default=2.0)
     parser.add_argument('--pos-weight', type=float, default=None)
     parser.add_argument('--grad-accum-steps', type=int, default=1)
-    parser.add_argument('--patience', type=int, default=15)
+    parser.add_argument('--patience', type=int, default=50)
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--group-mode', choices=('legacy', 'family'), default='family')
+    parser.add_argument('--split-json-in', default=None)
+    parser.add_argument('--split-json-out', default=None)
     args = parser.parse_args(argv)
+
+    split_metadata = load_split_json_metadata(args.split_json_in) if args.split_json_in else {}
+    seed_value = args.seed if args.seed is not None else split_metadata.get('seed')
+    seed = int(seed_value) if seed_value is not None else 42
+    set_global_seed(seed)
 
     dataset_path = Path(args.dataset)
     dataset = load_meshcnn_dataset(dataset_path)
@@ -372,7 +391,10 @@ def main(argv: list[str] | None = None) -> None:
         dataset,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
-        seed=args.seed,
+        seed=seed,
+        group_mode=args.group_mode,
+        split_json_in=args.split_json_in,
+        split_json_out=args.split_json_out,
         dataset_path=dataset_path,
     )
     if not train or not val or not test:
@@ -411,6 +433,15 @@ def main(argv: list[str] | None = None) -> None:
         'focal_gamma': args.focal_gamma,
         'pos_weight': float(pos_weight.item()),
         'grad_accum_steps': args.grad_accum_steps,
+        'seed': seed,
+        'group_mode': args.group_mode,
+        'val_ratio': args.val_ratio,
+        'test_ratio': args.test_ratio,
+        'split_json_in': str(args.split_json_in) if args.split_json_in else None,
+        'split_json_out': str(args.split_json_out) if args.split_json_out else None,
+        'train_graphs': len(train),
+        'val_graphs': len(val),
+        'test_graphs': len(test),
         'split': split_info,
     }
     _write_json(run_dir / 'config.json', config_payload)
@@ -419,7 +450,13 @@ def main(argv: list[str] | None = None) -> None:
         print('[info] tensorboard is unavailable; debug metrics will be shown in console only')
 
     print(f'device: {device}')
+    print(f'group_mode: {args.group_mode}')
     print(f'split: train {len(train)}, val {len(val)}, test {len(test)}')
+    print(f'  train meshes: {split_info["train"]}')
+    print(f'  val meshes:   {split_info["val"]}')
+    print(f'  test meshes:  {split_info["test"]}')
+    if args.split_json_out:
+        print(f'split saved: {args.split_json_out}')
     print(f'features: {feature_metadata["feature_group"]} ({in_channels})')
     print(f'pos_weight: {pos_weight.item():.4f}')
 

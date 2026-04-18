@@ -1,0 +1,2366 @@
+{
+  "aggregate_pos_weight": 33.72288037166086,
+  "aggregate_seam_ratio": 0.028799454114876707,
+  "dataset_path": "datasets\\dataset_meshcnn_full_custom_sdf.pt",
+  "endpoint_order": "fixed",
+  "feature_dim": 15,
+  "feature_flags": {
+    "ao": false,
+    "density": false,
+    "signed_dihedral": false,
+    "symmetry": false,
+    "thickness_sdf": true
+  },
+  "feature_group": "custom",
+  "feature_names": [
+    "pos_x_i",
+    "pos_y_i",
+    "pos_z_i",
+    "normal_x_i",
+    "normal_y_i",
+    "normal_z_i",
+    "gauss_curv_i",
+    "pos_x_j",
+    "pos_y_j",
+    "pos_z_j",
+    "normal_x_j",
+    "normal_y_j",
+    "normal_z_j",
+    "gauss_curv_j",
+    "thickness_sdf"
+  ],
+  "feature_preset": "custom",
+  "label_source": "exact_obj",
+  "mesh_count": 258,
+  "meshes": [
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem001_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem002.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem002_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem002_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem002_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem002_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem002_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem003.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem003_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem003_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem003_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem003_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem003_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem004.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem004_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem004_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem004_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem004_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem004_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem005.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem005_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem005_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem005_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem005_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem005_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem006.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem006_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem006_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem006_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem006_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem006_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem007.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem007_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem007_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem007_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem007_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem007_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem008.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem008_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem008_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem009.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem009_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem009_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem010.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem010_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem010_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem010_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem010_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem010_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem011.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem011_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem011_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem011_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem011_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem011_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem012.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem012_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem012_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem012_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem012_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem012_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem013.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem013_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem013_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem013_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem013_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem013_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem014.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem014_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem014_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem014_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem014_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem014_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem015.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem015_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem015_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem015_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem015_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fem015_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc001.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc001_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc001_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc002.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc002_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc002_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc002_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc002_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc002_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc003.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc003_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc003_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc004.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc004_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc004_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc004_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc004_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc004_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc005.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc005_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc005_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc005_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc005_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc005_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc006.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc006_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc006_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc006_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc006_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc006_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc007.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc007_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc007_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc007_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc007_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc007_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc008.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc008_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc008_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc008_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc008_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc008_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc009.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc009_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc009_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc009_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc009_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc009_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc010.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc010_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\fulc010_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk01.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk010.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk010_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk010_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk01_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk01_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk02.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk02_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk02_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk02_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk02_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk02_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk03.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk03_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk03_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk03_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk03_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk03_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk04.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk04_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk04_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk04_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk04_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk04_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk05.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk05_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk05_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk05_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk05_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk05_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk06.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk06_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk06_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk06_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk06_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk06_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk07.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk07_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk07_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk07_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk07_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk07_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk08.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk08_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk08_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk09.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk09_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk09_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk09_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk09_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\hulk09_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man01.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man010.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man010_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man010_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man010_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man010_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man010_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man011.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man011_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man011_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man011_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man011_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man011_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man012.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man012_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man012_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man012_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man012_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man012_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man013.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man013_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man013_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man013_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man013_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man013_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man01_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man01_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man01_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man01_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man01_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man02.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man02_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man02_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man02_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man02_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man02_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man03.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man03_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man03_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man03_h.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man03_h_aug0.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 112,
+      "faces": 41792,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man03_h_aug1.obj",
+      "seam_edges": 1195,
+      "unique_edges": 62744,
+      "vertices": 20951
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man04.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man04_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man04_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man04_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man04_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man04_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man05.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man05_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man05_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man05_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man05_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man05_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man06.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man06_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man06_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man06_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man06_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man06_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man07.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man07_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man07_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man08.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man08_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man08_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man09.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man09_aug0.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 58,
+      "faces": 11202,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man09_aug1.obj",
+      "seam_edges": 615,
+      "unique_edges": 16832,
+      "vertices": 5629
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man_test_l.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man_test_l_aug0.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    },
+    {
+      "boundary_edges": 38,
+      "faces": 5168,
+      "feature_dim": 15,
+      "file_path": "3d-objs\\man_test_l_aug1.obj",
+      "seam_edges": 462,
+      "unique_edges": 7771,
+      "vertices": 2602
+    }
+  ],
+  "sample_format": "meshcnn_full_v2",
+  "total_boundary_edges": 16680,
+  "total_faces": 4179936,
+  "total_seam_edges": 180810,
+  "total_unique_edges": 6278244,
+  "total_vertices": 2098050,
+  "weld_mode": "exact"
+}
