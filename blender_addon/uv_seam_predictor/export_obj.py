@@ -4,7 +4,6 @@ import bmesh
 def export_object_to_obj_with_hidden_triangulation(obj, output_path):
     """Export a triangulated in-memory copy while preserving original vertex IDs."""
     mesh = obj.data
-    matrix_world = obj.matrix_world
 
     bm = bmesh.new()
     tri_bm = None
@@ -32,7 +31,9 @@ def export_object_to_obj_with_hidden_triangulation(obj, output_path):
             file.write(f'o {obj.name}\n')
 
             for vertex in sorted(bm.verts, key=lambda item: item.index):
-                co = matrix_world @ vertex.co
+                # Keep model input in the mesh's authored coordinate basis. Object
+                # location, rotation, and scale are viewport transforms here.
+                co = vertex.co
                 file.write(f'v {co.x:.9g} {co.y:.9g} {co.z:.9g}\n')
 
             for face in tri_bm.faces:

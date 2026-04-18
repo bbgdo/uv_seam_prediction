@@ -64,6 +64,8 @@ class PredictSeamsTests(unittest.TestCase):
             self.assertEqual(predict_seams.resolve_model_type('graphsage', {'model': 'gatv2'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {'model_name': 'DualGraphSAGE'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {}, weights), 'gatv2')
+            self.assertEqual(predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, weights), 'meshcnn_full')
+            self.assertEqual(predict_seams.resolve_model_type('sparsemeshcnn', {}, weights), 'meshcnn_full')
 
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
@@ -122,6 +124,28 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(payload['edges'][0]['vertex_ids_obj_1based'], [1, 2])
         self.assertEqual(payload['seam_edges'][0]['vertex_ids_0based'], [0, 2])
         self.assertEqual(payload['seam_edges'][0]['vertex_ids_obj_1based'], [1, 3])
+
+    def test_meshcnn_inference_sample_is_unlabeled(self):
+        topology = _square_topology()
+        feature_mesh = predict_seams.build_feature_mesh_from_canonical_topology(topology)
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        edge_features = np.zeros((len(topology.canonical_edges), selection.feature_count), dtype=np.float32)
+        unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
+
+        sample = predict_seams.build_meshcnn_inference_sample(
+            mesh_path=Path('mesh.obj'),
+            feature_mesh=feature_mesh,
+            unique_edges=unique_edges,
+            edge_features=edge_features,
+            selection=selection,
+            endpoint_order=endpoint_order,
+            topology=topology,
+        )
+
+        self.assertEqual(sample.label_source, 'inference_unlabeled')
+        self.assertTrue(torch.equal(sample.edge_labels, torch.zeros(len(unique_edges))))
+        self.assertEqual(sample.edge_features.shape, edge_features.shape)
+        self.assertEqual(sample.unique_edges.tolist(), unique_edges.tolist())
 
     def test_write_all_edges_includes_full_table(self):
         payload = self._payload(write_all_edges=True)

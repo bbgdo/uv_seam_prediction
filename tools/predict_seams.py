@@ -20,6 +20,8 @@ if str(REPO_ROOT) not in sys.path:
 
 import trimesh  # noqa: E402
 from models.baselines.registry import get_baseline  # noqa: E402
+from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa: E402
+from models.meshcnn_full.model import MeshCNNSegmenter  # noqa: E402
 from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
@@ -27,7 +29,7 @@ from preprocessing.obj_parser import parse_obj  # noqa: E402
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology  # noqa: E402
 
 
-MODEL_TYPES = ('auto', 'gatv2', 'graphsage')
+MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn')
 FEATURE_BUNDLES = ('auto', 'paper14_locked', 'extended18', 'ao_density', 'custom')
 
 
@@ -101,7 +103,7 @@ def _validate_threshold(value: Any) -> float:
 
 def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Path) -> str:
     if requested != 'auto':
-        return requested
+        return _normalize_model_name(requested) or requested
 
     for key in ('model', 'model_name'):
         resolved = _normalize_model_name(config.get(key))
@@ -126,6 +128,10 @@ def _normalize_model_name(value: Any) -> str | None:
         return 'gatv2'
     if normalized == 'graphsage' or 'graphsage' in normalized:
         return 'graphsage'
+    if normalized in ('meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn'):
+        return 'meshcnn_full'
+    if 'meshcnn_full' in normalized or ('meshcnn' in normalized and 'sparse' in normalized):
+        return 'meshcnn_full'
     return None
 
 
@@ -233,6 +239,9 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
 
 def _feature_metadata_sources(config: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
     sources = [config, summary]
+    feature_metadata = _coerce_dict(config.get('feature_metadata'))
+    if feature_metadata is not None:
+        sources.append(feature_metadata)
     dataset_summary = summary.get('dataset_metadata_summary')
     if isinstance(dataset_summary, dict):
         sources.append(dataset_summary)
@@ -270,6 +279,35 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, Any]:
+    if model_name == 'meshcnn_full':
+        model_config = _coerce_dict(config.get('model_config')) or {}
+        feature_metadata = _coerce_dict(config.get('feature_metadata')) or {}
+        sources = (model_config, config, feature_metadata)
+        in_channels = _required_config_value_from_sources(
+            sources,
+            ('in_channels', 'in_dim', 'feature_dim'),
+            'in_channels/in_dim/feature_dim',
+        )
+        hidden_channels = _required_config_value_from_sources(
+            sources,
+            ('hidden_channels', 'hidden_size', 'hidden_dim', 'hidden'),
+            'hidden_channels/hidden_size/hidden_dim/hidden',
+        )
+        kwargs = {
+            'in_channels': int(in_channels),
+            'hidden_channels': int(hidden_channels),
+            'dropout': float(_optional_config_value_from_sources(sources, ('dropout',), 0.2)),
+            'pool_ratios': _coerce_float_tuple(
+                _optional_config_value_from_sources(sources, ('pool_ratios',), (0.85, 0.75)),
+                'pool_ratios',
+            ),
+            'min_edges': int(_optional_config_value_from_sources(sources, ('min_edges',), 32)),
+        }
+        max_pool_collapses = _optional_config_value_from_sources(sources, ('max_pool_collapses',), None)
+        if max_pool_collapses is not None:
+            kwargs['max_pool_collapses'] = int(max_pool_collapses)
+        return kwargs
+
     in_dim = _required_config_value(config, ('in_dim',), 'in_dim')
     hidden_dim = _required_config_value(config, ('hidden_size', 'hidden_dim', 'hidden'), 'hidden_size/hidden_dim/hidden')
     kwargs = {
@@ -297,6 +335,41 @@ def _required_config_value(config: dict[str, Any], keys: tuple[str, ...], label:
     raise PredictionError(f'config metadata is missing required model key: {label}', 'InvalidConfig')
 
 
+def _required_config_value_from_sources(
+    sources: tuple[dict[str, Any], ...],
+    keys: tuple[str, ...],
+    label: str,
+) -> Any:
+    value = _optional_config_value_from_sources(sources, keys, None)
+    if value is None:
+        raise PredictionError(f'config metadata is missing required model key: {label}', 'InvalidConfig')
+    return value
+
+
+def _optional_config_value_from_sources(
+    sources: tuple[dict[str, Any], ...],
+    keys: tuple[str, ...],
+    default: Any,
+) -> Any:
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, ''):
+                return value
+    return default
+
+
+def _coerce_float_tuple(value: Any, label: str) -> tuple[float, ...]:
+    if isinstance(value, str):
+        value = [item.strip() for item in value.split(',') if item.strip()]
+    if not isinstance(value, (list, tuple)):
+        raise PredictionError(f'{label} must be a list, tuple, or comma-separated string', 'InvalidConfig')
+    result = tuple(float(item) for item in value)
+    if not result:
+        raise PredictionError(f'{label} must contain at least one value', 'InvalidConfig')
+    return result
+
+
 def validate_feature_metadata(
     config: dict[str, Any],
     summary: dict[str, Any],
@@ -307,6 +380,9 @@ def validate_feature_metadata(
         ('config', config),
         ('summary', summary),
     ]
+    feature_metadata = _coerce_dict(config.get('feature_metadata'))
+    if feature_metadata is not None:
+        sources.append(('config.feature_metadata', feature_metadata))
     dataset_summary = summary.get('dataset_metadata_summary')
     if isinstance(dataset_summary, dict):
         sources.append(('summary.dataset_metadata_summary', dataset_summary))
@@ -337,17 +413,23 @@ def validate_feature_metadata(
                         'FeatureMetadataMismatch',
                     )
 
-        if 'in_dim' in metadata and metadata.get('in_dim') not in (None, ''):
-            observed = int(metadata['in_dim'])
+        dim_key = None
+        for candidate_key in ('in_dim', 'feature_dim', 'in_channels'):
+            if candidate_key in metadata and metadata.get(candidate_key) not in (None, ''):
+                dim_key = candidate_key
+                break
+        if dim_key is not None:
+            observed = int(metadata[dim_key])
             if observed != selection.feature_count:
                 raise PredictionError(
-                    f'{source_name} in_dim mismatch: selected features={selection.feature_count}, metadata={observed}',
+                    f'{source_name} {dim_key} mismatch: selected features={selection.feature_count}, metadata={observed}',
                     'FeatureMetadataMismatch',
                 )
 
-    if int(model_kwargs['in_dim']) != selection.feature_count:
+    model_in_dim = int(model_kwargs.get('in_dim', model_kwargs.get('in_channels')))
+    if model_in_dim != selection.feature_count:
         raise PredictionError(
-            f'model in_dim mismatch: selected features={selection.feature_count}, model in_dim={model_kwargs["in_dim"]}',
+            f'model in_dim mismatch: selected features={selection.feature_count}, model in_dim={model_in_dim}',
             'FeatureMetadataMismatch',
         )
 
@@ -430,6 +512,45 @@ def build_dual_data(edge_features: np.ndarray, unique_edges: np.ndarray) -> Data
     return Data(x=dual_x, edge_index=dual_edge_index, num_nodes=len(unique_edges))
 
 
+def build_meshcnn_inference_sample(
+    *,
+    mesh_path: Path,
+    feature_mesh: trimesh.Trimesh,
+    unique_edges: np.ndarray,
+    edge_features: np.ndarray,
+    selection: ResolvedFeatureSet,
+    endpoint_order: str,
+    topology: CanonicalTopology,
+) -> MeshCNNSample:
+    faces = np.asarray(feature_mesh.faces, dtype=np.int64)
+    unique_edges, edge_to_faces, face_to_edges, edge_neighbors, boundary_mask = build_mesh_adjacency(
+        faces,
+        np.asarray(unique_edges, dtype=np.int64),
+    )
+    return MeshCNNSample(
+        vertices=torch.from_numpy(np.asarray(feature_mesh.vertices, dtype=np.float32)),
+        faces=torch.from_numpy(faces.astype(np.int64, copy=False)),
+        unique_edges=torch.from_numpy(unique_edges.astype(np.int64, copy=False)),
+        edge_features=torch.from_numpy(np.asarray(edge_features, dtype=np.float32)),
+        edge_labels=torch.zeros(len(unique_edges), dtype=torch.float32),
+        edge_neighbors=torch.from_numpy(edge_neighbors.astype(np.int64, copy=False)),
+        edge_to_faces=torch.from_numpy(edge_to_faces.astype(np.int64, copy=False)),
+        face_to_edges=torch.from_numpy(face_to_edges.astype(np.int64, copy=False)),
+        boundary_mask=torch.from_numpy(boundary_mask.astype(bool, copy=False)),
+        file_path=str(mesh_path),
+        feature_group=selection.feature_group,
+        feature_preset=selection.feature_preset,
+        feature_names=list(selection.feature_names),
+        feature_flags=selection.feature_flags.as_dict(),
+        density_config=dict(selection.density_config) if selection.density_config else None,
+        endpoint_order=endpoint_order,
+        label_source='inference_unlabeled',
+        weld_mode=topology.weld_audit.mode,
+        seam_edge_count=0,
+        boundary_edge_count=int(np.count_nonzero(boundary_mask)),
+    )
+
+
 def normalize_probabilities(probabilities: np.ndarray, expected_length: int) -> np.ndarray:
     probs = np.asarray(probabilities, dtype=np.float64)
     if probs.shape == (expected_length,):
@@ -444,17 +565,21 @@ def normalize_probabilities(probabilities: np.ndarray, expected_length: int) -> 
     )
 
 
-def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch.Tensor]:
+def load_weights_payload(weights_path: Path, device: torch.device) -> Any:
     try:
         try:
-            payload = torch.load(weights_path, map_location=device, weights_only=True)
+            return torch.load(weights_path, map_location=device, weights_only=True)
         except TypeError:
-            payload = torch.load(weights_path, map_location=device)
+            return torch.load(weights_path, map_location=device)
+        except Exception:
+            return torch.load(weights_path, map_location=device, weights_only=False)
     except Exception as exc:
         raise PredictionError(f'failed to load model weights: {weights_path}', 'InvalidWeights') from exc
 
+
+def extract_state_dict(payload: Any) -> dict[str, torch.Tensor]:
     if isinstance(payload, dict):
-        for key in ('state_dict', 'model_state_dict'):
+        for key in ('state_dict', 'model_state_dict', 'model_state'):
             nested = payload.get(key)
             if isinstance(nested, dict):
                 return nested
@@ -464,6 +589,67 @@ def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch
         'model weights must be a state_dict or contain state_dict/model_state_dict',
         'InvalidWeights',
     )
+
+
+def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch.Tensor]:
+    return extract_state_dict(load_weights_payload(weights_path, device))
+
+
+def build_prediction_model(model_type: str, model_kwargs: dict[str, Any]) -> torch.nn.Module:
+    if model_type == 'meshcnn_full':
+        return MeshCNNSegmenter(**model_kwargs)
+    definition = get_baseline(model_type)
+    return definition.model_class(**model_kwargs)
+
+
+def _json_float(value: Any) -> float | None:
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def _json_vector(values: np.ndarray) -> list[float | None]:
+    return [_json_float(value) for value in np.asarray(values, dtype=np.float64).reshape(-1)]
+
+
+def build_mesh_diagnostics(feature_mesh: trimesh.Trimesh, edge_features: np.ndarray) -> dict[str, Any]:
+    vertices = np.asarray(feature_mesh.vertices, dtype=np.float64)
+    faces = np.asarray(feature_mesh.faces, dtype=np.int64)
+    if len(vertices):
+        bounds_min = vertices.min(axis=0)
+        bounds_max = vertices.max(axis=0)
+        centroid = vertices.mean(axis=0)
+    else:
+        bounds_min = np.zeros(3, dtype=np.float64)
+        bounds_max = np.zeros(3, dtype=np.float64)
+        centroid = np.zeros(3, dtype=np.float64)
+    size = bounds_max - bounds_min
+    diag = float(np.linalg.norm(size))
+    features = np.asarray(edge_features, dtype=np.float64)
+    finite_features = features[np.isfinite(features)]
+    return {
+        'coordinate_space': {
+            'exported_basis': 'mesh_local',
+            'object_matrix_applied': False,
+            'transform': 'p_export = I * p_mesh_local',
+        },
+        'mesh_bbox': {
+            'vertex_count': int(len(vertices)),
+            'face_count': int(len(faces)),
+            'min': _json_vector(bounds_min),
+            'max': _json_vector(bounds_max),
+            'size': _json_vector(size),
+            'diagonal': _json_float(diag),
+            'centroid': _json_vector(centroid),
+            'finite_vertices': bool(np.isfinite(vertices).all()) if len(vertices) else True,
+        },
+        'edge_features': {
+            'shape': [int(dim) for dim in features.shape],
+            'finite': bool(np.isfinite(features).all()) if features.size else True,
+            'min': _json_float(finite_features.min()) if finite_features.size else None,
+            'max': _json_float(finite_features.max()) if finite_features.size else None,
+            'mean': _json_float(finite_features.mean()) if finite_features.size else None,
+        },
+    }
 
 
 def build_output_payload(
@@ -483,6 +669,7 @@ def build_output_payload(
     probabilities: np.ndarray,
     seam_mask: np.ndarray,
     write_all_edges: bool,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     seam_edge_indices = [int(idx) for idx in np.flatnonzero(seam_mask)]
     edge_rows = []
@@ -547,6 +734,8 @@ def build_output_payload(
         'seam_edge_indices': seam_edge_indices,
         'seam_edges': seam_rows,
     }
+    if diagnostics is not None:
+        payload['diagnostics'] = diagnostics
     if write_all_edges:
         payload['edges'] = edge_rows
     return payload
@@ -607,11 +796,11 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
             rng_seed=args.endpoint_seed,
         )
     assert_canonical_edge_order(unique_edges, topology.canonical_edges, mesh_path)
+    diagnostics = build_mesh_diagnostics(feature_mesh, edge_features)
 
-    dual_data = build_dual_data(edge_features, unique_edges)
-    definition = get_baseline(model_type)
-    model = definition.model_class(**model_kwargs)
-    state_dict = load_state_dict(weights_path, device)
+    model = build_prediction_model(model_type, model_kwargs)
+    weights_payload = load_weights_payload(weights_path, device)
+    state_dict = extract_state_dict(weights_payload)
     try:
         model.load_state_dict(state_dict, strict=True)
     except RuntimeError as exc:
@@ -620,7 +809,20 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
     model.eval()
 
     with torch.no_grad():
-        logits = model(dual_data.x.to(device), dual_data.edge_index.to(device))
+        if model_type == 'meshcnn_full':
+            sample = build_meshcnn_inference_sample(
+                mesh_path=mesh_path,
+                feature_mesh=feature_mesh,
+                unique_edges=unique_edges,
+                edge_features=edge_features,
+                selection=selection,
+                endpoint_order=endpoint_order,
+                topology=topology,
+            )
+            logits = model(sample)
+        else:
+            dual_data = build_dual_data(edge_features, unique_edges)
+            logits = model(dual_data.x.to(device), dual_data.edge_index.to(device))
         probs = torch.sigmoid(logits).cpu().numpy()
     probabilities = normalize_probabilities(probs, len(unique_edges))
     seam_mask = probabilities >= threshold
@@ -641,6 +843,7 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
         probabilities=probabilities,
         seam_mask=seam_mask,
         write_all_edges=args.write_all_edges,
+        diagnostics=diagnostics,
     )
 
 
@@ -650,6 +853,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = run_prediction(args)
         write_json_payload(output_json, payload)
+        bbox = payload.get('diagnostics', {}).get('mesh_bbox', {})
+        bbox_diag = bbox.get('diagonal')
+        bbox_size = bbox.get('size')
+        if bbox_diag is not None and bbox_size is not None:
+            print(f'mesh bbox size {bbox_size}, diagonal {bbox_diag:.9g}')
         print(
             f"predicted {payload['stats']['predicted_seam_count']} seam edges "
             f"out of {payload['topology']['edge_count']} -> {output_json.resolve()}"
