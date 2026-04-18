@@ -2,12 +2,10 @@ import bpy
 
 
 class UVSEAM_Settings(bpy.types.PropertyGroup):
-    feature_bundle: bpy.props.EnumProperty(
-        name='Feature Bundle',
-        items=(
-            ('ao_density', 'ao_density', 'AO + density feature bundle'),
-        ),
-        default='ao_density',
+    model_weights_path: bpy.props.StringProperty(
+        name='Model Weights Path',
+        subtype='FILE_PATH',
+        description='Path to the trained model weights file',
     )
     threshold: bpy.props.FloatProperty(
         name='Threshold',

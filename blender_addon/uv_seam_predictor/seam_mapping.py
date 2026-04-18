@@ -1,15 +1,13 @@
 import json
 from dataclasses import dataclass
 
-import bmesh
-
 
 @dataclass
 class SeamApplyResult:
     requested: int
     unique: int
     applied: int
-    missing: int
+    ignored_non_original: int
     duplicates_skipped: int
 
 
@@ -40,55 +38,53 @@ def load_predicted_edge_keys(json_path):
 
 
 def apply_seam_keys(mesh, predicted_keys, clear_existing=True):
-    bm = bmesh.new()
-    try:
-        bm.from_mesh(mesh)
-        bm.verts.ensure_lookup_table()
-        bm.edges.ensure_lookup_table()
-        bm.verts.index_update()
+    edge_by_key = {}
+    for edge in mesh.edges:
+        v0, v1 = edge.vertices
+        edge_by_key[(min(v0, v1), max(v0, v1))] = edge
 
-        edge_by_key = {}
-        for edge in bm.edges:
-            v0 = edge.verts[0].index
-            v1 = edge.verts[1].index
-            edge_by_key[(min(v0, v1), max(v0, v1))] = edge
+    if clear_existing:
+        for edge in mesh.edges:
+            edge.use_seam = False
 
-        if clear_existing:
-            for edge in bm.edges:
-                edge.seam = False
+    requested = len(predicted_keys)
+    seen = set()
+    applied = 0
+    ignored_non_original = 0
+    duplicates_skipped = 0
 
-        requested = len(predicted_keys)
-        seen = set()
-        applied = 0
-        missing = 0
-        duplicates_skipped = 0
+    for key in predicted_keys:
+        normalized_key = (min(key[0], key[1]), max(key[0], key[1]))
+        if normalized_key in seen:
+            duplicates_skipped += 1
+            continue
+        seen.add(normalized_key)
 
-        for key in predicted_keys:
-            if key in seen:
-                duplicates_skipped += 1
-                continue
-            seen.add(key)
+        edge = edge_by_key.get(normalized_key)
+        if edge is None:
+            ignored_non_original += 1
+            continue
 
-            edge = edge_by_key.get(key)
-            if edge is None:
-                missing += 1
-                continue
+        edge.use_seam = True
+        applied += 1
 
-            edge.seam = True
-            applied += 1
+    mesh.update()
 
-        bm.to_mesh(mesh)
-        mesh.update()
+    return SeamApplyResult(
+        requested=requested,
+        unique=len(seen),
+        applied=applied,
+        ignored_non_original=ignored_non_original,
+        duplicates_skipped=duplicates_skipped,
+    )
 
-        return SeamApplyResult(
-            requested=requested,
-            unique=len(seen),
-            applied=applied,
-            missing=missing,
-            duplicates_skipped=duplicates_skipped,
-        )
-    finally:
-        bm.free()
+
+def format_apply_summary(result):
+    return (
+        f'Marked {result.applied} seam edges. '
+        f'Ignored {result.ignored_non_original} triangulation-only edges. '
+        f'Skipped {result.duplicates_skipped} duplicates.'
+    )
 
 
 def _is_vertex_pair(value):

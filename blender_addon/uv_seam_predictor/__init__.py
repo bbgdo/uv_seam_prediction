@@ -1,10 +1,10 @@
 bl_info = {
-    'name': 'UV Seam Predictor',
-    'author': 'UV Seam Predictor',
+    'name': 'Auto Seams',
+    'author': 'Auto Seams',
     'version': (0, 1, 0),
     'blender': (4, 0, 0),
-    'location': 'View3D > Sidebar > UV Seam AI',
-    'description': 'Predict UV seam edges with an external inference script.',
+    'location': 'View3D > Sidebar > Auto Seams',
+    'description': 'Automatically mark UV seam edges with an external inference script.',
     'category': 'UV',
 }
 

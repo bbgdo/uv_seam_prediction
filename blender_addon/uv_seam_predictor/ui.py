@@ -15,10 +15,10 @@ def _path_state(path):
 
 class UVSEAM_PT_panel(bpy.types.Panel):
     bl_idname = 'UVSEAM_PT_panel'
-    bl_label = 'UV Seam AI'
+    bl_label = 'Auto Seams'
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'UV Seam AI'
+    bl_category = 'Auto Seams'
 
     def draw(self, context):
         layout = self.layout
@@ -35,7 +35,7 @@ class UVSEAM_PT_panel(bpy.types.Panel):
             for label, path in (
                 ('Python', prefs.python_executable),
                 ('Script', prefs.predict_script_path),
-                ('Model', prefs.model_weights_path),
+                ('Model', settings.model_weights_path),
             ):
                 status, icon = _path_state(path)
                 row = setup.row()
@@ -46,7 +46,7 @@ class UVSEAM_PT_panel(bpy.types.Panel):
 
         inference_box = layout.box()
         inference_box.label(text='Inference')
-        inference_box.prop(settings, 'feature_bundle')
+        inference_box.prop(settings, 'model_weights_path')
         inference_box.prop(settings, 'threshold')
         inference_box.prop(settings, 'clear_existing_seams')
         inference_box.prop(settings, 'make_single_user_mesh')

@@ -28,7 +28,7 @@ from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
 
 
 MODEL_TYPES = ('auto', 'gatv2', 'graphsage')
-FEATURE_BUNDLES = ('paper14_locked', 'extended18', 'ao_density', 'custom')
+FEATURE_BUNDLES = ('auto', 'paper14_locked', 'extended18', 'ao_density', 'custom')
 
 
 class PredictionError(RuntimeError):
@@ -41,7 +41,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Predict UV seam edges for a raw OBJ mesh.')
     parser.add_argument('--mesh-path', required=True)
     parser.add_argument('--model-weights', required=True)
-    parser.add_argument('--feature-bundle', required=True, choices=FEATURE_BUNDLES)
+    parser.add_argument('--feature-bundle', default='auto', choices=FEATURE_BUNDLES)
     parser.add_argument('--output-json', required=True)
     parser.add_argument('--threshold', type=float, default=None)
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
@@ -129,7 +129,11 @@ def _normalize_model_name(value: Any) -> str | None:
     return None
 
 
-def resolve_feature_bundle(args: argparse.Namespace) -> tuple[ResolvedFeatureSet, str]:
+def resolve_feature_bundle(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    summary: dict[str, Any],
+) -> tuple[ResolvedFeatureSet, str, str]:
     toggles = {
         'enable_ao': bool(args.enable_ao),
         'enable_dihedral': bool(args.enable_dihedral),
@@ -137,6 +141,14 @@ def resolve_feature_bundle(args: argparse.Namespace) -> tuple[ResolvedFeatureSet
         'enable_density': bool(args.enable_density),
     }
     any_toggle = any(toggles.values())
+
+    if args.feature_bundle == 'auto':
+        if any_toggle:
+            raise PredictionError(
+                'feature toggles require an explicit --feature-bundle custom',
+                'InvalidFeatureBundle',
+            )
+        return infer_feature_bundle(config, summary)
 
     if args.feature_bundle != 'custom' and any_toggle:
         enabled = ', '.join(name for name, value in toggles.items() if value)
@@ -146,11 +158,11 @@ def resolve_feature_bundle(args: argparse.Namespace) -> tuple[ResolvedFeatureSet
         )
 
     if args.feature_bundle == 'paper14_locked':
-        return resolve_feature_selection('paper14'), 'random'
+        return resolve_feature_selection('paper14'), 'random', args.feature_bundle
     if args.feature_bundle == 'extended18':
-        return resolve_feature_selection('extended18'), 'fixed'
+        return resolve_feature_selection('extended18'), 'fixed', args.feature_bundle
     if args.feature_bundle == 'ao_density':
-        return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed'
+        return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', args.feature_bundle
 
     if not any_toggle:
         raise PredictionError(
@@ -166,7 +178,87 @@ def resolve_feature_bundle(args: argparse.Namespace) -> tuple[ResolvedFeatureSet
             enable_density=args.enable_density,
         ),
         'fixed',
+        args.feature_bundle,
     )
+
+
+def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tuple[ResolvedFeatureSet, str, str]:
+    for metadata in _feature_metadata_sources(config, summary):
+        group = _normalize_metadata_name(metadata.get('feature_group'))
+        preset = _normalize_metadata_name(metadata.get('feature_preset'))
+
+        if group in ('paper14', 'paper') or preset in ('paper14', 'paper'):
+            return resolve_feature_selection('paper14'), 'random', 'auto'
+        if group in ('extended18', 'extended') or preset in ('extended18', 'extended'):
+            return resolve_feature_selection('extended18'), 'fixed', 'auto'
+        if group == 'custom' or preset == 'custom':
+            flags = _infer_feature_flags(metadata)
+            return (
+                resolve_feature_selection(
+                    'custom',
+                    enable_ao=flags['ao'],
+                    enable_signed_dihedral=flags['signed_dihedral'],
+                    enable_symmetry=flags['symmetry'],
+                    enable_density=flags['density'],
+                    enable_thickness_sdf=flags['thickness_sdf'],
+                ),
+                'fixed',
+                'auto',
+            )
+
+    for metadata in _feature_metadata_sources(config, summary):
+        feature_names = _coerce_list(metadata.get('feature_names'))
+        if feature_names:
+            names = tuple(feature_names)
+            if names == resolve_feature_selection('paper14').feature_names:
+                return resolve_feature_selection('paper14'), 'random', 'auto'
+            if names == resolve_feature_selection('extended18').feature_names:
+                return resolve_feature_selection('extended18'), 'fixed', 'auto'
+            flags = _infer_feature_flags({'feature_names': feature_names})
+            return (
+                resolve_feature_selection(
+                    'custom',
+                    enable_ao=flags['ao'],
+                    enable_signed_dihedral=flags['signed_dihedral'],
+                    enable_symmetry=flags['symmetry'],
+                    enable_density=flags['density'],
+                    enable_thickness_sdf=flags['thickness_sdf'],
+                ),
+                'fixed',
+                'auto',
+            )
+
+    return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', 'auto'
+
+
+def _feature_metadata_sources(config: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
+    sources = [config, summary]
+    dataset_summary = summary.get('dataset_metadata_summary')
+    if isinstance(dataset_summary, dict):
+        sources.append(dataset_summary)
+    return sources
+
+
+def _normalize_metadata_name(value: Any) -> str | None:
+    if value in (None, ''):
+        return None
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def _infer_feature_flags(metadata: dict[str, Any]) -> dict[str, bool]:
+    flags = _coerce_dict(metadata.get('feature_flags')) or {}
+    names = set(_coerce_list(metadata.get('feature_names')) or ())
+    return {
+        'ao': bool(flags.get('ao')) or 'ao_i' in names or 'ao_j' in names,
+        'signed_dihedral': (
+            bool(flags.get('signed_dihedral'))
+            or bool(flags.get('dihedral'))
+            or 'signed_dihedral' in names
+        ),
+        'symmetry': bool(flags.get('symmetry')) or 'symmetry_dist' in names,
+        'density': bool(flags.get('density')) or 'density_mean' in names or 'density_diff' in names,
+        'thickness_sdf': bool(flags.get('thickness_sdf')) or 'thickness_sdf' in names,
+    }
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -498,7 +590,7 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
     summary = load_json(summary_path, 'summary JSON')
     model_type = resolve_model_type(args.model_type, config, weights_path)
     threshold = resolve_threshold(args.threshold, summary, args.fail_if_threshold_missing)
-    selection, endpoint_order = resolve_feature_bundle(args)
+    selection, endpoint_order, resolved_feature_bundle = resolve_feature_bundle(args, config, summary)
     device = resolve_device(args.device)
     model_kwargs = resolve_model_kwargs(model_type, config)
     validate_feature_metadata(config, summary, selection, model_kwargs)
@@ -540,7 +632,7 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
         config_path=config_path,
         summary_path=summary_path,
         model_type=model_type,
-        feature_bundle=args.feature_bundle,
+        feature_bundle=resolved_feature_bundle,
         selection=selection,
         threshold=threshold,
         device=device,

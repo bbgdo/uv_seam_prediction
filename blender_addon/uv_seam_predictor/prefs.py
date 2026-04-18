@@ -14,11 +14,6 @@ class UVSEAM_Preferences(bpy.types.AddonPreferences):
         subtype='FILE_PATH',
         description='Path to tools/predict_seams.py',
     )
-    model_weights_path: bpy.props.StringProperty(
-        name='Model Weights',
-        subtype='FILE_PATH',
-        description='Path to the trained model weights file',
-    )
     default_timeout_sec: bpy.props.IntProperty(
         name='Timeout',
         default=300,
@@ -43,7 +38,6 @@ class UVSEAM_Preferences(bpy.types.AddonPreferences):
         paths.label(text='External Inference')
         paths.prop(self, 'python_executable')
         paths.prop(self, 'predict_script_path')
-        paths.prop(self, 'model_weights_path')
 
         runtime = layout.box()
         runtime.label(text='Runtime')

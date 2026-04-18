@@ -13,7 +13,7 @@ def get_addon_module_name(context):
     for module_name in addon_module_candidates():
         if module_name in context.preferences.addons:
             return module_name
-    raise ValueError('UV Seam Predictor add-on preferences are not available.')
+    raise ValueError('Auto Seams add-on preferences are not available.')
 
 
 def get_addon_preferences(context):
@@ -31,23 +31,17 @@ def require_active_mesh_object(context):
     return obj
 
 
-def require_triangulated_mesh(obj):
-    for polygon in obj.data.polygons:
-        if len(polygon.vertices) != 3:
-            raise ValueError('Mesh must be triangulated before prediction.')
-
-
 def require_no_enabled_modifiers(obj):
     enabled = [modifier.name for modifier in obj.modifiers if modifier.show_viewport]
     if enabled:
         raise ValueError('Enabled modifiers are not supported for v1. Disable them before prediction.')
 
 
-def validate_configured_paths(prefs):
+def validate_configured_paths(prefs, settings):
     checks = (
         ('Python executable', prefs.python_executable),
         ('Prediction script', prefs.predict_script_path),
-        ('Model weights', prefs.model_weights_path),
+        ('Model weights', settings.model_weights_path),
     )
     for label, path in checks:
         if not path:
@@ -56,13 +50,15 @@ def validate_configured_paths(prefs):
             raise ValueError(f'{label} does not exist: {path}')
 
 
-def can_make_single_user_mesh(obj):
-    return obj.data is not None and obj.data.users > 1
-
-
 def require_single_user_or_copy_allowed(obj, make_single_user_mesh):
     if obj.data.users > 1 and not make_single_user_mesh:
         raise ValueError('Mesh data is shared. Enable Make Mesh Single User before prediction.')
+
+
+def require_unchanged_topology(obj, expected_counts):
+    current_counts = (len(obj.data.vertices), len(obj.data.edges))
+    if current_counts != expected_counts:
+        raise ValueError('Mesh topology changed while prediction was running. No seams were applied.')
 
 
 def bpy_path_to_os_path(path):

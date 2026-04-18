@@ -69,19 +69,19 @@ class PredictSeamsTests(unittest.TestCase):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
 
     def test_feature_bundle_resolution(self):
-        selection, endpoint_order = predict_seams.resolve_feature_bundle(_args('paper14_locked'))
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
         self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(selection.feature_count, 14)
         self.assertEqual(endpoint_order, 'random')
 
-        selection, endpoint_order = predict_seams.resolve_feature_bundle(_args('ao_density'))
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('ao_density'), {}, {})
         self.assertEqual(selection.feature_group, 'custom')
         self.assertTrue(selection.feature_flags.ao)
         self.assertTrue(selection.feature_flags.density)
         self.assertEqual(endpoint_order, 'fixed')
 
         with self.assertRaisesRegex(predict_seams.PredictionError, 'requires at least one'):
-            predict_seams.resolve_feature_bundle(_args('custom'))
+            predict_seams.resolve_feature_bundle(_args('custom'), {}, {})
 
     def test_canonical_edge_order_mismatch_raises(self):
         topology = _square_topology()
@@ -95,7 +95,7 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'))
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
 
         payload = predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
@@ -171,7 +171,7 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'))
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
         return predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
             output_json=Path('out.json'),
