@@ -1,14 +1,23 @@
 import os
 
 
+def addon_module_candidates():
+    package_name = __package__ or 'uv_seam_predictor'
+    candidates = [package_name, 'uv_seam_predictor']
+    if '.' in package_name:
+        candidates.append(package_name.split('.')[0])
+    return tuple(dict.fromkeys(candidates))
+
+
+def get_addon_module_name(context):
+    for module_name in addon_module_candidates():
+        if module_name in context.preferences.addons:
+            return module_name
+    raise ValueError('UV Seam Predictor add-on preferences are not available.')
+
+
 def get_addon_preferences(context):
-    package_name = __package__.split('.')[0] if __package__ else 'uv_seam_predictor'
-    addon = context.preferences.addons.get(package_name)
-    if addon is None:
-        addon = context.preferences.addons.get('uv_seam_predictor')
-    if addon is None:
-        raise ValueError('UV Seam Predictor add-on preferences are not available.')
-    return addon.preferences
+    return context.preferences.addons[get_addon_module_name(context)].preferences
 
 
 def require_active_mesh_object(context):

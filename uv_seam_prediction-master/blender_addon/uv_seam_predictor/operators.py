@@ -15,9 +15,12 @@ def _settings(context):
     return context.scene.uv_seam_predictor_settings
 
 
-def _mode_set(mode):
-    if bpy.ops.object.mode_set.poll():
-        bpy.ops.object.mode_set(mode=mode)
+def _ensure_object_mode():
+    if bpy.context.object and bpy.context.object.mode == 'OBJECT':
+        return
+    if not bpy.ops.object.mode_set.poll():
+        raise ValueError('Could not switch to Object Mode.')
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def _restore_mode(obj, mode):
@@ -25,11 +28,12 @@ def _restore_mode(obj, mode):
         return
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
-    if mode and mode != 'OBJECT' and bpy.ops.object.mode_set.poll():
-        try:
-            bpy.ops.object.mode_set(mode=mode)
-        except RuntimeError:
-            bpy.ops.object.mode_set(mode='OBJECT')
+    if not mode or not bpy.ops.object.mode_set.poll():
+        return
+    try:
+        bpy.ops.object.mode_set(mode=mode)
+    except RuntimeError:
+        bpy.ops.object.mode_set(mode='OBJECT')
 
 
 def _resolved_preferences(prefs):
@@ -66,14 +70,22 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
     _prefs = None
 
     def invoke(self, context, event):
+        self._job = None
+        self._timer = None
+        self._obj = None
+        self._original_mode = 'OBJECT'
+        self._prefs = None
+
         settings = _settings(context)
         paths = None
+        keep_temp_files = False
         if settings.is_job_running:
             self.report({'WARNING'}, 'UV seam prediction is already running.')
             return {'CANCELLED'}
 
         try:
             prefs = validation.get_addon_preferences(context)
+            keep_temp_files = prefs.keep_temp_files
             validation.validate_configured_paths(prefs)
             obj = validation.require_active_mesh_object(context)
             validation.require_single_user_or_copy_allowed(obj, settings.make_single_user_mesh)
@@ -84,7 +96,7 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
             self._original_mode = obj.mode
 
             if obj.mode != 'OBJECT':
-                _mode_set('OBJECT')
+                _ensure_object_mode()
 
             validation.require_triangulated_mesh(obj)
 
@@ -96,19 +108,39 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
 
             self._job = inference.launch_inference(self._prefs, settings, paths)
         except Exception as exc:
-            if paths and not prefs.keep_temp_files and os.path.isdir(paths['temp_dir']):
+            if paths and not keep_temp_files and os.path.isdir(paths['temp_dir']):
                 shutil.rmtree(paths['temp_dir'])
             settings.is_job_running = False
             settings.last_run_summary = str(exc)
             _restore_mode(self._obj, self._original_mode)
+            self._job = None
+            self._obj = None
+            self._prefs = None
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
 
         settings.is_job_running = True
         settings.last_run_summary = 'Inference running...'
-        context.window.cursor_set('WAIT')
-        self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
-        context.window_manager.modal_handler_add(self)
+        try:
+            context.window.cursor_set('WAIT')
+            self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
+            context.window_manager.modal_handler_add(self)
+        except Exception as exc:
+            if self._timer is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+            if self._job is not None:
+                inference.terminate_job(self._job)
+                inference.cleanup_job(self._job, keep_temp_files=self._prefs.keep_temp_files if self._prefs else False)
+            context.window.cursor_set('DEFAULT')
+            _restore_mode(self._obj, self._original_mode)
+            settings.is_job_running = False
+            settings.last_run_summary = str(exc)
+            self._job = None
+            self._obj = None
+            self._prefs = None
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
@@ -161,7 +193,7 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
             self._timer = None
 
         if self._job is not None:
-            if cancelled or error == 'Inference timed out.':
+            if cancelled or self._job.process.poll() is None:
                 inference.terminate_job(self._job)
             if error and self._prefs and self._prefs.open_log_on_error:
                 inference.close_log_handles(self._job)
@@ -172,6 +204,9 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
         _restore_mode(self._obj, self._original_mode)
 
         settings.is_job_running = False
+        self._job = None
+        self._obj = None
+        self._prefs = None
 
         if cancelled:
             settings.last_run_summary = 'Prediction cancelled.'
@@ -203,7 +238,12 @@ class UVSEAM_OT_clear_seams(bpy.types.Operator):
             obj = validation.require_active_mesh_object(context)
             original_mode = obj.mode
             if obj.mode != 'OBJECT':
-                _mode_set('OBJECT')
+                _ensure_object_mode()
+
+            if obj.data.users > 1:
+                if not settings.make_single_user_mesh:
+                    raise ValueError('Mesh data is shared. Enable Make Mesh Single User before clearing seams.')
+                obj.data = obj.data.copy()
 
             for edge in obj.data.edges:
                 edge.use_seam = False
@@ -229,7 +269,7 @@ class UVSEAM_OT_open_preferences(bpy.types.Operator):
     def execute(self, context):
         bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
         context.preferences.active_section = 'ADDONS'
-        module_name = __package__.split('.')[0] if __package__ else 'uv_seam_predictor'
         if bpy.ops.preferences.addon_show.poll():
+            module_name = validation.get_addon_module_name(context)
             bpy.ops.preferences.addon_show(module=module_name)
         return {'FINISHED'}
