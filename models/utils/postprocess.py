@@ -6,43 +6,26 @@ from typing import Any
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.csgraph import connected_components, dijkstra, minimum_spanning_tree
 
 
 _PROB_EPS = 1e-6
-
-
-@dataclass(frozen=True)
-class SeamComponentState:
-    edge_component_ids: np.ndarray
-    component_sizes: np.ndarray
-    vertex_degrees: dict[int, int]
-    terminals: tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class GapCandidate:
-    start_terminal: int
-    end_terminal: int
-    start_component: int
-    end_component: int
-    vertex_path: tuple[int, ...]
-    edge_path: tuple[int, ...]
-    added_edges: tuple[int, ...]
-    hop_length: int
-    path_cost: float
+_DEFAULT_SKELETON_THRESHOLD = 0.2
+_DEFAULT_SKELETON_RADIUS = 3
 
 
 @dataclass(frozen=True)
 class SeamPostprocessResult:
-    initial_mask: np.ndarray
-    gap_closed_mask: np.ndarray
+    threshold_mask: np.ndarray
+    skeleton_mask: np.ndarray
+    steiner_mask: np.ndarray
     final_mask: np.ndarray
-    closed_paths: tuple[tuple[int, ...], ...]
-    added_edge_indices: tuple[int, ...]
+    skeleton_deleted_vertices: tuple[int, ...]
+    steiner_added_edges: tuple[int, ...]
     pruned_edge_indices: tuple[int, ...]
-    terminal_count_before: int
-    terminal_count_after_gap_closing: int
+    skeleton_terminal_vertex_count: int
+    steiner_terminal_group_count: int
+    steiner_tree_count: int
     pruned_component_count: int
 
 
@@ -77,94 +60,230 @@ def _validate_topology(topology: Any, edge_count: int) -> None:
             raise ValueError(
                 f'topology {attr} length {len(value)} does not match unique_edges length {edge_count}'
             )
-        return
+        break
 
 
-def _build_vertex_incidence(unique_edges: np.ndarray) -> tuple[dict[int, list[int]], dict[tuple[int, int], int]]:
+def _build_incidence(unique_edges: np.ndarray) -> tuple[dict[int, list[int]], dict[tuple[int, int], int]]:
     vertex_to_edges: dict[int, list[int]] = {}
     edge_lookup: dict[tuple[int, int], int] = {}
     for edge_idx, edge in enumerate(unique_edges):
         vi, vj = int(edge[0]), int(edge[1])
         if vi == vj:
             raise ValueError(f'degenerate edge at index {edge_idx}: {(vi, vj)}')
-        edge_lookup[_canonical_edge_key(vi, vj)] = int(edge_idx)
         vertex_to_edges.setdefault(vi, []).append(int(edge_idx))
         vertex_to_edges.setdefault(vj, []).append(int(edge_idx))
+        edge_lookup[_canonical_edge_key(vi, vj)] = int(edge_idx)
     return vertex_to_edges, edge_lookup
 
 
-def _build_vertex_graphs(unique_edges: np.ndarray, probabilities: np.ndarray) -> tuple[csr_matrix, csr_matrix]:
-    vertex_count = int(unique_edges.max()) + 1 if len(unique_edges) else 0
-    if vertex_count == 0:
-        empty = csr_matrix((0, 0), dtype=np.float64)
-        return empty, empty
+def _build_vertex_probability(probabilities: np.ndarray, vertex_to_edges: dict[int, list[int]]) -> np.ndarray:
+    vertex_count = max(vertex_to_edges.keys(), default=-1) + 1
+    values = np.zeros(vertex_count, dtype=np.float64)
+    for vertex, edge_indices in vertex_to_edges.items():
+        values[int(vertex)] = float(np.max(probabilities[np.asarray(edge_indices, dtype=np.int64)]))
+    return values
 
-    rows = np.empty(len(unique_edges) * 2, dtype=np.int64)
-    cols = np.empty(len(unique_edges) * 2, dtype=np.int64)
-    weighted = np.empty(len(unique_edges) * 2, dtype=np.float64)
-    unweighted = np.ones(len(unique_edges) * 2, dtype=np.float64)
-    costs = -np.log(np.clip(probabilities, _PROB_EPS, 1.0))
 
-    for edge_idx, edge in enumerate(unique_edges):
+def _build_candidate_vertex_graph(unique_edges: np.ndarray, candidate_vertices: np.ndarray) -> dict[int, set[int]]:
+    adjacency = {int(vertex): set() for vertex in np.flatnonzero(candidate_vertices)}
+    for edge in unique_edges:
         vi, vj = int(edge[0]), int(edge[1])
-        base = edge_idx * 2
-        rows[base:base + 2] = (vi, vj)
-        cols[base:base + 2] = (vj, vi)
-        weighted[base:base + 2] = costs[edge_idx]
-
-    weighted_graph = csr_matrix((weighted, (rows, cols)), shape=(vertex_count, vertex_count))
-    unweighted_graph = csr_matrix((unweighted, (rows, cols)), shape=(vertex_count, vertex_count))
-    return weighted_graph, unweighted_graph
-
-
-def _component_state(mask: np.ndarray, unique_edges: np.ndarray, vertex_to_edges: dict[int, list[int]]) -> SeamComponentState:
-    edge_component_ids = np.full(len(unique_edges), -1, dtype=np.int64)
-    component_sizes: list[int] = []
-    vertex_degrees: dict[int, int] = {}
-
-    seam_indices = np.flatnonzero(mask)
-    for edge_idx in seam_indices:
-        vi, vj = int(unique_edges[edge_idx, 0]), int(unique_edges[edge_idx, 1])
-        vertex_degrees[vi] = vertex_degrees.get(vi, 0) + 1
-        vertex_degrees[vj] = vertex_degrees.get(vj, 0) + 1
-
-    component_id = 0
-    for edge_idx in seam_indices:
-        edge_idx = int(edge_idx)
-        if edge_component_ids[edge_idx] >= 0:
+        if not candidate_vertices[vi] or not candidate_vertices[vj]:
             continue
-        queue = deque([edge_idx])
-        members: list[int] = []
-        edge_component_ids[edge_idx] = component_id
+        adjacency.setdefault(vi, set()).add(vj)
+        adjacency.setdefault(vj, set()).add(vi)
+    return adjacency
 
+
+def _connected_vertex_components(adjacency: dict[int, set[int]]) -> list[set[int]]:
+    components: list[set[int]] = []
+    remaining = set(adjacency.keys())
+    while remaining:
+        start = min(remaining)
+        queue = deque([start])
+        component = {start}
+        remaining.remove(start)
         while queue:
-            current = queue.popleft()
-            members.append(current)
-            vi, vj = int(unique_edges[current, 0]), int(unique_edges[current, 1])
-            for vertex in (vi, vj):
-                for neighbor in vertex_to_edges.get(vertex, ()):
-                    if not mask[neighbor] or edge_component_ids[neighbor] >= 0:
-                        continue
-                    edge_component_ids[neighbor] = component_id
-                    queue.append(int(neighbor))
-
-        component_sizes.append(len(members))
-        component_id += 1
-
-    terminals = tuple(sorted(vertex for vertex, degree in vertex_degrees.items() if degree == 1))
-    return SeamComponentState(
-        edge_component_ids=edge_component_ids,
-        component_sizes=np.asarray(component_sizes, dtype=np.int64),
-        vertex_degrees=vertex_degrees,
-        terminals=terminals,
-    )
+            vertex = queue.popleft()
+            for neighbor in adjacency.get(vertex, ()):
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    component.add(neighbor)
+                    queue.append(neighbor)
+        components.append(component)
+    return components
 
 
-def _component_id_for_terminal(vertex: int, mask: np.ndarray, vertex_to_edges: dict[int, list[int]], component_ids: np.ndarray) -> int:
-    for edge_idx in vertex_to_edges.get(vertex, ()):
-        if mask[edge_idx]:
-            return int(component_ids[edge_idx])
-    return -1
+def _component_is_connected(component: set[int], adjacency: dict[int, set[int]]) -> bool:
+    if len(component) <= 1:
+        return True
+    start = min(component)
+    queue = deque([start])
+    visited = {start}
+    while queue:
+        vertex = queue.popleft()
+        for neighbor in adjacency.get(vertex, ()):
+            if neighbor in component and neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+    return len(visited) == len(component)
+
+
+def _distances_to_active(
+    original_component: set[int],
+    active_component: set[int],
+    adjacency: dict[int, set[int]],
+) -> dict[int, int]:
+    if not active_component:
+        return {vertex: np.iinfo(np.int64).max for vertex in original_component}
+    queue = deque(sorted(active_component))
+    distances = {vertex: -1 for vertex in original_component}
+    for vertex in active_component:
+        distances[vertex] = 0
+    while queue:
+        vertex = queue.popleft()
+        for neighbor in adjacency.get(vertex, ()):
+            if neighbor not in original_component or distances[neighbor] >= 0:
+                continue
+            distances[neighbor] = distances[vertex] + 1
+            queue.append(neighbor)
+    return distances
+
+
+def _skeletonize_vertices(
+    unique_edges: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    skeleton_threshold: float,
+    skeleton_radius: int,
+    threshold_mask: np.ndarray,
+) -> tuple[np.ndarray, tuple[int, ...]]:
+    if skeleton_radius < 1:
+        raise ValueError(f'skeleton_radius must be at least 1, got {skeleton_radius}')
+
+    vertex_to_edges, _edge_lookup = _build_incidence(unique_edges)
+    vertex_probabilities = _build_vertex_probability(probabilities, vertex_to_edges)
+    threshold_vertices = np.zeros_like(vertex_probabilities, dtype=bool)
+    for edge_idx in np.flatnonzero(threshold_mask):
+        vi, vj = (int(unique_edges[edge_idx, 0]), int(unique_edges[edge_idx, 1]))
+        threshold_vertices[vi] = True
+        threshold_vertices[vj] = True
+
+    candidate_vertices = (vertex_probabilities >= skeleton_threshold) & threshold_vertices
+    adjacency = _build_candidate_vertex_graph(unique_edges, candidate_vertices)
+    active = set(adjacency.keys())
+    deleted_vertices: list[int] = []
+
+    for original_component in _connected_vertex_components(adjacency):
+        component_active = set(original_component)
+        changed = True
+        while changed:
+            changed = False
+            ordered = sorted(component_active, key=lambda vertex: (vertex_probabilities[vertex], vertex))
+            for vertex in ordered:
+                current_neighbors = adjacency[vertex] & component_active
+                if len(current_neighbors) <= 1:
+                    continue
+                reduced_component = set(component_active)
+                reduced_component.remove(vertex)
+                if not _component_is_connected(reduced_component, adjacency):
+                    continue
+                distances = _distances_to_active(original_component, reduced_component, adjacency)
+                if max(distances.values(), default=0) > skeleton_radius:
+                    continue
+                component_active = reduced_component
+                deleted_vertices.append(int(vertex))
+                active.remove(int(vertex))
+                changed = True
+                break
+
+    active_mask = np.zeros_like(vertex_probabilities, dtype=bool)
+    if active:
+        active_mask[np.asarray(sorted(active), dtype=np.int64)] = True
+    return active_mask, tuple(sorted(deleted_vertices))
+
+
+def _mask_from_active_vertices(unique_edges: np.ndarray, threshold_mask: np.ndarray, active_vertices: np.ndarray) -> np.ndarray:
+    skeleton_mask = np.zeros(len(unique_edges), dtype=bool)
+    for edge_idx in np.flatnonzero(threshold_mask):
+        vi, vj = int(unique_edges[edge_idx, 0]), int(unique_edges[edge_idx, 1])
+        if active_vertices[vi] and active_vertices[vj]:
+            skeleton_mask[int(edge_idx)] = True
+    return skeleton_mask
+
+
+def _residual_components(vertex_count: int, unique_edges: np.ndarray, seam_mask: np.ndarray) -> np.ndarray:
+    rows: list[int] = []
+    cols: list[int] = []
+    for edge_idx, edge in enumerate(unique_edges):
+        if seam_mask[edge_idx]:
+            continue
+        vi, vj = int(edge[0]), int(edge[1])
+        rows.extend((vi, vj))
+        cols.extend((vj, vi))
+    data = np.ones(len(rows), dtype=np.float64)
+    graph = csr_matrix((data, (rows, cols)), shape=(vertex_count, vertex_count))
+    if vertex_count == 0:
+        return np.zeros(0, dtype=np.int64)
+    _component_count, labels = connected_components(graph, directed=False, return_labels=True)
+    return labels.astype(np.int64, copy=False)
+
+
+def _terminal_groups_by_residual_component(
+    unique_edges: np.ndarray,
+    seam_mask: np.ndarray,
+    residual_labels: np.ndarray,
+) -> list[tuple[int, ...]]:
+    groups: dict[int, set[int]] = {}
+    for edge_idx in np.flatnonzero(seam_mask):
+        vi, vj = int(unique_edges[edge_idx, 0]), int(unique_edges[edge_idx, 1])
+        groups.setdefault(int(residual_labels[vi]), set()).add(vi)
+        groups.setdefault(int(residual_labels[vj]), set()).add(vj)
+    return [tuple(sorted(vertices)) for vertices in groups.values() if len(vertices) >= 2]
+
+
+def _edge_costs(
+    probabilities: np.ndarray,
+    *,
+    distortion_per_edge: np.ndarray | None,
+    confidence_weight: float,
+    distortion_weight: float,
+) -> np.ndarray:
+    confidence_cost = -np.log(np.clip(probabilities, _PROB_EPS, 1.0))
+    if distortion_per_edge is None:
+        return confidence_cost
+
+    distortion = np.asarray(distortion_per_edge, dtype=np.float64).reshape(-1)
+    if distortion.shape != probabilities.shape:
+        raise ValueError('distortion_per_edge must match probabilities shape')
+    if not np.isfinite(distortion).all():
+        raise ValueError('distortion_per_edge must be finite')
+    distortion_cost = np.clip(1.0 - np.abs(distortion), 0.0, None)
+    return confidence_weight * confidence_cost + distortion_weight * distortion_cost
+
+
+def _build_residual_graph(
+    vertex_count: int,
+    unique_edges: np.ndarray,
+    seam_mask: np.ndarray,
+    edge_costs: np.ndarray,
+) -> tuple[csr_matrix, csr_matrix]:
+    rows: list[int] = []
+    cols: list[int] = []
+    weighted: list[float] = []
+    hops: list[float] = []
+    for edge_idx, edge in enumerate(unique_edges):
+        if seam_mask[edge_idx]:
+            continue
+        vi, vj = int(edge[0]), int(edge[1])
+        rows.extend((vi, vj))
+        cols.extend((vj, vi))
+        weight = float(edge_costs[edge_idx])
+        weighted.extend((weight, weight))
+        hops.extend((1.0, 1.0))
+    weighted_graph = csr_matrix((np.asarray(weighted, dtype=np.float64), (rows, cols)), shape=(vertex_count, vertex_count))
+    hop_graph = csr_matrix((np.asarray(hops, dtype=np.float64), (rows, cols)), shape=(vertex_count, vertex_count))
+    return weighted_graph, hop_graph
 
 
 def _reconstruct_vertex_path(start: int, target: int, predecessors: np.ndarray) -> tuple[int, ...] | None:
@@ -179,140 +298,152 @@ def _reconstruct_vertex_path(start: int, target: int, predecessors: np.ndarray) 
     return tuple(path)
 
 
-def _edge_path_from_vertices(vertex_path: tuple[int, ...], edge_lookup: dict[tuple[int, int], int]) -> tuple[int, ...]:
+def _vertex_path_to_edges(vertex_path: tuple[int, ...], edge_lookup: dict[tuple[int, int], int]) -> tuple[int, ...]:
     edges = []
     for idx in range(len(vertex_path) - 1):
-        key = _canonical_edge_key(int(vertex_path[idx]), int(vertex_path[idx + 1]))
-        edges.append(int(edge_lookup[key]))
+        edges.append(int(edge_lookup[_canonical_edge_key(int(vertex_path[idx]), int(vertex_path[idx + 1]))]))
     return tuple(edges)
 
 
-def _enumerate_gap_candidates(
+def _steiner_edges_for_terminals(
+    terminals: tuple[int, ...],
     *,
-    mask: np.ndarray,
+    weighted_graph: csr_matrix,
+    hop_graph: csr_matrix,
+    edge_lookup: dict[tuple[int, int], int],
+    max_path_hops: int,
+) -> tuple[int, ...]:
+    terminal_indices = np.asarray(terminals, dtype=np.int64)
+    weighted_distances, predecessors = dijkstra(
+        weighted_graph,
+        directed=False,
+        indices=terminal_indices,
+        return_predecessors=True,
+    )
+    hop_distances = dijkstra(
+        hop_graph,
+        directed=False,
+        indices=terminal_indices,
+        unweighted=True,
+    )
+
+    metric = np.full((len(terminals), len(terminals)), np.inf, dtype=np.float64)
+    for i in range(len(terminals)):
+        for j in range(i + 1, len(terminals)):
+            hops = hop_distances[i, terminals[j]]
+            if not np.isfinite(hops):
+                continue
+            if max_path_hops > 0 and hops > max_path_hops:
+                continue
+            metric[i, j] = weighted_distances[i, terminals[j]]
+            metric[j, i] = metric[i, j]
+
+    closure = csr_matrix(metric)
+    mst = minimum_spanning_tree(closure)
+    mst_rows, mst_cols = mst.nonzero()
+    added_edges: set[int] = set()
+    for row, col in zip(mst_rows.tolist(), mst_cols.tolist()):
+        start = int(terminals[row])
+        end = int(terminals[col])
+        vertex_path = _reconstruct_vertex_path(start, end, predecessors[row])
+        if vertex_path is None:
+            continue
+        added_edges.update(_vertex_path_to_edges(vertex_path, edge_lookup))
+    return tuple(sorted(added_edges))
+
+
+def _steiner_connect_components(
     unique_edges: np.ndarray,
     probabilities: np.ndarray,
-    vertex_to_edges: dict[int, list[int]],
-    edge_lookup: dict[tuple[int, int], int],
-    weighted_graph: csr_matrix,
-    unweighted_graph: csr_matrix,
-    max_gap_length: int,
-) -> list[GapCandidate]:
-    if max_gap_length < 1:
-        return []
-
-    state = _component_state(mask, unique_edges, vertex_to_edges)
-    terminals = state.terminals
-    if len(terminals) < 2:
-        return []
-
-    costs = -np.log(np.clip(probabilities, _PROB_EPS, 1.0))
-    candidates: list[GapCandidate] = []
-
-    for start_idx, start_terminal in enumerate(terminals):
-        start_component = _component_id_for_terminal(
-            start_terminal,
-            mask,
-            vertex_to_edges,
-            state.edge_component_ids,
-        )
-        if start_component < 0:
-            continue
-
-        hop_distances = dijkstra(
-            unweighted_graph,
-            directed=False,
-            indices=int(start_terminal),
-            unweighted=True,
-            limit=float(max_gap_length),
-        )
-        weighted_distances, predecessors = dijkstra(
-            weighted_graph,
-            directed=False,
-            indices=int(start_terminal),
-            return_predecessors=True,
-        )
-
-        for end_terminal in terminals[start_idx + 1:]:
-            end_component = _component_id_for_terminal(
-                end_terminal,
-                mask,
-                vertex_to_edges,
-                state.edge_component_ids,
-            )
-            if end_component < 0 or end_component == start_component:
-                continue
-            if not np.isfinite(hop_distances[end_terminal]) or hop_distances[end_terminal] > max_gap_length:
-                continue
-
-            vertex_path = _reconstruct_vertex_path(int(start_terminal), int(end_terminal), predecessors)
-            if vertex_path is None or len(vertex_path) < 2:
-                continue
-            if len(vertex_path) - 1 > max_gap_length:
-                continue
-
-            interior_vertices = vertex_path[1:-1]
-            if any(state.vertex_degrees.get(int(vertex), 0) > 0 for vertex in interior_vertices):
-                continue
-
-            edge_path = _edge_path_from_vertices(vertex_path, edge_lookup)
-            added_edges = tuple(edge_idx for edge_idx in edge_path if not mask[edge_idx])
-            if not added_edges:
-                continue
-
-            candidates.append(GapCandidate(
-                start_terminal=int(start_terminal),
-                end_terminal=int(end_terminal),
-                start_component=int(start_component),
-                end_component=int(end_component),
-                vertex_path=vertex_path,
-                edge_path=edge_path,
-                added_edges=added_edges,
-                hop_length=int(len(edge_path)),
-                path_cost=float(sum(costs[edge_idx] for edge_idx in edge_path)),
-            ))
-
-    candidates.sort(
-        key=lambda candidate: (
-            len(candidate.added_edges),
-            candidate.path_cost,
-            candidate.hop_length,
-            candidate.start_terminal,
-            candidate.end_terminal,
-            candidate.added_edges,
-        )
-    )
-    return candidates
-
-
-def _prune_small_components(
-    mask: np.ndarray,
-    unique_edges: np.ndarray,
-    vertex_to_edges: dict[int, list[int]],
-    min_island_size: int,
+    skeleton_mask: np.ndarray,
+    *,
+    max_path_hops: int,
+    distortion_per_edge: np.ndarray | None,
+    confidence_weight: float,
+    distortion_weight: float,
 ) -> tuple[np.ndarray, tuple[int, ...], int]:
+    vertex_count = int(unique_edges.max()) + 1 if len(unique_edges) else 0
+    if vertex_count == 0:
+        return np.zeros(len(unique_edges), dtype=bool), (), 0
+
+    residual_labels = _residual_components(vertex_count, unique_edges, skeleton_mask)
+    terminal_groups = _terminal_groups_by_residual_component(unique_edges, skeleton_mask, residual_labels)
+    vertex_to_edges, edge_lookup = _build_incidence(unique_edges)
+    del vertex_to_edges
+    edge_costs = _edge_costs(
+        probabilities,
+        distortion_per_edge=distortion_per_edge,
+        confidence_weight=confidence_weight,
+        distortion_weight=distortion_weight,
+    )
+    weighted_graph, hop_graph = _build_residual_graph(vertex_count, unique_edges, skeleton_mask, edge_costs)
+
+    added_edges: set[int] = set()
+    tree_count = 0
+    for terminals in terminal_groups:
+        component_edges = _steiner_edges_for_terminals(
+            terminals,
+            weighted_graph=weighted_graph,
+            hop_graph=hop_graph,
+            edge_lookup=edge_lookup,
+            max_path_hops=max_path_hops,
+        )
+        if component_edges:
+            added_edges.update(component_edges)
+            tree_count += 1
+
+    steiner_mask = np.zeros(len(unique_edges), dtype=bool)
+    if added_edges:
+        steiner_mask[np.asarray(sorted(added_edges), dtype=np.int64)] = True
+    return steiner_mask, tuple(sorted(added_edges)), tree_count
+
+
+def _component_edge_labels(mask: np.ndarray, unique_edges: np.ndarray, vertex_to_edges: dict[int, list[int]]) -> tuple[np.ndarray, np.ndarray]:
+    labels = np.full(len(unique_edges), -1, dtype=np.int64)
+    sizes: list[int] = []
+    component_id = 0
+    for edge_idx in np.flatnonzero(mask):
+        edge_idx = int(edge_idx)
+        if labels[edge_idx] >= 0:
+            continue
+        queue = deque([edge_idx])
+        labels[edge_idx] = component_id
+        members = 0
+        while queue:
+            current = queue.popleft()
+            members += 1
+            vi, vj = int(unique_edges[current, 0]), int(unique_edges[current, 1])
+            for vertex in (vi, vj):
+                for neighbor in vertex_to_edges.get(vertex, ()):
+                    if not mask[neighbor] or labels[neighbor] >= 0:
+                        continue
+                    labels[neighbor] = component_id
+                    queue.append(int(neighbor))
+        sizes.append(members)
+        component_id += 1
+    return labels, np.asarray(sizes, dtype=np.int64)
+
+
+def _prune_small_components(mask: np.ndarray, unique_edges: np.ndarray, min_island_size: int) -> tuple[np.ndarray, tuple[int, ...], int]:
     if min_island_size <= 1:
         return mask.copy(), (), 0
-
-    state = _component_state(mask, unique_edges, vertex_to_edges)
-    if state.component_sizes.size == 0:
+    vertex_to_edges, _edge_lookup = _build_incidence(unique_edges)
+    labels, sizes = _component_edge_labels(mask, unique_edges, vertex_to_edges)
+    if sizes.size == 0:
         return mask.copy(), (), 0
 
-    keep = np.ones(len(mask), dtype=bool)
     pruned_edges: list[int] = []
     pruned_components = 0
-    for component_id, size in enumerate(state.component_sizes):
+    out = mask.copy()
+    for component_id, size in enumerate(sizes):
         if int(size) >= min_island_size:
             continue
-        component_edges = np.flatnonzero(state.edge_component_ids == component_id)
+        component_edges = np.flatnonzero(labels == component_id)
         if component_edges.size == 0:
             continue
-        keep[component_edges] = False
+        out[component_edges] = False
         pruned_edges.extend(int(edge_idx) for edge_idx in component_edges)
         pruned_components += 1
-
-    out = mask.copy()
-    out[~keep] = False
     return out, tuple(sorted(pruned_edges)), pruned_components
 
 
@@ -323,9 +454,17 @@ def apply_seam_postprocessing_detailed(
     threshold: float = 0.5,
     max_gap_length: int = 5,
     min_island_size: int = 3,
+    *,
+    skeleton_threshold: float = _DEFAULT_SKELETON_THRESHOLD,
+    skeleton_radius: int = _DEFAULT_SKELETON_RADIUS,
+    distortion_per_edge: np.ndarray | None = None,
+    confidence_weight: float = 1.0,
+    distortion_weight: float = 1.0,
 ) -> SeamPostprocessResult:
     if threshold < 0.0 or threshold > 1.0:
         raise ValueError(f'threshold must be in [0, 1], got {threshold}')
+    if skeleton_threshold < 0.0 or skeleton_threshold > 1.0:
+        raise ValueError(f'skeleton_threshold must be in [0, 1], got {skeleton_threshold}')
     if max_gap_length < 0:
         raise ValueError(f'max_gap_length must be non-negative, got {max_gap_length}')
     if min_island_size < 1:
@@ -339,51 +478,49 @@ def apply_seam_postprocessing_detailed(
         )
     _validate_topology(topology, len(edges))
 
-    initial_mask = probs >= float(threshold)
-    vertex_to_edges, edge_lookup = _build_vertex_incidence(edges)
-    weighted_graph, unweighted_graph = _build_vertex_graphs(edges, probs)
-    terminal_count_before = len(_component_state(initial_mask, edges, vertex_to_edges).terminals)
-
-    gap_closed_mask = initial_mask.copy()
-    closed_paths: list[tuple[int, ...]] = []
-    while True:
-        candidates = _enumerate_gap_candidates(
-            mask=gap_closed_mask,
-            unique_edges=edges,
-            probabilities=probs,
-            vertex_to_edges=vertex_to_edges,
-            edge_lookup=edge_lookup,
-            weighted_graph=weighted_graph,
-            unweighted_graph=unweighted_graph,
-            max_gap_length=max_gap_length,
-        )
-        if not candidates:
-            break
-        best = candidates[0]
-        gap_closed_mask[np.asarray(best.added_edges, dtype=np.int64)] = True
-        closed_paths.append(best.added_edges)
-
-    terminal_count_after_gap_closing = len(_component_state(gap_closed_mask, edges, vertex_to_edges).terminals)
-    final_mask, pruned_edge_indices, pruned_component_count = _prune_small_components(
-        gap_closed_mask,
+    threshold_mask = probs >= float(threshold)
+    active_vertices, deleted_vertices = _skeletonize_vertices(
         edges,
-        vertex_to_edges,
-        min_island_size,
+        probs,
+        skeleton_threshold=float(min(skeleton_threshold, threshold) if threshold_mask.any() else skeleton_threshold),
+        skeleton_radius=int(skeleton_radius),
+        threshold_mask=threshold_mask,
+    )
+    skeleton_mask = _mask_from_active_vertices(edges, threshold_mask, active_vertices)
+
+    steiner_mask, steiner_added_edges, steiner_tree_count = _steiner_connect_components(
+        edges,
+        probs,
+        skeleton_mask,
+        max_path_hops=int(max_gap_length),
+        distortion_per_edge=distortion_per_edge,
+        confidence_weight=float(confidence_weight),
+        distortion_weight=float(distortion_weight),
+    )
+    combined_mask = skeleton_mask | steiner_mask
+    final_mask, pruned_edge_indices, pruned_component_count = _prune_small_components(
+        combined_mask,
+        edges,
+        int(min_island_size),
     )
 
-    initial_indices = set(int(idx) for idx in np.flatnonzero(initial_mask))
-    final_indices = tuple(sorted(int(idx) for idx in np.flatnonzero(final_mask)))
-    added_edge_indices = tuple(sorted(set(final_indices) - initial_indices))
+    skeleton_terminal_vertices = set()
+    residual_labels = _residual_components(int(edges.max()) + 1 if len(edges) else 0, edges, skeleton_mask)
+    terminal_groups = _terminal_groups_by_residual_component(edges, skeleton_mask, residual_labels) if len(edges) else []
+    for edge_idx in np.flatnonzero(skeleton_mask):
+        skeleton_terminal_vertices.update((int(edges[edge_idx, 0]), int(edges[edge_idx, 1])))
 
     return SeamPostprocessResult(
-        initial_mask=initial_mask,
-        gap_closed_mask=gap_closed_mask,
+        threshold_mask=threshold_mask,
+        skeleton_mask=skeleton_mask,
+        steiner_mask=steiner_mask,
         final_mask=final_mask,
-        closed_paths=tuple(tuple(int(edge_idx) for edge_idx in path) for path in closed_paths),
-        added_edge_indices=added_edge_indices,
+        skeleton_deleted_vertices=deleted_vertices,
+        steiner_added_edges=steiner_added_edges,
         pruned_edge_indices=pruned_edge_indices,
-        terminal_count_before=int(terminal_count_before),
-        terminal_count_after_gap_closing=int(terminal_count_after_gap_closing),
+        skeleton_terminal_vertex_count=int(len(skeleton_terminal_vertices)),
+        steiner_terminal_group_count=int(len(terminal_groups)),
+        steiner_tree_count=int(steiner_tree_count),
         pruned_component_count=int(pruned_component_count),
     )
 
@@ -395,6 +532,7 @@ def apply_seam_postprocessing(
     threshold: float = 0.5,
     max_gap_length: int = 5,
     min_island_size: int = 3,
+    **kwargs: Any,
 ) -> np.ndarray:
     return apply_seam_postprocessing_detailed(
         topology=topology,
@@ -403,6 +541,7 @@ def apply_seam_postprocessing(
         threshold=threshold,
         max_gap_length=max_gap_length,
         min_island_size=min_island_size,
+        **kwargs,
     ).final_mask
 
 
@@ -430,23 +569,17 @@ def stitch_seam_gaps(
     max_gap: int = 3,
 ) -> np.ndarray:
     del edge_to_faces
-    probs = _as_probability_array(probs)
-    unique_edges = _as_unique_edges(unique_edges)
+    probabilities = _as_probability_array(probs).copy()
     seam_mask = np.asarray(seam_mask, dtype=bool).reshape(-1)
-    if len(seam_mask) != len(unique_edges):
-        raise ValueError('seam_mask length must match unique_edges length')
-
-    seeded_probs = probs.copy()
-    seeded_probs[seam_mask] = 1.0
-    details = apply_seam_postprocessing_detailed(
+    probabilities[seam_mask] = 1.0
+    return apply_seam_postprocessing(
         topology=None,
         unique_edges=unique_edges,
-        probabilities=seeded_probs,
+        probabilities=probabilities,
         threshold=0.5,
         max_gap_length=max_gap,
         min_island_size=1,
     )
-    return details.gap_closed_mask
 
 
 def postprocess_seams(

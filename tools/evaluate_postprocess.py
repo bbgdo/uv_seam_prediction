@@ -335,7 +335,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
 
     total_added_edges = 0
     total_pruned_edges = 0
-    total_closed_paths = 0
+    total_steiner_trees = 0
     meshes_with_changes = 0
 
     for sample in test_samples:
@@ -382,9 +382,9 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
         raw_mask = probabilities >= args.threshold
         if np.any(raw_mask != result.final_mask):
             meshes_with_changes += 1
-        total_added_edges += len(result.added_edge_indices)
+        total_added_edges += len(result.steiner_added_edges)
         total_pruned_edges += len(result.pruned_edge_indices)
-        total_closed_paths += len(result.closed_paths)
+        total_steiner_trees += int(result.steiner_tree_count)
 
         raw_probabilities.append(probabilities)
         raw_labels.append(labels.astype(np.float32))
@@ -400,11 +400,14 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             'post_metrics': post_metrics,
             'delta': _metric_delta(post_metrics, raw_metrics),
             'postprocess': {
-                'added_edge_indices': [int(idx) for idx in result.added_edge_indices],
+                'skeleton_deleted_vertices': [int(idx) for idx in result.skeleton_deleted_vertices],
+                'skeleton_edge_count': int(np.count_nonzero(result.skeleton_mask)),
+                'steiner_added_edges': [int(idx) for idx in result.steiner_added_edges],
                 'pruned_edge_indices': [int(idx) for idx in result.pruned_edge_indices],
-                'closed_paths': [[int(idx) for idx in path] for path in result.closed_paths],
-                'terminal_count_before': int(result.terminal_count_before),
-                'terminal_count_after_gap_closing': int(result.terminal_count_after_gap_closing),
+                'steiner_edge_count': int(np.count_nonzero(result.steiner_mask)),
+                'skeleton_terminal_vertex_count': int(result.skeleton_terminal_vertex_count),
+                'steiner_terminal_group_count': int(result.steiner_terminal_group_count),
+                'steiner_tree_count': int(result.steiner_tree_count),
                 'pruned_component_count': int(result.pruned_component_count),
             },
         })
@@ -460,7 +463,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             'meshes_with_changes': int(meshes_with_changes),
             'total_added_edges': int(total_added_edges),
             'total_pruned_edges': int(total_pruned_edges),
-            'total_closed_paths': int(total_closed_paths),
+            'total_steiner_trees': int(total_steiner_trees),
         },
         'per_mesh': per_mesh,
     }
