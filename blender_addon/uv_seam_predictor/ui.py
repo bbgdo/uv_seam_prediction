@@ -48,6 +48,7 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         inference_box.label(text='Inference')
         inference_box.prop(settings, 'model_weights_path')
         inference_box.prop(settings, 'threshold')
+        inference_box.prop(settings, 'use_post_processing')
         inference_box.prop(settings, 'clear_existing_seams')
         inference_box.prop(settings, 'make_single_user_mesh')
 

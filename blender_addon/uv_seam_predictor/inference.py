@@ -32,7 +32,7 @@ def create_temp_work_files():
 
 
 def build_cli_args(prefs, settings, obj_path, json_path):
-    return [
+    args = [
         os.path.abspath(prefs.python_executable),
         os.path.abspath(prefs.predict_script_path),
         '--mesh-path',
@@ -44,6 +44,8 @@ def build_cli_args(prefs, settings, obj_path, json_path):
         '--output-json',
         os.path.abspath(json_path),
     ]
+    args.append('--postprocess' if settings.use_post_processing else '--no-postprocess')
+    return args
 
 
 def resolve_process_cwd(script_path):

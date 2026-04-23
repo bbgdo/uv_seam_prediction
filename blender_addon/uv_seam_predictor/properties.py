@@ -13,6 +13,11 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         min=0.0,
         max=1.0,
     )
+    use_post_processing: bpy.props.BoolProperty(
+        name='Apply Post-processing',
+        default=True,
+        description='Close small seam gaps and remove isolated seam noise',
+    )
     clear_existing_seams: bpy.props.BoolProperty(
         name='Clear Existing Seams',
         default=True,

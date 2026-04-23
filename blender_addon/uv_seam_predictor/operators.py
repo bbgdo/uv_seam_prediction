@@ -51,6 +51,7 @@ def _resolved_run_settings(settings):
     return SimpleNamespace(
         model_weights_path=validation.bpy_path_to_os_path(settings.model_weights_path),
         threshold=settings.threshold,
+        use_post_processing=settings.use_post_processing,
         clear_existing_seams=settings.clear_existing_seams,
     )
 
