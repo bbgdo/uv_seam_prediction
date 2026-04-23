@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from heapq import heappop, heappush
 from typing import Any
 
+import networkx as nx
 import numpy as np
+
+
+_PROB_EPS = 1e-6
 
 
 @dataclass(frozen=True)
@@ -25,22 +29,53 @@ class SeamPostprocessResult:
 
 @dataclass(frozen=True)
 class _GraphViews:
-    dual_neighbors: tuple[tuple[int, ...], ...]
-    seam_neighbors: tuple[tuple[int, ...], ...]
-    edge_lengths: np.ndarray
-    edge_to_vertices: np.ndarray
+    vertex_graph: nx.Graph
+    edge_neighbors: tuple[tuple[int, ...], ...]
     vertex_to_edges: tuple[tuple[int, ...], ...]
+    edge_to_vertices: np.ndarray
     edge_lookup: dict[tuple[int, int], int]
+    edge_lengths: np.ndarray
     vertex_count: int
+    edge_count: int
 
 
 @dataclass(frozen=True)
-class _BridgeCandidate:
-    endpoints: tuple[int, int]
+class _SeamComponent:
+    component_id: int
+    edge_indices: tuple[int, ...]
+    vertex_indices: tuple[int, ...]
+    seam_mass: float
+    edge_count: int
+    vertex_count: int
+    endpoint_vertices: tuple[int, ...]
+    junction_vertices: tuple[int, ...]
+    cycle_rank: int
+
+    @property
+    def is_closed(self) -> bool:
+        return len(self.endpoint_vertices) == 0 and self.cycle_rank >= 1
+
+    @property
+    def is_open(self) -> bool:
+        return not self.is_closed
+
+    @property
+    def is_open_arc(self) -> bool:
+        return (
+            self.cycle_rank == 0
+            and len(self.endpoint_vertices) == 2
+            and len(self.junction_vertices) == 0
+        )
+
+
+@dataclass(frozen=True)
+class _PathCandidate:
+    source_vertex: int
+    target_vertex: int
     edge_indices: tuple[int, ...]
     total_cost: float
-    total_length: float
-    mean_confidence: float
+    total_edges: int
+    normalized_cost: float
 
 
 def _canonical_edge_key(a: int, b: int) -> tuple[int, int]:
@@ -64,8 +99,8 @@ def _as_unique_edges(unique_edges: np.ndarray) -> np.ndarray:
 
 
 def _validate_probability_threshold(name: str, value: float) -> None:
-    if value < 0.0 or value > 1.0:
-        raise ValueError(f'{name} must be in [0, 1], got {value}')
+    if not np.isfinite(value) or value < 0.0 or value > 1.0:
+        raise ValueError(f'{name} must be a finite value in [0, 1], got {value}')
 
 
 def _validate_topology(topology: Any, edge_count: int) -> None:
@@ -83,27 +118,31 @@ def _validate_topology(topology: Any, edge_count: int) -> None:
 
 
 def _build_incidence(unique_edges: np.ndarray) -> tuple[tuple[tuple[int, ...], ...], dict[tuple[int, int], int], int]:
+    if len(unique_edges) == 0:
+        return (), {}, 0
     if np.any(unique_edges < 0):
         first = unique_edges[np.any(unique_edges < 0, axis=1)][0]
         raise ValueError(f'edge vertex ids must be non-negative, got {(int(first[0]), int(first[1]))}')
-    vertex_count = int(unique_edges.max()) + 1 if len(unique_edges) else 0
-    incident: list[list[int]] = [[] for _ in range(vertex_count)]
+
+    vertex_count = int(unique_edges.max()) + 1
+    vertex_to_edges_lists: list[list[int]] = [[] for _ in range(vertex_count)]
     edge_lookup: dict[tuple[int, int], int] = {}
-    for edge_idx, edge in enumerate(unique_edges):
-        vi, vj = int(edge[0]), int(edge[1])
-        if vi == vj:
-            raise ValueError(f'degenerate edge at index {edge_idx}: {(vi, vj)}')
-        key = _canonical_edge_key(vi, vj)
+    for edge_idx, (vi, vj) in enumerate(unique_edges):
+        a = int(vi)
+        b = int(vj)
+        if a == b:
+            raise ValueError(f'degenerate edge at index {edge_idx}: {(a, b)}')
+        key = _canonical_edge_key(a, b)
         if key in edge_lookup:
             raise ValueError(f'duplicate edge {key}')
         edge_lookup[key] = int(edge_idx)
-        incident[vi].append(int(edge_idx))
-        incident[vj].append(int(edge_idx))
-    vertex_to_edges = tuple(tuple(sorted(edges)) for edges in incident)
+        vertex_to_edges_lists[a].append(int(edge_idx))
+        vertex_to_edges_lists[b].append(int(edge_idx))
+    vertex_to_edges = tuple(tuple(sorted(items)) for items in vertex_to_edges_lists)
     return vertex_to_edges, edge_lookup, vertex_count
 
 
-def _build_seam_neighbors(vertex_to_edges: tuple[tuple[int, ...], ...], edge_count: int) -> tuple[tuple[int, ...], ...]:
+def _build_edge_neighbors(vertex_to_edges: tuple[tuple[int, ...], ...], edge_count: int) -> tuple[tuple[int, ...], ...]:
     neighbors = [set() for _ in range(edge_count)]
     for incident in vertex_to_edges:
         for i, edge_a in enumerate(incident):
@@ -113,130 +152,60 @@ def _build_seam_neighbors(vertex_to_edges: tuple[tuple[int, ...], ...], edge_cou
     return tuple(tuple(sorted(values)) for values in neighbors)
 
 
-def _faces_from_topology(topology: Any) -> np.ndarray | None:
-    if topology is None:
-        return None
-    canonical_faces = getattr(topology, 'canonical_faces', None)
-    if canonical_faces is not None:
-        return np.asarray([face.vertex_ids for face in canonical_faces], dtype=np.int64).reshape((-1, 3))
-    faces = getattr(topology, 'faces', None)
-    if faces is None:
-        return None
-    faces_array = np.asarray(faces, dtype=np.int64)
-    if faces_array.ndim != 2 or faces_array.shape[1] != 3:
-        return None
-    return faces_array
-
-
-def _infer_triangles_from_edges(
-    unique_edges: np.ndarray,
-    vertex_to_edges: tuple[tuple[int, ...], ...],
-    edge_lookup: dict[tuple[int, int], int],
-) -> np.ndarray:
-    vertex_neighbors: list[set[int]] = [set() for _ in vertex_to_edges]
-    for vi, vj in unique_edges:
-        a = int(vi)
-        b = int(vj)
-        vertex_neighbors[a].add(b)
-        vertex_neighbors[b].add(a)
-
-    triangles: set[tuple[int, int, int]] = set()
-    for vi, vj in unique_edges:
-        a = int(vi)
-        b = int(vj)
-        for c in vertex_neighbors[a] & vertex_neighbors[b]:
-            tri = tuple(sorted((a, b, int(c))))
-            if len(set(tri)) == 3:
-                triangles.add(tri)
-
-    valid: list[tuple[int, int, int]] = []
-    for a, b, c in sorted(triangles):
-        if (
-            _canonical_edge_key(a, b) in edge_lookup
-            and _canonical_edge_key(b, c) in edge_lookup
-            and _canonical_edge_key(a, c) in edge_lookup
-        ):
-            valid.append((a, b, c))
-    return np.asarray(valid, dtype=np.int64).reshape((-1, 3))
-
-
-def _build_dual_neighbors(
-    unique_edges: np.ndarray,
-    edge_lookup: dict[tuple[int, int], int],
-    vertex_to_edges: tuple[tuple[int, ...], ...],
-    topology: Any,
-) -> tuple[tuple[int, ...], ...]:
-    faces = _faces_from_topology(topology)
-    if faces is None:
-        faces = _infer_triangles_from_edges(unique_edges, vertex_to_edges, edge_lookup)
-
-    neighbors = [set() for _ in range(len(unique_edges))]
-    for face in faces:
-        if len(set(int(vertex) for vertex in face)) != 3:
-            continue
-        edge_ids = []
-        for a, b in ((0, 1), (1, 2), (2, 0)):
-            edge_idx = edge_lookup.get(_canonical_edge_key(int(face[a]), int(face[b])))
-            if edge_idx is None:
-                edge_ids = []
-                break
-            edge_ids.append(edge_idx)
-        for i, edge_a in enumerate(edge_ids):
-            for edge_b in edge_ids[i + 1:]:
-                neighbors[edge_a].add(edge_b)
-                neighbors[edge_b].add(edge_a)
-    return tuple(tuple(sorted(values)) for values in neighbors)
-
-
-def _edge_lengths(unique_edges: np.ndarray, topology: Any) -> np.ndarray:
-    if len(unique_edges) == 0:
-        return np.zeros(0, dtype=np.float64)
+def _vertex_coordinates(topology: Any, vertex_count: int) -> np.ndarray | None:
     vertices = getattr(topology, 'canonical_vertices', None) if topology is not None else None
     if vertices is None:
-        return np.ones(len(unique_edges), dtype=np.float64)
+        return None
     coords = np.asarray(vertices, dtype=np.float64)
-    if coords.ndim != 2 or coords.shape[1] != 3:
-        return np.ones(len(unique_edges), dtype=np.float64)
-    if int(unique_edges.max()) >= len(coords):
+    if coords.ndim != 2 or coords.shape[1] != 3 or len(coords) < vertex_count:
+        return None
+    return coords
+
+
+def _edge_lengths(unique_edges: np.ndarray, coords: np.ndarray | None) -> np.ndarray:
+    if len(unique_edges) == 0:
+        return np.zeros(0, dtype=np.float64)
+    if coords is None:
         return np.ones(len(unique_edges), dtype=np.float64)
     deltas = coords[unique_edges[:, 0]] - coords[unique_edges[:, 1]]
     lengths = np.linalg.norm(deltas, axis=1).astype(np.float64, copy=False)
     return np.where(lengths > 0.0, lengths, 1.0)
 
 
-def _build_graph_views(topology: Any, unique_edges: np.ndarray) -> _GraphViews:
+def _build_vertex_graph(unique_edges: np.ndarray, probabilities: np.ndarray, edge_lengths: np.ndarray) -> nx.Graph:
+    graph = nx.Graph()
+    for edge_idx, (vi, vj) in enumerate(unique_edges):
+        graph.add_edge(
+            int(vi),
+            int(vj),
+            edge_index=int(edge_idx),
+            prob=float(probabilities[edge_idx]),
+            edge_length=float(edge_lengths[edge_idx]),
+        )
+    return graph
+
+
+def _build_graph_views(topology: Any, unique_edges: np.ndarray, probabilities: np.ndarray) -> _GraphViews:
     vertex_to_edges, edge_lookup, vertex_count = _build_incidence(unique_edges)
+    coords = _vertex_coordinates(topology, vertex_count)
+    edge_lengths = _edge_lengths(unique_edges, coords)
     return _GraphViews(
-        dual_neighbors=_build_dual_neighbors(unique_edges, edge_lookup, vertex_to_edges, topology),
-        seam_neighbors=_build_seam_neighbors(vertex_to_edges, len(unique_edges)),
-        edge_lengths=_edge_lengths(unique_edges, topology),
-        edge_to_vertices=unique_edges.astype(np.int64, copy=True),
+        vertex_graph=_build_vertex_graph(unique_edges, probabilities, edge_lengths),
+        edge_neighbors=_build_edge_neighbors(vertex_to_edges, len(unique_edges)),
         vertex_to_edges=vertex_to_edges,
+        edge_to_vertices=unique_edges.astype(np.int64, copy=True),
         edge_lookup=edge_lookup,
+        edge_lengths=edge_lengths,
         vertex_count=vertex_count,
+        edge_count=len(unique_edges),
     )
 
 
-def _smooth_probabilities(
-    probabilities: np.ndarray,
-    dual_neighbors: tuple[tuple[int, ...], ...],
-    *,
-    beta: float,
-    iterations: int,
-) -> np.ndarray:
-    if iterations == 0 or len(probabilities) == 0:
-        return probabilities.copy()
-    current = probabilities.copy()
-    for _ in range(iterations):
-        smoothed = probabilities.copy()
-        for edge_idx, neighbors in enumerate(dual_neighbors):
-            if neighbors:
-                smoothed[edge_idx] = (1.0 - beta) * probabilities[edge_idx] + beta * float(np.mean(current[list(neighbors)]))
-        current = smoothed
-    return np.clip(current, 0.0, 1.0)
+def _edge_costs(probabilities: np.ndarray, seam_threshold: float, lambda_off: float) -> np.ndarray:
+    return -np.log(np.clip(probabilities, _PROB_EPS, 1.0)) + lambda_off * (probabilities < seam_threshold)
 
 
-def _component_members(mask: np.ndarray, neighbors: tuple[tuple[int, ...], ...]) -> list[tuple[int, ...]]:
+def _component_members(mask: np.ndarray, edge_neighbors: tuple[tuple[int, ...], ...]) -> list[tuple[int, ...]]:
     visited = np.zeros(len(mask), dtype=bool)
     components: list[tuple[int, ...]] = []
     for start in np.flatnonzero(mask):
@@ -249,7 +218,7 @@ def _component_members(mask: np.ndarray, neighbors: tuple[tuple[int, ...], ...])
         while queue:
             current = queue.popleft()
             members.append(current)
-            for neighbor in neighbors[current]:
+            for neighbor in edge_neighbors[current]:
                 if mask[neighbor] and not visited[neighbor]:
                     visited[neighbor] = True
                     queue.append(int(neighbor))
@@ -257,409 +226,401 @@ def _component_members(mask: np.ndarray, neighbors: tuple[tuple[int, ...], ...])
     return components
 
 
-def _hysteresis_threshold(refined: np.ndarray, neighbors: tuple[tuple[int, ...], ...], tau_low: float, tau_high: float) -> np.ndarray:
-    strong = refined >= tau_high
-    weak_or_strong = refined >= tau_low
-    if not np.any(strong):
-        return np.zeros(len(refined), dtype=bool)
-    if np.all(strong):
-        return strong.copy()
-
-    out = np.zeros(len(refined), dtype=bool)
-    for component in _component_members(weak_or_strong, neighbors):
-        component_idx = np.asarray(component, dtype=np.int64)
-        if bool(np.any(strong[component_idx])):
-            out[component_idx] = True
-    return out
+def _component_vertices(edge_indices: tuple[int, ...], graph: _GraphViews) -> tuple[int, ...]:
+    vertices: set[int] = set()
+    for edge_idx in edge_indices:
+        vi, vj = graph.edge_to_vertices[int(edge_idx)]
+        vertices.add(int(vi))
+        vertices.add(int(vj))
+    return tuple(sorted(vertices))
 
 
-def _active_degrees(component: tuple[int, ...], mask: np.ndarray, neighbors: tuple[tuple[int, ...], ...]) -> dict[int, int]:
-    component_set = set(component)
-    return {
-        edge_idx: sum(1 for neighbor in neighbors[edge_idx] if mask[neighbor] and neighbor in component_set)
-        for edge_idx in component
-    }
-
-
-def _component_has_cycle(component: tuple[int, ...], mask: np.ndarray, neighbors: tuple[tuple[int, ...], ...]) -> bool:
-    adjacency_edges = 0
-    component_set = set(component)
-    for edge_idx in component:
-        adjacency_edges += sum(1 for neighbor in neighbors[edge_idx] if mask[neighbor] and neighbor in component_set)
-    return adjacency_edges // 2 >= len(component)
-
-
-def _prune_tiny_components(
-    mask: np.ndarray,
-    refined: np.ndarray,
-    neighbors: tuple[tuple[int, ...], ...],
-    *,
-    min_component_edges: int,
-    tau_high: float,
-) -> tuple[np.ndarray, tuple[int, ...], int]:
-    if min_component_edges <= 1 or not np.any(mask):
-        return mask.copy(), (), 0
-
-    out = mask.copy()
-    pruned_edges: list[int] = []
-    pruned_components = 0
-    for component in _component_members(mask, neighbors):
-        if len(component) >= min_component_edges:
-            continue
-        if _component_has_cycle(component, mask, neighbors):
-            continue
-        component_idx = np.asarray(component, dtype=np.int64)
-        if float(np.max(refined[component_idx])) >= tau_high:
-            continue
-        out[component_idx] = False
-        pruned_edges.extend(int(edge_idx) for edge_idx in component)
-        pruned_components += 1
-    return out, tuple(sorted(pruned_edges)), pruned_components
-
-
-def _component_vertex_degrees(component: tuple[int, ...], graph: _GraphViews) -> dict[int, int]:
+def _component_vertex_degrees(edge_indices: tuple[int, ...], graph: _GraphViews) -> dict[int, int]:
     degrees: dict[int, int] = {}
-    for edge_idx in component:
+    for edge_idx in edge_indices:
         vi, vj = graph.edge_to_vertices[int(edge_idx)]
         degrees[int(vi)] = degrees.get(int(vi), 0) + 1
         degrees[int(vj)] = degrees.get(int(vj), 0) + 1
     return degrees
 
 
-def _component_has_mesh_cycle(component: tuple[int, ...], graph: _GraphViews) -> bool:
-    vertex_count = len(_component_vertex_degrees(component, graph))
-    return len(component) >= vertex_count if vertex_count else False
+def _analyze_components(mask: np.ndarray, graph: _GraphViews, probabilities: np.ndarray) -> list[_SeamComponent]:
+    components: list[_SeamComponent] = []
+    for component_id, edge_indices in enumerate(_component_members(mask, graph.edge_neighbors)):
+        vertices = _component_vertices(edge_indices, graph)
+        vertex_degrees = _component_vertex_degrees(edge_indices, graph)
+        endpoint_vertices = tuple(sorted(vertex for vertex, degree in vertex_degrees.items() if degree == 1))
+        junction_vertices = tuple(sorted(vertex for vertex, degree in vertex_degrees.items() if degree > 2))
+        edge_count = len(edge_indices)
+        vertex_count = len(vertices)
+        cycle_rank = edge_count - vertex_count + 1
+        seam_mass = float(np.sum(probabilities[np.asarray(edge_indices, dtype=np.int64)]))
+        components.append(_SeamComponent(
+            component_id=int(component_id),
+            edge_indices=tuple(int(edge_idx) for edge_idx in edge_indices),
+            vertex_indices=vertices,
+            seam_mass=seam_mass,
+            edge_count=edge_count,
+            vertex_count=vertex_count,
+            endpoint_vertices=endpoint_vertices,
+            junction_vertices=junction_vertices,
+            cycle_rank=int(cycle_rank),
+        ))
+    return components
 
 
-def _is_simple_open_path(component: tuple[int, ...], graph: _GraphViews) -> bool:
-    if _component_has_mesh_cycle(component, graph):
-        return False
-    degrees = _component_vertex_degrees(component, graph)
-    return all(degree <= 2 for degree in degrees.values())
-
-
-def _trace_spur_chain(
-    endpoint_vertex: int,
-    mask: np.ndarray,
-    graph: _GraphViews,
-    seam_vertex_degrees: np.ndarray,
-    *,
-    max_spur_edges: int,
-) -> tuple[tuple[int, ...], bool]:
-    incident = [edge_idx for edge_idx in graph.vertex_to_edges[int(endpoint_vertex)] if mask[edge_idx]]
-    if len(incident) != 1:
-        return (), False
-
-    chain: list[int] = []
-    previous_vertex = int(endpoint_vertex)
-    current_edge = int(incident[0])
-    while True:
-        if len(chain) >= max_spur_edges:
-            return tuple(chain), True
-        chain.append(current_edge)
-
-        vi, vj = graph.edge_to_vertices[current_edge]
-        next_vertex = int(vj) if int(vi) == previous_vertex else int(vi)
-        if int(seam_vertex_degrees[next_vertex]) != 2:
-            return tuple(chain), False
-
-        next_edges = [
-            int(edge_idx)
-            for edge_idx in graph.vertex_to_edges[next_vertex]
-            if mask[edge_idx] and int(edge_idx) != current_edge
-        ]
-        if len(next_edges) != 1:
-            return tuple(chain), False
-        previous_vertex, current_edge = next_vertex, next_edges[0]
-
-
-def _seam_vertex_degrees(mask: np.ndarray, graph: _GraphViews) -> np.ndarray:
-    degrees = np.zeros(graph.vertex_count, dtype=np.int64)
-    for edge_idx in np.flatnonzero(mask):
-        vi, vj = graph.edge_to_vertices[int(edge_idx)]
-        degrees[int(vi)] += 1
-        degrees[int(vj)] += 1
-    return degrees
-
-
-def _prune_spurs_once(
-    mask: np.ndarray,
-    refined: np.ndarray,
-    neighbors: tuple[tuple[int, ...], ...],
-    graph: _GraphViews,
-    *,
-    max_spur_edges: int,
-    spur_mean_max: float,
-    tau_high: float,
-) -> tuple[np.ndarray, tuple[int, ...]]:
-    if max_spur_edges < 1 or not np.any(mask):
-        return mask.copy(), ()
-
-    to_remove: set[int] = set()
-    seam_vertex_degrees = _seam_vertex_degrees(mask, graph)
-    for component in _component_members(mask, neighbors):
-        if _is_simple_open_path(component, graph):
-            continue
-        component_vertices = _component_vertex_degrees(component, graph)
-        endpoint_vertices = sorted(vertex for vertex, degree in component_vertices.items() if degree == 1)
-        for endpoint_vertex in endpoint_vertices:
-            chain, over_cap = _trace_spur_chain(
-                endpoint_vertex,
-                mask,
-                graph,
-                seam_vertex_degrees,
-                max_spur_edges=max_spur_edges,
-            )
-            if not chain or over_cap or len(chain) > max_spur_edges:
-                continue
-            if any(edge_idx in to_remove for edge_idx in chain):
-                continue
-            chain_idx = np.asarray(chain, dtype=np.int64)
-            if float(np.mean(refined[chain_idx])) >= spur_mean_max:
-                continue
-            if float(np.max(refined[chain_idx])) >= tau_high:
-                continue
-            to_remove.update(int(edge_idx) for edge_idx in chain)
-
-    if not to_remove:
-        return mask.copy(), ()
-    out = mask.copy()
-    removed = tuple(sorted(to_remove))
-    out[np.asarray(removed, dtype=np.int64)] = False
-    return out, removed
-
-
-def _prune_spurs(
-    mask: np.ndarray,
-    refined: np.ndarray,
-    neighbors: tuple[tuple[int, ...], ...],
-    graph: _GraphViews,
-    *,
-    max_spur_edges: int,
-    spur_mean_max: float,
-    tau_high: float,
-    iteration_cap: int = 8,
-) -> tuple[np.ndarray, tuple[int, ...]]:
-    out = mask.copy()
-    removed_all: list[int] = []
-    for _ in range(iteration_cap):
-        out, removed = _prune_spurs_once(
-            out,
-            refined,
-            neighbors,
-            graph,
-            max_spur_edges=max_spur_edges,
-            spur_mean_max=spur_mean_max,
-            tau_high=tau_high,
-        )
-        if not removed:
-            break
-        removed_all.extend(removed)
-    return out, tuple(sorted(set(removed_all)))
-
-
-def _endpoint_vertices(mask: np.ndarray, graph: _GraphViews) -> tuple[int, ...]:
-    if not np.any(mask):
-        return ()
-    seam_degree = np.zeros(graph.vertex_count, dtype=np.int64)
-    for edge_idx in np.flatnonzero(mask):
-        vi, vj = graph.edge_to_vertices[int(edge_idx)]
-        seam_degree[int(vi)] += 1
-        seam_degree[int(vj)] += 1
-    return tuple(int(vertex) for vertex in np.flatnonzero(seam_degree == 1))
-
-
-def _nonseam_vertex_adjacency(mask: np.ndarray, graph: _GraphViews, refined: np.ndarray, bridge_lambda: float) -> tuple[tuple[tuple[int, int, float, float], ...], ...]:
-    adjacency: list[list[tuple[int, int, float, float]]] = [[] for _ in range(graph.vertex_count)]
-    for edge_idx, (vi, vj) in enumerate(graph.edge_to_vertices):
-        if mask[edge_idx]:
-            continue
-        length = float(graph.edge_lengths[edge_idx])
-        cost = length * (1.0 + bridge_lambda * (1.0 - float(refined[edge_idx])))
-        a = int(vi)
-        b = int(vj)
-        adjacency[a].append((b, int(edge_idx), cost, length))
-        adjacency[b].append((a, int(edge_idx), cost, length))
-    return tuple(tuple(sorted(values, key=lambda item: (item[0], item[1]))) for values in adjacency)
-
-
-def _path_candidates_from_endpoint(
-    source: int,
-    endpoints: set[int],
-    adjacency: tuple[tuple[tuple[int, int, float, float], ...], ...],
-    refined: np.ndarray,
-    *,
-    max_bridge_edges: int,
-    bridge_min_mean_conf: float,
-    bridge_max_length: float,
-    cost_cutoff: float,
-) -> list[_BridgeCandidate]:
-    candidates: list[_BridgeCandidate] = []
-    heap: list[tuple[float, int, int, tuple[int, ...], tuple[int, ...], float]] = []
-    heappush(heap, (0.0, 0, int(source), (int(source),), (), 0.0))
-
-    while heap:
-        total_cost, hops, vertex, vertices_path, edges_path, total_length = heappop(heap)
-        if hops > max_bridge_edges or total_cost > cost_cutoff or total_length > bridge_max_length:
-            continue
-        if hops > 0 and vertex in endpoints and vertex > source:
-            edge_idx = np.asarray(edges_path, dtype=np.int64)
-            mean_conf = float(np.mean(refined[edge_idx])) if len(edge_idx) else 0.0
-            if mean_conf >= bridge_min_mean_conf and total_length <= bridge_max_length:
-                candidates.append(_BridgeCandidate(
-                    endpoints=(int(source), int(vertex)),
-                    edge_indices=tuple(int(idx) for idx in edges_path),
-                    total_cost=float(total_cost),
-                    total_length=float(total_length),
-                    mean_confidence=mean_conf,
-                ))
-        if hops == max_bridge_edges:
-            continue
-        for next_vertex, edge_idx, edge_cost, edge_length in adjacency[vertex]:
-            if next_vertex in vertices_path:
-                continue
-            next_cost = total_cost + edge_cost
-            next_length = total_length + edge_length
-            if next_cost > cost_cutoff or next_length > bridge_max_length:
-                continue
-            heappush(
-                heap,
-                (
-                    next_cost,
-                    hops + 1,
-                    int(next_vertex),
-                    vertices_path + (int(next_vertex),),
-                    edges_path + (int(edge_idx),),
-                    next_length,
-                ),
-            )
-    return candidates
-
-
-def _bridge_sort_key(candidate: _BridgeCandidate) -> tuple[int, float, tuple[int, int], tuple[int, ...]]:
-    return (
-        len(candidate.edge_indices),
-        round(candidate.total_cost, 12),
-        candidate.endpoints,
-        candidate.edge_indices,
+def _choose_main_open_component(components: list[_SeamComponent]) -> _SeamComponent | None:
+    open_components = [component for component in components if component.is_open]
+    if not open_components:
+        return None
+    return min(
+        open_components,
+        key=lambda component: (-component.seam_mass, -component.edge_count, component.component_id),
     )
 
 
-def _local_bridges(
-    mask: np.ndarray,
-    refined: np.ndarray,
+def _boundary_vertices(component: _SeamComponent, allow_all_if_no_endpoints: bool) -> tuple[int, ...]:
+    if component.endpoint_vertices:
+        return component.endpoint_vertices
+    if allow_all_if_no_endpoints:
+        return component.vertex_indices
+    return ()
+
+
+def _reconstruct_path(parent: dict[tuple[int, int], tuple[tuple[int, int], int]], end_state: tuple[int, int]) -> tuple[int, ...]:
+    edge_indices: list[int] = []
+    current = end_state
+    while current in parent:
+        previous, edge_idx = parent[current]
+        edge_indices.append(int(edge_idx))
+        current = previous
+    edge_indices.reverse()
+    return tuple(edge_indices)
+
+
+def _bounded_shortest_path(
+    graph: _GraphViews,
+    edge_costs: np.ndarray,
+    source: int,
+    targets: set[int],
+    *,
+    max_edges: int,
+    blocked_edges: set[int] | None = None,
+    allowed_edges: set[int] | None = None,
+    seam_mask: np.ndarray | None = None,
+) -> list[_PathCandidate]:
+    if source in targets:
+        return []
+
+    blocked_edges = blocked_edges or set()
+    best_cost: dict[tuple[int, int], float] = {(int(source), 0): 0.0}
+    parent: dict[tuple[int, int], tuple[tuple[int, int], int]] = {}
+    heap: list[tuple[float, int, int]] = [(0.0, 0, int(source))]
+    candidates: list[_PathCandidate] = []
+
+    while heap:
+        total_cost, hops, vertex = heappop(heap)
+        state = (int(vertex), int(hops))
+        if total_cost > best_cost.get(state, np.inf):
+            continue
+        if hops > 0 and vertex in targets:
+            edge_indices = _reconstruct_path(parent, state)
+            candidates.append(_PathCandidate(
+                source_vertex=int(source),
+                target_vertex=int(vertex),
+                edge_indices=edge_indices,
+                total_cost=float(total_cost),
+                total_edges=len(edge_indices),
+                normalized_cost=float(total_cost / max(len(edge_indices), 1)),
+            ))
+            continue
+        if hops >= max_edges:
+            continue
+
+        for neighbor in sorted(graph.vertex_graph.neighbors(vertex)):
+            edge_index = int(graph.vertex_graph[vertex][neighbor]['edge_index'])
+            if edge_index in blocked_edges:
+                continue
+            if allowed_edges is not None and edge_index not in allowed_edges:
+                continue
+            if seam_mask is not None and seam_mask[edge_index]:
+                continue
+            next_state = (int(neighbor), hops + 1)
+            next_cost = total_cost + float(edge_costs[edge_index])
+            previous_best = best_cost.get(next_state)
+            if previous_best is not None and next_cost >= previous_best:
+                continue
+            best_cost[next_state] = next_cost
+            parent[next_state] = (state, edge_index)
+            heappush(heap, (next_cost, hops + 1, int(neighbor)))
+
+    candidates.sort(key=lambda item: (round(item.total_cost, 12), item.total_edges, item.target_vertex, item.edge_indices))
+    return candidates
+
+
+def _path_new_edges(path: _PathCandidate, seam_mask: np.ndarray) -> tuple[int, ...]:
+    return tuple(int(edge_idx) for edge_idx in path.edge_indices if not seam_mask[int(edge_idx)])
+
+
+def _component_for_edge(edge_index: int, components: list[_SeamComponent]) -> _SeamComponent | None:
+    for component in components:
+        if edge_index in component.edge_indices:
+            return component
+    return None
+
+
+def _edge_distance_map(source_edges: tuple[int, ...], edge_neighbors: tuple[tuple[int, ...], ...]) -> np.ndarray:
+    distances = np.full(len(edge_neighbors), -1, dtype=np.int64)
+    queue = deque(int(edge_idx) for edge_idx in source_edges)
+    for edge_idx in queue:
+        distances[int(edge_idx)] = 0
+    while queue:
+        current = queue.popleft()
+        for neighbor in edge_neighbors[current]:
+            if distances[neighbor] >= 0:
+                continue
+            distances[neighbor] = distances[current] + 1
+            queue.append(int(neighbor))
+    return distances
+
+
+def _component_distance_to_edges(component: _SeamComponent, distance_map: np.ndarray) -> int | None:
+    values = [int(distance_map[int(edge_idx)]) for edge_idx in component.edge_indices if distance_map[int(edge_idx)] >= 0]
+    if not values:
+        return None
+    return min(values)
+
+
+def _band_costs(edge_costs: np.ndarray, dist_to_main: np.ndarray, eta_main: float) -> np.ndarray:
+    penalties = np.where(dist_to_main >= 0, eta_main * dist_to_main.astype(np.float64), eta_main * (np.max(dist_to_main[dist_to_main >= 0]) + 1 if np.any(dist_to_main >= 0) else 1.0))
+    return edge_costs + penalties
+
+
+def _collect_band_edges(
+    component: _SeamComponent,
+    main_component: _SeamComponent,
     graph: _GraphViews,
     *,
-    max_bridge_edges: int,
-    bridge_min_mean_conf: float,
-    bridge_max_length: float,
-    bridge_lambda: float,
-) -> tuple[np.ndarray, tuple[int, ...], int, int]:
-    endpoints = _endpoint_vertices(mask, graph)
-    if len(endpoints) < 2 or max_bridge_edges < 1:
-        return mask.copy(), (), len(endpoints), 0
-
-    adjacency = _nonseam_vertex_adjacency(mask, graph, refined, bridge_lambda)
-    endpoint_set = set(endpoints)
-    cost_cutoff = bridge_max_length * (1.0 + max(0.0, bridge_lambda))
-
-    best_by_pair: dict[tuple[int, int], _BridgeCandidate] = {}
-    for source in endpoints:
-        for candidate in _path_candidates_from_endpoint(
-            int(source),
-            endpoint_set,
-            adjacency,
-            refined,
-            max_bridge_edges=max_bridge_edges,
-            bridge_min_mean_conf=bridge_min_mean_conf,
-            bridge_max_length=bridge_max_length,
-            cost_cutoff=cost_cutoff,
-        ):
-            current = best_by_pair.get(candidate.endpoints)
-            if current is None or _bridge_sort_key(candidate) < _bridge_sort_key(current):
-                best_by_pair[candidate.endpoints] = candidate
-
-    accepted_endpoints: set[int] = set()
-    added_edges: set[int] = set()
-    bridge_count = 0
-    for candidate in sorted(best_by_pair.values(), key=_bridge_sort_key):
-        if candidate.endpoints[0] in accepted_endpoints or candidate.endpoints[1] in accepted_endpoints:
+    r_band: int,
+    r_snap: int,
+    attachment_edges: tuple[int, ...],
+) -> tuple[int, ...]:
+    main_distance = _edge_distance_map(main_component.edge_indices, graph.edge_neighbors)
+    seeds = set(int(edge_idx) for edge_idx in component.edge_indices)
+    seeds.update(int(edge_idx) for edge_idx in main_component.edge_indices if 0 <= main_distance[int(edge_idx)] <= r_snap)
+    seeds.update(int(edge_idx) for edge_idx in attachment_edges)
+    band_edges = set(seeds)
+    queue = deque((edge_idx, 0) for edge_idx in sorted(seeds))
+    seen = set(seeds)
+    while queue:
+        edge_idx, depth = queue.popleft()
+        if depth >= r_band:
             continue
-        accepted_endpoints.update(candidate.endpoints)
-        added_edges.update(candidate.edge_indices)
-        bridge_count += 1
+        for neighbor in graph.edge_neighbors[int(edge_idx)]:
+            if neighbor in seen:
+                continue
+            seen.add(int(neighbor))
+            band_edges.add(int(neighbor))
+            queue.append((int(neighbor), depth + 1))
+    return tuple(sorted(band_edges))
+
+
+def _lowest_attachment_paths(
+    component: _SeamComponent,
+    main_component: _SeamComponent,
+    graph: _GraphViews,
+    edge_costs: np.ndarray,
+    seam_mask: np.ndarray,
+    *,
+    r_cross: int,
+) -> list[_PathCandidate]:
+    candidates: list[_PathCandidate] = []
+    target_vertices = set(int(vertex) for vertex in main_component.vertex_indices)
+    blocked_edges = set(int(edge_idx) for edge_idx in component.edge_indices)
+    for source_vertex in _boundary_vertices(component, allow_all_if_no_endpoints=True):
+        candidates.extend(_bounded_shortest_path(
+            graph,
+            edge_costs,
+            int(source_vertex),
+            target_vertices,
+            max_edges=int(r_cross),
+            blocked_edges=blocked_edges,
+            seam_mask=seam_mask,
+        ))
+    candidates.sort(key=lambda item: (round(item.total_cost, 12), item.total_edges, item.source_vertex, item.target_vertex, item.edge_indices))
+    return candidates
+
+
+def _apply_band_collapse(
+    mask: np.ndarray,
+    component: _SeamComponent,
+    main_component: _SeamComponent,
+    graph: _GraphViews,
+    edge_costs: np.ndarray,
+    preserved_loops: set[frozenset[int]],
+    *,
+    r_snap: int,
+    snap_max_edges: int,
+    r_band: int,
+    eta_main: float,
+    r_cross: int,
+) -> tuple[np.ndarray, tuple[int, ...]]:
+    if component.edge_count > snap_max_edges:
+        return mask.copy(), ()
+    if frozenset(component.edge_indices) in preserved_loops:
+        return mask.copy(), ()
+
+    distance_map = _edge_distance_map(main_component.edge_indices, graph.edge_neighbors)
+    distance_to_main = _component_distance_to_edges(component, distance_map)
+    if distance_to_main is None or distance_to_main > r_snap:
+        return mask.copy(), ()
+
+    attachment_paths = _lowest_attachment_paths(component, main_component, graph, edge_costs, mask, r_cross=r_cross)
+    distinct_targets: list[_PathCandidate] = []
+    seen_targets: set[int] = set()
+    for candidate in attachment_paths:
+        if candidate.target_vertex in seen_targets:
+            continue
+        seen_targets.add(candidate.target_vertex)
+        distinct_targets.append(candidate)
+        if len(distinct_targets) == 2:
+            break
+    if len(distinct_targets) < 2:
+        return mask.copy(), ()
+
+    attachment_edges = distinct_targets[0].edge_indices + distinct_targets[1].edge_indices
+    band_edges = set(_collect_band_edges(
+        component,
+        main_component,
+        graph,
+        r_band=r_band,
+        r_snap=r_snap,
+        attachment_edges=attachment_edges,
+    ))
+    band_costs = _band_costs(edge_costs, distance_map, eta_main)
+    backbone_candidates = _bounded_shortest_path(
+        graph,
+        band_costs,
+        distinct_targets[0].target_vertex,
+        {distinct_targets[1].target_vertex},
+        max_edges=max(len(band_edges), 1),
+        allowed_edges=band_edges,
+    )
+    if not backbone_candidates:
+        return mask.copy(), ()
+
+    backbone_edges = set(int(edge_idx) for edge_idx in backbone_candidates[0].edge_indices)
+    backbone_edges.update(int(edge_idx) for edge_idx in attachment_edges)
 
     out = mask.copy()
-    if added_edges:
-        out[np.asarray(sorted(added_edges), dtype=np.int64)] = True
-    return out, tuple(sorted(added_edges)), len(endpoints), bridge_count
+    removed: list[int] = []
+    component_edge_set = set(int(edge_idx) for edge_idx in component.edge_indices)
+    for edge_idx in sorted(component_edge_set):
+        if edge_idx in backbone_edges:
+            continue
+        out[edge_idx] = False
+        removed.append(int(edge_idx))
+    for edge_idx in backbone_edges:
+        out[int(edge_idx)] = True
+    return out, tuple(sorted(removed))
 
 
-def _median_edge_length(edge_lengths: np.ndarray) -> float:
-    if len(edge_lengths) == 0:
-        return 0.0
-    finite = edge_lengths[np.isfinite(edge_lengths) & (edge_lengths > 0.0)]
-    if len(finite) == 0:
-        return 1.0
-    return float(np.median(finite))
+def _safe_loop_signature(component: _SeamComponent) -> frozenset[int]:
+    return frozenset(int(edge_idx) for edge_idx in component.edge_indices)
 
 
 def apply_seam_postprocessing_detailed(
     topology: Any,
     unique_edges: np.ndarray,
     probabilities: np.ndarray,
-    threshold: float = 0.60,
-    max_gap_length: int = 3,
+    threshold: float = 0.50,
+    max_gap_length: int = 8,
     min_island_size: int = 3,
     *,
-    smoothing_beta: float = 0.30,
-    smoothing_iterations: int = 1,
+    seam_threshold: float | None = None,
+    lambda_off: float = 0.75,
+    r_self: int = 6,
+    r_cross: int = 8,
+    tau_path: float = 1.35,
+    kappa_self: float = 1.5,
+    attach_margin: float = 0.10,
+    garbage_max_edges: int = 4,
+    r_snap: int = 3,
+    snap_max_edges: int = 12,
+    r_band: int = 2,
+    eta_main: float = 0.35,
+    smoothing_beta: float = 0.0,
+    smoothing_iterations: int = 0,
     tau_high: float | None = None,
-    tau_low: float = 0.40,
+    tau_low: float | None = None,
     min_component_edges: int | None = None,
+    max_island_edges: int | None = None,
+    island_attach_hops: int | None = None,
+    keep_small_cycle_conf: float | None = None,
     max_spur_edges: int = 2,
     spur_mean_max: float = 0.50,
-    bridge_lambda: float = 1.0,
+    bridge_lambda: float | None = None,
     max_bridge_edges: int | None = None,
-    bridge_min_mean_conf: float = 0.45,
+    bridge_min_mean_conf: float | None = None,
+    bridge_max_length_factor: float | None = None,
     bridge_max_length: float | None = None,
+    bridge_turn_weight: float | None = None,
+    endpoint_tangent_span: int | None = None,
+    theta_align_deg: float | None = None,
+    reciprocal_bridge_only: bool | None = None,
+    bridge_corridor_radius_factor: float | None = None,
     skeleton_threshold: float | None = None,
     skeleton_radius: int | None = None,
     distortion_per_edge: np.ndarray | None = None,
     confidence_weight: float = 1.0,
     distortion_weight: float = 1.0,
 ) -> SeamPostprocessResult:
-    del skeleton_threshold, skeleton_radius, distortion_per_edge, confidence_weight, distortion_weight
+    del (
+        smoothing_beta,
+        smoothing_iterations,
+        tau_high,
+        tau_low,
+        min_component_edges,
+        max_island_edges,
+        island_attach_hops,
+        keep_small_cycle_conf,
+        max_spur_edges,
+        spur_mean_max,
+        bridge_lambda,
+        max_bridge_edges,
+        bridge_min_mean_conf,
+        bridge_max_length_factor,
+        bridge_max_length,
+        bridge_turn_weight,
+        endpoint_tangent_span,
+        theta_align_deg,
+        reciprocal_bridge_only,
+        bridge_corridor_radius_factor,
+        skeleton_threshold,
+        skeleton_radius,
+        distortion_per_edge,
+        confidence_weight,
+        distortion_weight,
+        min_island_size,
+        max_gap_length,
+    )
 
-    tau_high_value = float(threshold if tau_high is None else tau_high)
-    tau_low_value = float(tau_low)
-    _validate_probability_threshold('threshold', float(threshold))
-    _validate_probability_threshold('tau_high', tau_high_value)
-    _validate_probability_threshold('tau_low', tau_low_value)
-    if tau_low_value > tau_high_value:
-        raise ValueError(f'tau_low must be <= tau_high, got {tau_low_value} > {tau_high_value}')
-    if smoothing_beta < 0.0 or smoothing_beta > 1.0:
-        raise ValueError(f'smoothing_beta must be in [0, 1], got {smoothing_beta}')
-    if smoothing_iterations < 0 or smoothing_iterations > 2:
-        raise ValueError(f'smoothing_iterations must be between 0 and 2, got {smoothing_iterations}')
-    if max_gap_length < 0:
-        raise ValueError(f'max_gap_length must be non-negative, got {max_gap_length}')
-    if min_island_size < 1:
-        raise ValueError(f'min_island_size must be at least 1, got {min_island_size}')
-    min_component_edges_value = int(min_island_size if min_component_edges is None else min_component_edges)
-    max_bridge_edges_value = int(max_gap_length if max_bridge_edges is None else max_bridge_edges)
-    if min_component_edges_value < 1:
-        raise ValueError(f'min_component_edges must be at least 1, got {min_component_edges_value}')
-    if max_spur_edges < 1:
-        raise ValueError(f'max_spur_edges must be at least 1, got {max_spur_edges}')
-    if spur_mean_max < 0.0 or spur_mean_max > 1.0:
-        raise ValueError(f'spur_mean_max must be in [0, 1], got {spur_mean_max}')
-    if max_bridge_edges_value < 0:
-        raise ValueError(f'max_bridge_edges must be non-negative, got {max_bridge_edges_value}')
-    if bridge_lambda < 0.0:
-        raise ValueError(f'bridge_lambda must be non-negative, got {bridge_lambda}')
-    if bridge_min_mean_conf < 0.0 or bridge_min_mean_conf > 1.0:
-        raise ValueError(f'bridge_min_mean_conf must be in [0, 1], got {bridge_min_mean_conf}')
+    seam_threshold_value = float(threshold if seam_threshold is None else seam_threshold)
+    _validate_probability_threshold('threshold', seam_threshold_value)
+    if lambda_off < 0.0:
+        raise ValueError(f'lambda_off must be non-negative, got {lambda_off}')
+    if r_self < 0 or r_cross < 0:
+        raise ValueError(f'r_self and r_cross must be non-negative, got {r_self}, {r_cross}')
+    if tau_path < 0.0:
+        raise ValueError(f'tau_path must be non-negative, got {tau_path}')
+    if kappa_self < 0.0:
+        raise ValueError(f'kappa_self must be non-negative, got {kappa_self}')
+    if attach_margin < 0.0:
+        raise ValueError(f'attach_margin must be non-negative, got {attach_margin}')
+    if garbage_max_edges < 0 or r_snap < 0 or snap_max_edges < 0 or r_band < 0:
+        raise ValueError('graph-radius parameters must be non-negative')
+    if eta_main < 0.0:
+        raise ValueError(f'eta_main must be non-negative, got {eta_main}')
 
     probs = _as_probability_array(probabilities)
     edges = _as_unique_edges(unique_edges)
@@ -685,86 +646,166 @@ def apply_seam_postprocessing_detailed(
             pruned_component_count=0,
         )
 
-    graph = _build_graph_views(topology, edges)
-    refined = _smooth_probabilities(
-        probs,
-        graph.dual_neighbors,
-        beta=float(smoothing_beta),
-        iterations=int(smoothing_iterations),
-    )
+    graph = _build_graph_views(topology, edges, probs)
+    edge_costs = _edge_costs(probs, seam_threshold_value, float(lambda_off))
 
-    threshold_mask = refined >= tau_high_value
-    hysteresis_mask = _hysteresis_threshold(refined, graph.seam_neighbors, tau_low_value, tau_high_value)
-    current, tiny_pruned, tiny_component_count = _prune_tiny_components(
-        hysteresis_mask,
-        refined,
-        graph.seam_neighbors,
-        min_component_edges=min_component_edges_value,
-        tau_high=tau_high_value,
-    )
-    current, spur_pruned = _prune_spurs(
-        current,
-        refined,
-        graph.seam_neighbors,
-        graph,
-        max_spur_edges=int(max_spur_edges),
-        spur_mean_max=float(spur_mean_max),
-        tau_high=tau_high_value,
-    )
-    local_clean_mask = current.copy()
+    threshold_mask = probs >= seam_threshold_value
+    current_mask = threshold_mask.copy()
+    added_bridge_edges: set[int] = set()
+    preserved_loops: set[frozenset[int]] = set()
+    pruned_edges: set[int] = set()
+    pruned_component_count = 0
 
-    bridge_length_limit = (
-        2.5 * _median_edge_length(graph.edge_lengths)
-        if bridge_max_length is None
-        else float(bridge_max_length)
-    )
-    if bridge_length_limit < 0.0:
-        raise ValueError(f'bridge_max_length must be non-negative, got {bridge_length_limit}')
+    # Stage A/B
+    initial_components = _analyze_components(current_mask, graph, probs)
+    main_component = _choose_main_open_component(initial_components)
+    main_component_id = None if main_component is None else int(main_component.component_id)
+    for component in initial_components:
+        if component.component_id == main_component_id or not component.is_open_arc:
+            continue
+        max_self_edges = min(int(r_self), max(int(np.ceil(kappa_self * component.edge_count)), 0))
+        if max_self_edges <= 0:
+            continue
+        endpoints = tuple(component.endpoint_vertices)
+        candidates = _bounded_shortest_path(
+            graph,
+            edge_costs,
+            endpoints[0],
+            {endpoints[1]},
+            max_edges=max_self_edges,
+            blocked_edges=set(int(edge_idx) for edge_idx in component.edge_indices),
+            seam_mask=current_mask,
+        )
+        if not candidates:
+            continue
+        candidate = candidates[0]
+        if candidate.total_edges > r_self or candidate.normalized_cost > tau_path:
+            continue
+        for edge_idx in candidate.edge_indices:
+            current_mask[int(edge_idx)] = True
+            added_bridge_edges.add(int(edge_idx))
+        updated_components = _analyze_components(current_mask, graph, probs)
+        for updated in updated_components:
+            if set(component.edge_indices).issubset(set(updated.edge_indices)) and updated.is_closed:
+                preserved_loops.add(_safe_loop_signature(updated))
+                break
 
-    bridged, bridge_edges, endpoint_count, bridge_count = _local_bridges(
-        current,
-        refined,
-        graph,
-        max_bridge_edges=max_bridge_edges_value,
-        bridge_min_mean_conf=float(bridge_min_mean_conf),
-        bridge_max_length=bridge_length_limit,
-        bridge_lambda=float(bridge_lambda),
-    )
+    stage_b_mask = current_mask.copy()
 
-    final_mask, final_tiny_pruned, final_tiny_component_count = _prune_tiny_components(
-        bridged,
-        refined,
-        graph.seam_neighbors,
-        min_component_edges=min_component_edges_value,
-        tau_high=tau_high_value,
-    )
-    final_mask, final_spur_pruned = _prune_spurs(
-        final_mask,
-        refined,
-        graph.seam_neighbors,
-        graph,
-        max_spur_edges=int(max_spur_edges),
-        spur_mean_max=float(spur_mean_max),
-        tau_high=tau_high_value,
-    )
+    # Stage C
+    bridge_count = 0
+    while True:
+        components = _analyze_components(current_mask, graph, probs)
+        main_component = _choose_main_open_component(components)
+        if main_component is None:
+            break
+        component_candidates: list[tuple[float, int, int, tuple[int, ...], _PathCandidate]] = []
+        target_vertices = set(int(vertex) for vertex in main_component.vertex_indices)
+        for component in components:
+            if component.component_id == main_component.component_id or not component.is_open:
+                continue
+            blocked_edges = set(int(edge_idx) for edge_idx in component.edge_indices)
+            candidates: list[_PathCandidate] = []
+            for source_vertex in _boundary_vertices(component, allow_all_if_no_endpoints=True):
+                candidates.extend(_bounded_shortest_path(
+                    graph,
+                    edge_costs,
+                    int(source_vertex),
+                    target_vertices,
+                    max_edges=int(r_cross),
+                    blocked_edges=blocked_edges,
+                    seam_mask=current_mask,
+                ))
+            if not candidates:
+                continue
+            candidates = [candidate for candidate in candidates if candidate.total_edges <= r_cross and candidate.normalized_cost <= tau_path]
+            if not candidates:
+                continue
+            candidates.sort(key=lambda item: (round(item.total_cost, 12), item.total_edges, item.source_vertex, item.target_vertex, item.edge_indices))
+            if len(candidates) > 1 and not (candidates[0].normalized_cost + attach_margin < candidates[1].normalized_cost):
+                continue
+            component_candidates.append((
+                float(candidates[0].total_cost),
+                int(candidates[0].total_edges),
+                int(component.component_id),
+                candidates[0].edge_indices,
+                candidates[0],
+            ))
+        if not component_candidates:
+            break
+        component_candidates.sort(key=lambda item: (round(item[0], 12), item[1], item[2], item[3]))
+        chosen = component_candidates[0][4]
+        for edge_idx in chosen.edge_indices:
+            current_mask[int(edge_idx)] = True
+            added_bridge_edges.add(int(edge_idx))
+        bridge_count += 1
+
+    # Stage D
+    components_after_cross = _analyze_components(current_mask, graph, probs)
+    main_component = _choose_main_open_component(components_after_cross)
+    final_main_id = None if main_component is None else int(main_component.component_id)
+    for component in components_after_cross:
+        if not component.is_open:
+            continue
+        if component.component_id == final_main_id:
+            continue
+        current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+        pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
+        pruned_component_count += 1
+
+    # Stage E
+    components_before_snap = _analyze_components(current_mask, graph, probs)
+    main_component = _choose_main_open_component(components_before_snap)
+    if main_component is not None:
+        for component in components_before_snap:
+            if component.component_id == main_component.component_id:
+                continue
+            current_mask, removed = _apply_band_collapse(
+                current_mask,
+                component,
+                main_component,
+                graph,
+                edge_costs,
+                preserved_loops,
+                r_snap=int(r_snap),
+                snap_max_edges=int(snap_max_edges),
+                r_band=int(r_band),
+                eta_main=float(eta_main),
+                r_cross=int(r_cross),
+            )
+            if removed:
+                pruned_edges.update(int(edge_idx) for edge_idx in removed)
+
+    # Stage F
+    final_components = _analyze_components(current_mask, graph, probs)
+    main_component = _choose_main_open_component(final_components)
+    final_main_id = None if main_component is None else int(main_component.component_id)
+    for component in final_components:
+        if component.is_open and component.component_id != final_main_id:
+            current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+            pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
+            pruned_component_count += 1
+
+    final_components = _analyze_components(current_mask, graph, probs)
+    open_main = _choose_main_open_component(final_components)
+    endpoint_count = 0 if open_main is None else len(open_main.endpoint_vertices)
 
     bridge_mask = np.zeros(len(edges), dtype=bool)
-    if bridge_edges:
-        bridge_mask[np.asarray(bridge_edges, dtype=np.int64)] = True
-    pruned_edges = tuple(sorted(set(tiny_pruned + spur_pruned + final_tiny_pruned + final_spur_pruned)))
+    if added_bridge_edges:
+        bridge_mask[np.asarray(sorted(added_bridge_edges), dtype=np.int64)] = True
 
     return SeamPostprocessResult(
         threshold_mask=threshold_mask,
-        skeleton_mask=local_clean_mask,
+        skeleton_mask=stage_b_mask,
         steiner_mask=bridge_mask,
-        final_mask=final_mask,
+        final_mask=current_mask.copy(),
         skeleton_deleted_vertices=(),
-        steiner_added_edges=bridge_edges,
-        pruned_edge_indices=pruned_edges,
+        steiner_added_edges=tuple(sorted(added_bridge_edges)),
+        pruned_edge_indices=tuple(sorted(pruned_edges)),
         skeleton_terminal_vertex_count=int(endpoint_count),
-        steiner_terminal_group_count=int(len(_component_members(local_clean_mask, graph.seam_neighbors))),
+        steiner_terminal_group_count=int(len(final_components)),
         steiner_tree_count=int(bridge_count),
-        pruned_component_count=int(tiny_component_count + final_tiny_component_count),
+        pruned_component_count=int(pruned_component_count),
     )
 
 
@@ -772,8 +813,8 @@ def apply_seam_postprocessing(
     topology: Any,
     unique_edges: np.ndarray,
     probabilities: np.ndarray,
-    threshold: float = 0.60,
-    max_gap_length: int = 3,
+    threshold: float = 0.50,
+    max_gap_length: int = 8,
     min_island_size: int = 3,
     **kwargs: Any,
 ) -> np.ndarray:
@@ -799,7 +840,7 @@ def threshold_and_clean(
         unique_edges=unique_edges,
         probabilities=probs,
         threshold=threshold,
-        max_gap_length=0,
+        max_gap_length=8,
         min_island_size=min_component_size,
     )
 
@@ -809,7 +850,7 @@ def stitch_seam_gaps(
     seam_mask: np.ndarray,
     unique_edges: np.ndarray,
     edge_to_faces: dict | None = None,
-    max_gap: int = 3,
+    max_gap: int = 8,
 ) -> np.ndarray:
     del edge_to_faces
     probabilities = _as_probability_array(probs).copy()
@@ -821,7 +862,7 @@ def stitch_seam_gaps(
         topology=None,
         unique_edges=unique_edges,
         probabilities=probabilities,
-        threshold=0.60,
+        threshold=0.50,
         max_gap_length=max_gap,
         min_island_size=1,
     )
@@ -833,7 +874,7 @@ def postprocess_seams(
     edge_to_faces: dict | None = None,
     threshold: float = 0.5,
     min_component_size: int = 3,
-    max_gap: int = 3,
+    max_gap: int = 8,
 ) -> np.ndarray:
     del edge_to_faces
     return apply_seam_postprocessing(

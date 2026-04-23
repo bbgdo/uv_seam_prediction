@@ -52,6 +52,18 @@ def _resolved_run_settings(settings):
         model_weights_path=validation.bpy_path_to_os_path(settings.model_weights_path),
         threshold=settings.threshold,
         use_post_processing=settings.use_post_processing,
+        postprocess_seam_threshold=settings.postprocess_seam_threshold,
+        postprocess_lambda_off=settings.postprocess_lambda_off,
+        postprocess_r_self=settings.postprocess_r_self,
+        postprocess_r_cross=settings.postprocess_r_cross,
+        postprocess_tau_path=settings.postprocess_tau_path,
+        postprocess_kappa_self=settings.postprocess_kappa_self,
+        postprocess_attach_margin=settings.postprocess_attach_margin,
+        postprocess_garbage_max_edges=settings.postprocess_garbage_max_edges,
+        postprocess_r_snap=settings.postprocess_r_snap,
+        postprocess_snap_max_edges=settings.postprocess_snap_max_edges,
+        postprocess_r_band=settings.postprocess_r_band,
+        postprocess_eta_main=settings.postprocess_eta_main,
         clear_existing_seams=settings.clear_existing_seams,
     )
 

@@ -45,6 +45,32 @@ def build_cli_args(prefs, settings, obj_path, json_path):
         os.path.abspath(json_path),
     ]
     args.append('--postprocess' if settings.use_post_processing else '--no-postprocess')
+    args.extend([
+        '--postprocess-seam-threshold',
+        str(settings.postprocess_seam_threshold),
+        '--postprocess-lambda-off',
+        str(settings.postprocess_lambda_off),
+        '--postprocess-r-self',
+        str(settings.postprocess_r_self),
+        '--postprocess-r-cross',
+        str(settings.postprocess_r_cross),
+        '--postprocess-tau-path',
+        str(settings.postprocess_tau_path),
+        '--postprocess-kappa-self',
+        str(settings.postprocess_kappa_self),
+        '--postprocess-attach-margin',
+        str(settings.postprocess_attach_margin),
+        '--postprocess-garbage-max-edges',
+        str(settings.postprocess_garbage_max_edges),
+        '--postprocess-r-snap',
+        str(settings.postprocess_r_snap),
+        '--postprocess-snap-max-edges',
+        str(settings.postprocess_snap_max_edges),
+        '--postprocess-r-band',
+        str(settings.postprocess_r_band),
+        '--postprocess-eta-main',
+        str(settings.postprocess_eta_main),
+    ])
     return args
 
 

@@ -180,6 +180,37 @@ class PredictSeamsTests(unittest.TestCase):
             with self.assertRaisesRegex(predict_seams.PredictionError, 'CUDA is unavailable'):
                 predict_seams.resolve_device('cuda')
 
+    def test_postprocess_kwargs_mapping(self):
+        args = Namespace(
+            postprocess_seam_threshold=0.5,
+            postprocess_lambda_off=0.75,
+            postprocess_r_self=6,
+            postprocess_r_cross=8,
+            postprocess_tau_path=1.35,
+            postprocess_kappa_self=1.5,
+            postprocess_attach_margin=0.10,
+            postprocess_garbage_max_edges=4,
+            postprocess_r_snap=3,
+            postprocess_snap_max_edges=12,
+            postprocess_r_band=2,
+            postprocess_eta_main=0.35,
+        )
+
+        kwargs = predict_seams.postprocess_kwargs_from_args(args)
+
+        self.assertEqual(kwargs['seam_threshold'], 0.5)
+        self.assertEqual(kwargs['lambda_off'], 0.75)
+        self.assertEqual(kwargs['r_self'], 6)
+        self.assertEqual(kwargs['r_cross'], 8)
+        self.assertEqual(kwargs['tau_path'], 1.35)
+        self.assertEqual(kwargs['kappa_self'], 1.5)
+        self.assertEqual(kwargs['attach_margin'], 0.10)
+        self.assertEqual(kwargs['garbage_max_edges'], 4)
+        self.assertEqual(kwargs['r_snap'], 3)
+        self.assertEqual(kwargs['snap_max_edges'], 12)
+        self.assertEqual(kwargs['r_band'], 2)
+        self.assertEqual(kwargs['eta_main'], 0.35)
+
     def test_dual_edge_index_helper_matches_vertex_sharing_semantics(self):
         unique_edges = np.asarray([(0, 1), (0, 2), (1, 2), (2, 3)], dtype=np.int64)
 

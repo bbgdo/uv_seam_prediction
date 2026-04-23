@@ -59,6 +59,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--write-all-edges', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--postprocess', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--postprocess-seam-threshold', type=float, default=0.50)
+    parser.add_argument('--postprocess-lambda-off', type=float, default=0.75)
+    parser.add_argument('--postprocess-r-self', type=int, default=6)
+    parser.add_argument('--postprocess-r-cross', type=int, default=8)
+    parser.add_argument('--postprocess-tau-path', type=float, default=1.35)
+    parser.add_argument('--postprocess-kappa-self', type=float, default=1.5)
+    parser.add_argument('--postprocess-attach-margin', type=float, default=0.10)
+    parser.add_argument('--postprocess-garbage-max-edges', type=int, default=4)
+    parser.add_argument('--postprocess-r-snap', type=int, default=3)
+    parser.add_argument('--postprocess-snap-max-edges', type=int, default=12)
+    parser.add_argument('--postprocess-r-band', type=int, default=2)
+    parser.add_argument('--postprocess-eta-main', type=float, default=0.35)
     return parser.parse_args(argv)
 
 
@@ -101,6 +113,23 @@ def _validate_threshold(value: Any) -> float:
     if not math.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
         raise PredictionError(f'threshold must be a finite value in [0, 1], got {threshold}', 'InvalidThreshold')
     return threshold
+
+
+def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        'seam_threshold': float(args.postprocess_seam_threshold),
+        'lambda_off': float(args.postprocess_lambda_off),
+        'r_self': int(args.postprocess_r_self),
+        'r_cross': int(args.postprocess_r_cross),
+        'tau_path': float(args.postprocess_tau_path),
+        'kappa_self': float(args.postprocess_kappa_self),
+        'attach_margin': float(args.postprocess_attach_margin),
+        'garbage_max_edges': int(args.postprocess_garbage_max_edges),
+        'r_snap': int(args.postprocess_r_snap),
+        'snap_max_edges': int(args.postprocess_snap_max_edges),
+        'r_band': int(args.postprocess_r_band),
+        'eta_main': float(args.postprocess_eta_main),
+    }
 
 
 def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Path) -> str:
@@ -833,6 +862,7 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
             unique_edges=unique_edges,
             probabilities=probabilities,
             threshold=threshold,
+            **postprocess_kwargs_from_args(args),
         )
     else:
         seam_mask = probabilities >= threshold

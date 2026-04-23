@@ -52,6 +52,22 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         inference_box.prop(settings, 'clear_existing_seams')
         inference_box.prop(settings, 'make_single_user_mesh')
 
+        post_box = layout.box()
+        post_box.label(text='Post-process Settings')
+        post_box.enabled = settings.use_post_processing
+        post_box.prop(settings, 'postprocess_seam_threshold')
+        post_box.prop(settings, 'postprocess_lambda_off')
+        post_box.prop(settings, 'postprocess_r_self')
+        post_box.prop(settings, 'postprocess_r_cross')
+        post_box.prop(settings, 'postprocess_tau_path')
+        post_box.prop(settings, 'postprocess_kappa_self')
+        post_box.prop(settings, 'postprocess_attach_margin')
+        post_box.prop(settings, 'postprocess_garbage_max_edges')
+        post_box.prop(settings, 'postprocess_r_snap')
+        post_box.prop(settings, 'postprocess_snap_max_edges')
+        post_box.prop(settings, 'postprocess_r_band')
+        post_box.prop(settings, 'postprocess_eta_main')
+
         actions = layout.box()
         actions.label(text='Actions')
         row = actions.row()
