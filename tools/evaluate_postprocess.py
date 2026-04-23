@@ -33,8 +33,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--config-json', default=None)
     parser.add_argument('--summary-json', default=None)
     parser.add_argument('--dataset-path', default=None)
-    parser.add_argument('--threshold', type=float, default=0.5)
-    parser.add_argument('--max-gap-length', type=int, default=5)
+    parser.add_argument('--threshold', type=float, default=0.60)
+    parser.add_argument('--max-gap-length', type=int, default=3)
     parser.add_argument('--min-island-size', type=int, default=3)
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
     parser.add_argument('--limit-meshes', type=int, default=None)
@@ -335,7 +335,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
 
     total_added_edges = 0
     total_pruned_edges = 0
-    total_steiner_trees = 0
+    total_bridges = 0
     meshes_with_changes = 0
 
     for sample in test_samples:
@@ -384,7 +384,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             meshes_with_changes += 1
         total_added_edges += len(result.steiner_added_edges)
         total_pruned_edges += len(result.pruned_edge_indices)
-        total_steiner_trees += int(result.steiner_tree_count)
+        total_bridges += int(result.steiner_tree_count)
 
         raw_probabilities.append(probabilities)
         raw_labels.append(labels.astype(np.float32))
@@ -447,12 +447,11 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             'threshold': float(args.threshold),
             'max_gap_length': int(args.max_gap_length),
             'min_island_size': int(args.min_island_size),
-            'cost_function': 'edge_cost = -log(max(probability, 1e-6))',
-            'terminal_pairing': (
-                'iterative greedy terminal pairing; enumerate shortest weighted paths between '
-                'terminal vertices in different seam components under a hop cap, choose the '
-                'lowest-cost admissible bridge, merge, and repeat'
+            'pipeline': (
+                'local support smoothing, hysteresis thresholding, tiny component pruning, '
+                'low-confidence spur pruning, bounded endpoint bridging, final cleanup'
             ),
+            'bridge_cost_function': 'edge_length * (1 + bridge_lambda * (1 - refined_probability))',
         },
         'global_metrics': {
             'pre_pp': raw_global,
@@ -463,7 +462,8 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             'meshes_with_changes': int(meshes_with_changes),
             'total_added_edges': int(total_added_edges),
             'total_pruned_edges': int(total_pruned_edges),
-            'total_steiner_trees': int(total_steiner_trees),
+            'total_bridges': int(total_bridges),
+            'total_steiner_trees': int(total_bridges),
         },
         'per_mesh': per_mesh,
     }

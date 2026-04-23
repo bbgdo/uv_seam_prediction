@@ -22,6 +22,7 @@ import trimesh  # noqa: E402
 from models.baselines.registry import get_baseline  # noqa: E402
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa: E402
 from models.meshcnn_full.model import MeshCNNSegmenter  # noqa: E402
+from models.utils.postprocess import apply_seam_postprocessing  # noqa: E402
 from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
@@ -57,6 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--endpoint-seed', type=int, default=42)
     parser.add_argument('--write-all-edges', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--postprocess', action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args(argv)
 
 
@@ -825,7 +827,15 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
             logits = model(dual_data.x.to(device), dual_data.edge_index.to(device))
         probs = torch.sigmoid(logits).cpu().numpy()
     probabilities = normalize_probabilities(probs, len(unique_edges))
-    seam_mask = probabilities >= threshold
+    if bool(getattr(args, 'postprocess', True)):
+        seam_mask = apply_seam_postprocessing(
+            topology=topology,
+            unique_edges=unique_edges,
+            probabilities=probabilities,
+            threshold=threshold,
+        )
+    else:
+        seam_mask = probabilities >= threshold
 
     return build_output_payload(
         mesh_path=mesh_path,
