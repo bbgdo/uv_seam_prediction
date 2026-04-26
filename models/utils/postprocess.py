@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from heapq import heappop, heappush
+import json
+import logging
+from pathlib import Path
 from typing import Any
 
 import networkx as nx
@@ -10,6 +13,7 @@ import numpy as np
 
 
 _PROB_EPS = 1e-6
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,7 @@ class _SeamComponent:
     edge_indices: tuple[int, ...]
     vertex_indices: tuple[int, ...]
     seam_mass: float
+    mean_prob: float
     edge_count: int
     vertex_count: int
     endpoint_vertices: tuple[int, ...]
@@ -67,6 +72,14 @@ class _SeamComponent:
             and len(self.junction_vertices) == 0
         )
 
+    @property
+    def endpoint_count(self) -> int:
+        return len(self.endpoint_vertices)
+
+    @property
+    def junction_count(self) -> int:
+        return len(self.junction_vertices)
+
 
 @dataclass(frozen=True)
 class _PathCandidate:
@@ -76,6 +89,77 @@ class _PathCandidate:
     total_cost: float
     total_edges: int
     normalized_cost: float
+
+
+@dataclass(frozen=True)
+class _BridgeCandidate:
+    source_component_id: int
+    target_component_id: int | None
+    source_vertex: int
+    target_vertex: int
+    edge_indices: tuple[int, ...]
+    new_edges: tuple[int, ...]
+    path_key: tuple[int, ...]
+    total_cost: float
+    mean_bridge_conf: float
+    low_conf_fraction: float
+    accepted_via_force_close: bool
+
+
+@dataclass
+class _BridgeStageStats:
+    candidate_pairs_considered: int = 0
+    shortest_paths_found: int = 0
+    rejected_no_new_edges: int = 0
+    rejected_by_length: int = 0
+    rejected_by_third_party_protected: int = 0
+    rejected_by_mean_conf: int = 0
+    rejected_by_low_conf_fraction: int = 0
+    rejected_by_ambiguity: int = 0
+    duplicate_paths_collapsed: int = 0
+    accepted_bridges: int = 0
+    accepted_via_force_close: int = 0
+    total_new_edges_added: int = 0
+    total_components_merged: int = 0
+
+
+@dataclass(frozen=True)
+class _BridgeTerminalRecord:
+    stage_name: str
+    component_id: int
+    vertex_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _RejectedBridgeRecord:
+    stage_name: str
+    source_component_id: int
+    target_component_id: int | None
+    source_vertex: int
+    target_vertex: int
+    new_edges: tuple[int, ...]
+    total_cost: float
+    mean_bridge_conf: float
+    low_conf_fraction: float
+    rejection_reason: str
+
+
+@dataclass(frozen=True)
+class _AcceptedBridgeRecord:
+    stage_name: str
+    source_component_id: int
+    target_component_id: int | None
+    source_vertex: int
+    target_vertex: int
+    new_edges: tuple[int, ...]
+
+
+@dataclass
+class _BridgeDebugExport:
+    export_dir: Path
+    terminals: list[_BridgeTerminalRecord]
+    rejected_bridges: list[_RejectedBridgeRecord]
+    accepted_bridges: list[_AcceptedBridgeRecord]
 
 
 def _canonical_edge_key(a: int, b: int) -> tuple[int, int]:
@@ -205,6 +289,10 @@ def _edge_costs(probabilities: np.ndarray, seam_threshold: float, lambda_off: fl
     return -np.log(np.clip(probabilities, _PROB_EPS, 1.0)) + lambda_off * (probabilities < seam_threshold)
 
 
+def _compute_search_edge_costs(probabilities: np.ndarray, alpha_cost: float) -> np.ndarray:
+    return 1.0 + alpha_cost * (1.0 - probabilities)
+
+
 def _component_members(mask: np.ndarray, edge_neighbors: tuple[tuple[int, ...], ...]) -> list[tuple[int, ...]]:
     visited = np.zeros(len(mask), dtype=bool)
     components: list[tuple[int, ...]] = []
@@ -255,11 +343,13 @@ def _analyze_components(mask: np.ndarray, graph: _GraphViews, probabilities: np.
         vertex_count = len(vertices)
         cycle_rank = edge_count - vertex_count + 1
         seam_mass = float(np.sum(probabilities[np.asarray(edge_indices, dtype=np.int64)]))
+        mean_prob = float(seam_mass / max(edge_count, 1))
         components.append(_SeamComponent(
             component_id=int(component_id),
             edge_indices=tuple(int(edge_idx) for edge_idx in edge_indices),
             vertex_indices=vertices,
             seam_mass=seam_mass,
+            mean_prob=mean_prob,
             edge_count=edge_count,
             vertex_count=vertex_count,
             endpoint_vertices=endpoint_vertices,
@@ -285,6 +375,13 @@ def _boundary_vertices(component: _SeamComponent, allow_all_if_no_endpoints: boo
     if allow_all_if_no_endpoints:
         return component.vertex_indices
     return ()
+
+
+def _build_terminal_set(component: _SeamComponent, seam_vertex_degrees: dict[int, int]) -> tuple[int, ...]:
+    terminals = tuple(sorted(vertex for vertex, degree in seam_vertex_degrees.items() if degree != 2))
+    if terminals:
+        return terminals
+    return component.vertex_indices
 
 
 def _reconstruct_path(parent: dict[tuple[int, int], tuple[tuple[int, int], int]], end_state: tuple[int, int]) -> tuple[int, ...]:
@@ -362,10 +459,491 @@ def _path_new_edges(path: _PathCandidate, seam_mask: np.ndarray) -> tuple[int, .
     return tuple(int(edge_idx) for edge_idx in path.edge_indices if not seam_mask[int(edge_idx)])
 
 
-def _component_for_edge(edge_index: int, components: list[_SeamComponent]) -> _SeamComponent | None:
+def _path_new_edges_from_indices(path_edge_indices: tuple[int, ...], seam_mask: np.ndarray) -> tuple[int, ...]:
+    return tuple(int(edge_idx) for edge_idx in path_edge_indices if not seam_mask[int(edge_idx)])
+
+
+def _build_edge_component_ids(components: list[_SeamComponent], edge_count: int) -> np.ndarray:
+    component_ids = np.full(edge_count, -1, dtype=np.int64)
     for component in components:
-        if edge_index in component.edge_indices:
-            return component
+        component_ids[np.asarray(component.edge_indices, dtype=np.int64)] = int(component.component_id)
+    return component_ids
+
+
+def _path_uses_blocked_third_party_seam(
+    path_edge_indices: tuple[int, ...],
+    seam_mask: np.ndarray,
+    edge_component_ids: np.ndarray,
+    allowed_component_ids: set[int],
+    blocked_component_ids: set[int],
+) -> bool:
+    for edge_idx in path_edge_indices:
+        edge_idx = int(edge_idx)
+        if not seam_mask[edge_idx]:
+            continue
+        component_id = int(edge_component_ids[edge_idx])
+        if component_id >= 0 and component_id in blocked_component_ids and component_id not in allowed_component_ids:
+            return True
+    return False
+
+
+def _candidate_path_key(new_edges: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(sorted(int(edge_idx) for edge_idx in new_edges))
+
+
+def _candidate_edge_jaccard(a: _BridgeCandidate, b: _BridgeCandidate) -> float:
+    set_a = set(int(edge_idx) for edge_idx in a.new_edges)
+    set_b = set(int(edge_idx) for edge_idx in b.new_edges)
+    if not set_a and not set_b:
+        return 1.0
+    union = set_a | set_b
+    if not union:
+        return 1.0
+    return float(len(set_a & set_b) / len(union))
+
+
+def _bridge_candidate_sort_key(candidate: _BridgeCandidate) -> tuple[float, int, float, tuple[int, ...]]:
+    return (
+        -candidate.mean_bridge_conf,
+        len(candidate.new_edges),
+        round(candidate.total_cost, 12),
+        (
+            int(candidate.source_component_id),
+            -1 if candidate.target_component_id is None else int(candidate.target_component_id),
+            int(candidate.source_vertex),
+            int(candidate.target_vertex),
+            *candidate.path_key,
+        ),
+    )
+
+
+def _rank_bridge_candidates(candidates: list[_BridgeCandidate]) -> list[_BridgeCandidate]:
+    return sorted(candidates, key=_bridge_candidate_sort_key)
+
+
+def _log_bridge_stats(stage_name: str, stats: _BridgeStageStats) -> None:
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    _LOGGER.debug(
+        (
+            'Postprocess %s stats: candidates=%d paths=%d no_new=%d length=%d '
+            'third_party_protected=%d mean_conf=%d low_conf=%d ambiguity=%d '
+            'duplicates=%d accepted=%d force_close=%d new_edges=%d merged=%d'
+        ),
+        stage_name,
+        int(stats.candidate_pairs_considered),
+        int(stats.shortest_paths_found),
+        int(stats.rejected_no_new_edges),
+        int(stats.rejected_by_length),
+        int(stats.rejected_by_third_party_protected),
+        int(stats.rejected_by_mean_conf),
+        int(stats.rejected_by_low_conf_fraction),
+        int(stats.rejected_by_ambiguity),
+        int(stats.duplicate_paths_collapsed),
+        int(stats.accepted_bridges),
+        int(stats.accepted_via_force_close),
+        int(stats.total_new_edges_added),
+        int(stats.total_components_merged),
+    )
+
+
+def _bridge_stage_stats_payload(stats: _BridgeStageStats) -> dict[str, int]:
+    return {
+        'candidate_pairs_considered': int(stats.candidate_pairs_considered),
+        'shortest_paths_found': int(stats.shortest_paths_found),
+        'rejected_no_new_edges': int(stats.rejected_no_new_edges),
+        'rejected_by_length': int(stats.rejected_by_length),
+        'rejected_by_third_party_protected': int(stats.rejected_by_third_party_protected),
+        'rejected_by_mean_conf': int(stats.rejected_by_mean_conf),
+        'rejected_by_low_conf_fraction': int(stats.rejected_by_low_conf_fraction),
+        'rejected_by_ambiguity': int(stats.rejected_by_ambiguity),
+        'duplicate_paths_collapsed': int(stats.duplicate_paths_collapsed),
+        'accepted_bridges': int(stats.accepted_bridges),
+        'accepted_via_force_close': int(stats.accepted_via_force_close),
+        'total_new_edges_added': int(stats.total_new_edges_added),
+        'total_components_merged': int(stats.total_components_merged),
+    }
+
+
+def _make_debug_export(debug_export_dir: str | Path | None) -> _BridgeDebugExport | None:
+    if debug_export_dir in (None, ''):
+        return None
+    export_dir = Path(debug_export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return _BridgeDebugExport(
+        export_dir=export_dir,
+        terminals=[],
+        rejected_bridges=[],
+        accepted_bridges=[],
+    )
+
+
+def _record_terminals(
+    debug_export: _BridgeDebugExport | None,
+    stage_name: str,
+    component_id: int,
+    terminals: tuple[int, ...],
+) -> None:
+    if debug_export is None:
+        return
+    debug_export.terminals.append(_BridgeTerminalRecord(
+        stage_name=str(stage_name),
+        component_id=int(component_id),
+        vertex_indices=tuple(int(vertex_idx) for vertex_idx in terminals),
+    ))
+
+
+def _record_rejected_bridge(
+    debug_export: _BridgeDebugExport | None,
+    stage_name: str,
+    path: _PathCandidate,
+    new_edges: tuple[int, ...],
+    mean_bridge_conf: float,
+    low_conf_fraction: float,
+    rejection_reason: str,
+    *,
+    source_component_id: int,
+    target_component_id: int | None,
+) -> None:
+    if debug_export is None:
+        return
+    debug_export.rejected_bridges.append(_RejectedBridgeRecord(
+        stage_name=str(stage_name),
+        source_component_id=int(source_component_id),
+        target_component_id=None if target_component_id is None else int(target_component_id),
+        source_vertex=int(path.source_vertex),
+        target_vertex=int(path.target_vertex),
+        new_edges=tuple(int(edge_idx) for edge_idx in new_edges),
+        total_cost=float(path.total_cost),
+        mean_bridge_conf=float(mean_bridge_conf),
+        low_conf_fraction=float(low_conf_fraction),
+        rejection_reason=str(rejection_reason),
+    ))
+
+
+def _record_accepted_bridge(
+    debug_export: _BridgeDebugExport | None,
+    stage_name: str,
+    candidate: _BridgeCandidate,
+) -> None:
+    if debug_export is None:
+        return
+    debug_export.accepted_bridges.append(_AcceptedBridgeRecord(
+        stage_name=str(stage_name),
+        source_component_id=int(candidate.source_component_id),
+        target_component_id=None if candidate.target_component_id is None else int(candidate.target_component_id),
+        source_vertex=int(candidate.source_vertex),
+        target_vertex=int(candidate.target_vertex),
+        new_edges=tuple(int(edge_idx) for edge_idx in candidate.new_edges),
+    ))
+
+
+def _debug_vertex_coords(graph: _GraphViews, topology: Any) -> np.ndarray:
+    coords = _vertex_coordinates(topology, graph.vertex_count)
+    if coords is not None:
+        return coords
+    fallback = np.zeros((graph.vertex_count, 3), dtype=np.float64)
+    fallback[:, 0] = np.arange(graph.vertex_count, dtype=np.float64)
+    return fallback
+
+
+def _write_terminals_obj(
+    path: Path,
+    coords: np.ndarray,
+    terminal_records: list[_BridgeTerminalRecord],
+) -> None:
+    lines = ['# Stage B/C terminal vertices']
+    vertex_counter = 0
+    for record in terminal_records:
+        lines.append(f'o {record.stage_name}_component_{record.component_id}')
+        point_indices: list[int] = []
+        for vertex_idx in record.vertex_indices:
+            x, y, z = coords[int(vertex_idx)]
+            lines.append(f'v {x:.9g} {y:.9g} {z:.9g}')
+            vertex_counter += 1
+            point_indices.append(vertex_counter)
+        if point_indices:
+            lines.append('p ' + ' '.join(str(index) for index in point_indices))
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def _write_accepted_bridges_obj(
+    path: Path,
+    coords: np.ndarray,
+    graph: _GraphViews,
+    accepted_records: list[_AcceptedBridgeRecord],
+) -> None:
+    lines = ['# Accepted Stage B/C bridge edges']
+    vertex_counter = 0
+    for index, record in enumerate(accepted_records):
+        lines.append(f'o {record.stage_name}_bridge_{index}')
+        for edge_idx in record.new_edges:
+            vi, vj = graph.edge_to_vertices[int(edge_idx)]
+            ax, ay, az = coords[int(vi)]
+            bx, by, bz = coords[int(vj)]
+            lines.append(f'v {ax:.9g} {ay:.9g} {az:.9g}')
+            lines.append(f'v {bx:.9g} {by:.9g} {bz:.9g}')
+            lines.append(f'l {vertex_counter + 1} {vertex_counter + 2}')
+            vertex_counter += 2
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def _rejected_bridge_sort_key(record: _RejectedBridgeRecord) -> tuple[float, int, float, tuple[int, ...]]:
+    return (
+        -float(record.mean_bridge_conf),
+        len(record.new_edges),
+        round(float(record.total_cost), 12),
+        (
+            int(record.source_component_id),
+            -1 if record.target_component_id is None else int(record.target_component_id),
+            int(record.source_vertex),
+            int(record.target_vertex),
+            *record.new_edges,
+        ),
+    )
+
+
+def _write_bridge_candidates_json(
+    path: Path,
+    stage_b_stats: _BridgeStageStats,
+    stage_c_stats: _BridgeStageStats,
+    debug_export: _BridgeDebugExport,
+    rejected_limit: int = 20,
+) -> None:
+    rejected_rows = [
+        {
+            'stage': record.stage_name,
+            'source_component_id': int(record.source_component_id),
+            'target_component_id': None if record.target_component_id is None else int(record.target_component_id),
+            'source_vertex': int(record.source_vertex),
+            'target_vertex': int(record.target_vertex),
+            'new_edges': [int(edge_idx) for edge_idx in record.new_edges],
+            'mean_conf': float(record.mean_bridge_conf),
+            'low_conf_fraction': float(record.low_conf_fraction),
+            'total_cost': float(record.total_cost),
+            'rejection_reason': record.rejection_reason,
+        }
+        for record in sorted(debug_export.rejected_bridges, key=_rejected_bridge_sort_key)[:rejected_limit]
+    ]
+    payload = {
+        'stage_b': _bridge_stage_stats_payload(stage_b_stats),
+        'stage_c': _bridge_stage_stats_payload(stage_c_stats),
+        'terminal_groups': [
+            {
+                'stage': record.stage_name,
+                'component_id': int(record.component_id),
+                'vertex_indices': [int(vertex_idx) for vertex_idx in record.vertex_indices],
+            }
+            for record in debug_export.terminals
+        ],
+        'accepted_bridges': [
+            {
+                'stage': record.stage_name,
+                'source_component_id': int(record.source_component_id),
+                'target_component_id': None if record.target_component_id is None else int(record.target_component_id),
+                'source_vertex': int(record.source_vertex),
+                'target_vertex': int(record.target_vertex),
+                'new_edges': [int(edge_idx) for edge_idx in record.new_edges],
+            }
+            for record in debug_export.accepted_bridges
+        ],
+        'top_rejected_bridges': rejected_rows,
+    }
+    path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+
+
+def _write_bridge_debug_exports(
+    debug_export: _BridgeDebugExport | None,
+    topology: Any,
+    graph: _GraphViews,
+    stage_b_stats: _BridgeStageStats,
+    stage_c_stats: _BridgeStageStats,
+) -> None:
+    if debug_export is None:
+        return
+    coords = _debug_vertex_coords(graph, topology)
+    _write_terminals_obj(debug_export.export_dir / 'terminals.obj', coords, debug_export.terminals)
+    _write_accepted_bridges_obj(
+        debug_export.export_dir / 'accepted_bridges.obj',
+        coords,
+        graph,
+        debug_export.accepted_bridges,
+    )
+    _write_bridge_candidates_json(
+        debug_export.export_dir / 'bridge_candidates.json',
+        stage_b_stats,
+        stage_c_stats,
+        debug_export,
+    )
+
+
+def _filter_bridge_candidate(
+    path: _PathCandidate,
+    seam_mask: np.ndarray,
+    probabilities: np.ndarray,
+    edge_component_ids: np.ndarray,
+    stage_stats: _BridgeStageStats,
+    *,
+    stage_name: str,
+    source_component_id: int,
+    target_component_id: int | None,
+    blocked_component_ids: set[int],
+    max_new_edges: int,
+    tau_bridge: float,
+    conf_floor: float,
+    max_low_conf_fraction: float,
+    force_close_max_edges: int,
+    debug_export: _BridgeDebugExport | None = None,
+) -> _BridgeCandidate | None:
+    new_edges = _path_new_edges_from_indices(path.edge_indices, seam_mask)
+    if not new_edges:
+        stage_stats.rejected_no_new_edges += 1
+        _record_rejected_bridge(
+            debug_export,
+            stage_name,
+            path,
+            new_edges,
+            mean_bridge_conf=0.0,
+            low_conf_fraction=0.0,
+            rejection_reason='no_new_edges',
+            source_component_id=source_component_id,
+            target_component_id=target_component_id,
+        )
+        return None
+    if len(new_edges) > max_new_edges:
+        stage_stats.rejected_by_length += 1
+        _record_rejected_bridge(
+            debug_export,
+            stage_name,
+            path,
+            new_edges,
+            mean_bridge_conf=float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)])),
+            low_conf_fraction=float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)] < conf_floor)),
+            rejection_reason='length',
+            source_component_id=source_component_id,
+            target_component_id=target_component_id,
+        )
+        return None
+    allowed_component_ids = {int(source_component_id)}
+    if target_component_id is not None:
+        allowed_component_ids.add(int(target_component_id))
+    if _path_uses_blocked_third_party_seam(
+        path.edge_indices,
+        seam_mask,
+        edge_component_ids,
+        allowed_component_ids,
+        blocked_component_ids,
+    ):
+        stage_stats.rejected_by_third_party_protected += 1
+        _record_rejected_bridge(
+            debug_export,
+            stage_name,
+            path,
+            new_edges,
+            mean_bridge_conf=float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)])),
+            low_conf_fraction=float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)] < conf_floor)),
+            rejection_reason='third_party_protected',
+            source_component_id=source_component_id,
+            target_component_id=target_component_id,
+        )
+        return None
+    mean_bridge_conf = float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)]))
+    low_conf_fraction = float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)] < conf_floor))
+    accepted_via_force_close = len(new_edges) <= force_close_max_edges
+    if not accepted_via_force_close and mean_bridge_conf < tau_bridge:
+        stage_stats.rejected_by_mean_conf += 1
+        _record_rejected_bridge(
+            debug_export,
+            stage_name,
+            path,
+            new_edges,
+            mean_bridge_conf=mean_bridge_conf,
+            low_conf_fraction=low_conf_fraction,
+            rejection_reason='mean_conf',
+            source_component_id=source_component_id,
+            target_component_id=target_component_id,
+        )
+        return None
+    if low_conf_fraction > max_low_conf_fraction:
+        stage_stats.rejected_by_low_conf_fraction += 1
+        _record_rejected_bridge(
+            debug_export,
+            stage_name,
+            path,
+            new_edges,
+            mean_bridge_conf=mean_bridge_conf,
+            low_conf_fraction=low_conf_fraction,
+            rejection_reason='low_conf_fraction',
+            source_component_id=source_component_id,
+            target_component_id=target_component_id,
+        )
+        return None
+    return _BridgeCandidate(
+        source_component_id=int(source_component_id),
+        target_component_id=None if target_component_id is None else int(target_component_id),
+        source_vertex=int(path.source_vertex),
+        target_vertex=int(path.target_vertex),
+        edge_indices=tuple(int(edge_idx) for edge_idx in path.edge_indices),
+        new_edges=tuple(int(edge_idx) for edge_idx in new_edges),
+        path_key=_candidate_path_key(new_edges),
+        total_cost=float(path.total_cost),
+        mean_bridge_conf=mean_bridge_conf,
+        low_conf_fraction=low_conf_fraction,
+        accepted_via_force_close=accepted_via_force_close,
+    )
+
+
+def _collapse_duplicate_bridge_paths(
+    candidates: list[_BridgeCandidate],
+    stage_stats: _BridgeStageStats,
+    *,
+    stage_name: str,
+    debug_export: _BridgeDebugExport | None,
+) -> list[_BridgeCandidate]:
+    ranked = _rank_bridge_candidates(candidates)
+    deduped: list[_BridgeCandidate] = []
+    seen_path_keys: set[tuple[int, ...]] = set()
+    for candidate in ranked:
+        if candidate.path_key in seen_path_keys:
+            stage_stats.duplicate_paths_collapsed += 1
+            _record_rejected_bridge(
+                debug_export,
+                stage_name,
+                _PathCandidate(
+                    source_vertex=int(candidate.source_vertex),
+                    target_vertex=int(candidate.target_vertex),
+                    edge_indices=tuple(int(edge_idx) for edge_idx in candidate.edge_indices),
+                    total_cost=float(candidate.total_cost),
+                    total_edges=len(candidate.edge_indices),
+                    normalized_cost=float(candidate.total_cost / max(len(candidate.edge_indices), 1)),
+                ),
+                candidate.new_edges,
+                mean_bridge_conf=float(candidate.mean_bridge_conf),
+                low_conf_fraction=float(candidate.low_conf_fraction),
+                rejection_reason='duplicate_of_existing_path',
+                source_component_id=int(candidate.source_component_id),
+                target_component_id=int(candidate.target_component_id),
+            )
+            continue
+        seen_path_keys.add(candidate.path_key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _find_ambiguity_competitor(
+    best_candidate: _BridgeCandidate,
+    candidates: list[_BridgeCandidate],
+    *,
+    ambiguity_same_path_jaccard: float,
+) -> _BridgeCandidate | None:
+    for candidate in candidates[1:]:
+        if candidate.source_component_id != best_candidate.source_component_id:
+            continue
+        if candidate.path_key == best_candidate.path_key:
+            continue
+        if _candidate_edge_jaccard(best_candidate, candidate) >= ambiguity_same_path_jaccard:
+            continue
+        return candidate
     return None
 
 
@@ -529,6 +1107,100 @@ def _safe_loop_signature(component: _SeamComponent) -> frozenset[int]:
     return frozenset(int(edge_idx) for edge_idx in component.edge_indices)
 
 
+def _is_protected_component(
+    component: _SeamComponent,
+    main_component: _SeamComponent | None,
+    *,
+    protect_min_edges: int,
+    protect_min_mass: float,
+    protect_rel_frac: float,
+) -> bool:
+    if component.edge_count >= protect_min_edges:
+        return True
+    if component.seam_mass >= protect_min_mass:
+        return True
+    if (
+        main_component is not None
+        and main_component.edge_count >= protect_min_edges
+        and component.edge_count >= protect_rel_frac * main_component.edge_count
+    ):
+        return True
+    return False
+
+
+def _is_garbage_component(
+    component: _SeamComponent,
+    main_component: _SeamComponent | None,
+    failed_self_bridges: set[frozenset[int]],
+    failed_cross_bridges: set[frozenset[int]],
+    *,
+    protect_min_edges: int,
+    protect_min_mass: float,
+    protect_rel_frac: float,
+    garbage_max_edges: int,
+    garbage_max_mass: float,
+) -> bool:
+    signature = _safe_loop_signature(component)
+    if not component.is_open:
+        return False
+    if main_component is not None and signature == _safe_loop_signature(main_component):
+        return False
+    if _is_protected_component(
+        component,
+        main_component,
+        protect_min_edges=protect_min_edges,
+        protect_min_mass=protect_min_mass,
+        protect_rel_frac=protect_rel_frac,
+    ):
+        return False
+    if component.edge_count > garbage_max_edges:
+        return False
+    if component.seam_mass > garbage_max_mass:
+        return False
+    if component.cycle_rank != 0:
+        return False
+    return signature in failed_self_bridges and signature in failed_cross_bridges
+
+
+def _log_stage_summary(
+    stage_name: str,
+    mask: np.ndarray,
+    graph: _GraphViews,
+    probabilities: np.ndarray,
+    *,
+    deleted_components: int,
+    deleted_edges: int,
+    protect_min_edges: int,
+    protect_min_mass: float,
+    protect_rel_frac: float,
+) -> None:
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    components = _analyze_components(mask, graph, probabilities)
+    main_component = _choose_main_open_component(components)
+    protected_open_count = sum(
+        1
+        for component in components
+        if component.is_open
+        and _is_protected_component(
+            component,
+            main_component,
+            protect_min_edges=protect_min_edges,
+            protect_min_mass=protect_min_mass,
+            protect_rel_frac=protect_rel_frac,
+        )
+    )
+    _LOGGER.debug(
+        'Postprocess %s: seam_edges=%d components=%d protected_open=%d deleted_components=%d deleted_edges=%d',
+        stage_name,
+        int(mask.sum()),
+        len(components),
+        protected_open_count,
+        int(deleted_components),
+        int(deleted_edges),
+    )
+
+
 def apply_seam_postprocessing_detailed(
     topology: Any,
     unique_edges: np.ndarray,
@@ -538,15 +1210,26 @@ def apply_seam_postprocessing_detailed(
     min_island_size: int = 3,
     *,
     seam_threshold: float | None = None,
+    alpha_cost: float = 0.5,
+    tau_bridge: float = 0.28,
+    conf_floor: float = 0.10,
+    max_low_conf_fraction: float = 0.50,
+    force_close_max_edges: int = 3,
     lambda_off: float = 0.75,
-    r_self: int = 6,
-    r_cross: int = 8,
+    r_self: int = 8,
+    r_cross: int = 10,
+    ambiguity_margin: float = 0.05,
+    ambiguity_same_path_jaccard: float = 0.8,
     tau_path: float = 1.35,
     kappa_self: float = 1.5,
     attach_margin: float = 0.10,
-    garbage_max_edges: int = 4,
+    protect_min_edges: int = 12,
+    protect_min_mass: float = 6.0,
+    protect_rel_frac: float = 0.20,
+    garbage_max_edges: int = 5,
+    garbage_max_mass: float = 2.5,
     r_snap: int = 3,
-    snap_max_edges: int = 12,
+    snap_max_edges: int = 10,
     r_band: int = 2,
     eta_main: float = 0.35,
     smoothing_beta: float = 0.0,
@@ -574,6 +1257,7 @@ def apply_seam_postprocessing_detailed(
     distortion_per_edge: np.ndarray | None = None,
     confidence_weight: float = 1.0,
     distortion_weight: float = 1.0,
+    debug_export_dir: str | Path | None = None,
 ) -> SeamPostprocessResult:
     del (
         smoothing_beta,
@@ -607,16 +1291,40 @@ def apply_seam_postprocessing_detailed(
 
     seam_threshold_value = float(threshold if seam_threshold is None else seam_threshold)
     _validate_probability_threshold('threshold', seam_threshold_value)
+    _validate_probability_threshold('tau_bridge', float(tau_bridge))
+    _validate_probability_threshold('conf_floor', float(conf_floor))
+    if alpha_cost < 0.0:
+        raise ValueError(f'alpha_cost must be non-negative, got {alpha_cost}')
+    if force_close_max_edges < 0:
+        raise ValueError(f'force_close_max_edges must be non-negative, got {force_close_max_edges}')
     if lambda_off < 0.0:
         raise ValueError(f'lambda_off must be non-negative, got {lambda_off}')
     if r_self < 0 or r_cross < 0:
         raise ValueError(f'r_self and r_cross must be non-negative, got {r_self}, {r_cross}')
+    if ambiguity_margin < 0.0:
+        raise ValueError(f'ambiguity_margin must be non-negative, got {ambiguity_margin}')
+    if ambiguity_same_path_jaccard < 0.0 or ambiguity_same_path_jaccard > 1.0:
+        raise ValueError(
+            f'ambiguity_same_path_jaccard must be a finite value in [0, 1], got {ambiguity_same_path_jaccard}'
+        )
     if tau_path < 0.0:
         raise ValueError(f'tau_path must be non-negative, got {tau_path}')
     if kappa_self < 0.0:
         raise ValueError(f'kappa_self must be non-negative, got {kappa_self}')
     if attach_margin < 0.0:
         raise ValueError(f'attach_margin must be non-negative, got {attach_margin}')
+    if max_low_conf_fraction < 0.0 or max_low_conf_fraction > 1.0:
+        raise ValueError(
+            f'max_low_conf_fraction must be a finite value in [0, 1], got {max_low_conf_fraction}'
+        )
+    if protect_min_edges < 0:
+        raise ValueError(f'protect_min_edges must be non-negative, got {protect_min_edges}')
+    if protect_min_mass < 0.0:
+        raise ValueError(f'protect_min_mass must be non-negative, got {protect_min_mass}')
+    if protect_rel_frac < 0.0:
+        raise ValueError(f'protect_rel_frac must be non-negative, got {protect_rel_frac}')
+    if garbage_max_mass < 0.0:
+        raise ValueError(f'garbage_max_mass must be non-negative, got {garbage_max_mass}')
     if garbage_max_edges < 0 or r_snap < 0 or snap_max_edges < 0 or r_band < 0:
         raise ValueError('graph-radius parameters must be non-negative')
     if eta_main < 0.0:
@@ -647,118 +1355,393 @@ def apply_seam_postprocessing_detailed(
         )
 
     graph = _build_graph_views(topology, edges, probs)
+    bridge_edge_costs = _compute_search_edge_costs(probs, float(alpha_cost))
     edge_costs = _edge_costs(probs, seam_threshold_value, float(lambda_off))
+    debug_export = _make_debug_export(debug_export_dir)
 
     threshold_mask = probs >= seam_threshold_value
     current_mask = threshold_mask.copy()
     added_bridge_edges: set[int] = set()
     preserved_loops: set[frozenset[int]] = set()
+    failed_self_bridges: set[frozenset[int]] = set()
+    failed_cross_bridges: set[frozenset[int]] = set()
     pruned_edges: set[int] = set()
     pruned_component_count = 0
 
-    # Stage A/B
+    _log_stage_summary(
+        'threshold',
+        current_mask,
+        graph,
+        probs,
+        deleted_components=0,
+        deleted_edges=0,
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
+
+    # Stage B
+    stage_b_stats = _BridgeStageStats()
     initial_components = _analyze_components(current_mask, graph, probs)
+    initial_edge_component_ids = _build_edge_component_ids(initial_components, graph.edge_count)
     main_component = _choose_main_open_component(initial_components)
     main_component_id = None if main_component is None else int(main_component.component_id)
-    for component in initial_components:
-        if component.component_id == main_component_id or not component.is_open_arc:
-            continue
-        max_self_edges = min(int(r_self), max(int(np.ceil(kappa_self * component.edge_count)), 0))
-        if max_self_edges <= 0:
-            continue
-        endpoints = tuple(component.endpoint_vertices)
-        candidates = _bounded_shortest_path(
-            graph,
-            edge_costs,
-            endpoints[0],
-            {endpoints[1]},
-            max_edges=max_self_edges,
-            blocked_edges=set(int(edge_idx) for edge_idx in component.edge_indices),
-            seam_mask=current_mask,
+    stage_b_blocked_component_ids = {
+        int(component.component_id)
+        for component in initial_components
+        if component.component_id == main_component_id
+        or _is_protected_component(
+            component,
+            main_component,
+            protect_min_edges=int(protect_min_edges),
+            protect_min_mass=float(protect_min_mass),
+            protect_rel_frac=float(protect_rel_frac),
         )
-        if not candidates:
+    }
+    eligible_components = [
+        component
+        for component in initial_components
+        if component.is_open and len(component.vertex_indices) >= 2
+    ]
+    eligible_components.sort(
+        key=lambda component: (
+            int(component.component_id == main_component_id),
+            int(component.edge_count),
+            int(component.component_id),
+        )
+    )
+    for component in eligible_components:
+        signature = _safe_loop_signature(component)
+        seam_vertex_degrees = _component_vertex_degrees(component.edge_indices, graph)
+        terminals = _build_terminal_set(component, seam_vertex_degrees)
+        _record_terminals(debug_export, 'stage_b', int(component.component_id), terminals)
+        if len(terminals) < 2:
+            failed_self_bridges.add(signature)
             continue
-        candidate = candidates[0]
-        if candidate.total_edges > r_self or candidate.normalized_cost > tau_path:
+        valid_candidates: list[_BridgeCandidate] = []
+        for index, source_vertex in enumerate(terminals):
+            for target_vertex in terminals[index + 1:]:
+                stage_b_stats.candidate_pairs_considered += 1
+                paths = _bounded_shortest_path(
+                    graph,
+                    bridge_edge_costs,
+                    int(source_vertex),
+                    {int(target_vertex)},
+                    max_edges=int(r_self),
+                )
+                if not paths:
+                    continue
+                stage_b_stats.shortest_paths_found += 1
+                candidate = _filter_bridge_candidate(
+                    paths[0],
+                    current_mask,
+                    probs,
+                    initial_edge_component_ids,
+                    stage_b_stats,
+                    stage_name='stage_b',
+                    source_component_id=int(component.component_id),
+                    target_component_id=int(component.component_id),
+                    blocked_component_ids=stage_b_blocked_component_ids,
+                    max_new_edges=int(r_self),
+                    tau_bridge=float(tau_bridge),
+                    conf_floor=float(conf_floor),
+                    max_low_conf_fraction=float(max_low_conf_fraction),
+                    force_close_max_edges=int(force_close_max_edges),
+                    debug_export=debug_export,
+                )
+                if candidate is not None:
+                    valid_candidates.append(candidate)
+        if not valid_candidates:
+            failed_self_bridges.add(signature)
             continue
-        for edge_idx in candidate.edge_indices:
+        ranked_candidates = _collapse_duplicate_bridge_paths(
+            valid_candidates,
+            stage_b_stats,
+            stage_name='stage_b',
+            debug_export=debug_export,
+        )
+        if not ranked_candidates:
+            failed_self_bridges.add(signature)
+            continue
+        best_candidate = ranked_candidates[0]
+        ambiguity_competitor = _find_ambiguity_competitor(
+            best_candidate,
+            ranked_candidates,
+            ambiguity_same_path_jaccard=float(ambiguity_same_path_jaccard),
+        )
+        if (
+            ambiguity_competitor is not None
+            and best_candidate.mean_bridge_conf < ambiguity_competitor.mean_bridge_conf + float(ambiguity_margin)
+        ):
+            stage_b_stats.rejected_by_ambiguity += 1
+            _record_rejected_bridge(
+                debug_export,
+                'stage_b',
+                _PathCandidate(
+                    source_vertex=int(best_candidate.source_vertex),
+                    target_vertex=int(best_candidate.target_vertex),
+                    edge_indices=tuple(int(edge_idx) for edge_idx in best_candidate.edge_indices),
+                    total_cost=float(best_candidate.total_cost),
+                    total_edges=len(best_candidate.edge_indices),
+                    normalized_cost=float(best_candidate.total_cost / max(len(best_candidate.edge_indices), 1)),
+                ),
+                best_candidate.new_edges,
+                mean_bridge_conf=float(best_candidate.mean_bridge_conf),
+                low_conf_fraction=float(best_candidate.low_conf_fraction),
+                rejection_reason='ambiguity',
+                source_component_id=int(best_candidate.source_component_id),
+                target_component_id=int(best_candidate.target_component_id),
+            )
+            failed_self_bridges.add(signature)
+            continue
+        for edge_idx in best_candidate.new_edges:
             current_mask[int(edge_idx)] = True
             added_bridge_edges.add(int(edge_idx))
+        stage_b_stats.accepted_bridges += 1
+        if best_candidate.accepted_via_force_close:
+            stage_b_stats.accepted_via_force_close += 1
+        stage_b_stats.total_new_edges_added += len(best_candidate.new_edges)
+        _record_accepted_bridge(debug_export, 'stage_b', best_candidate)
         updated_components = _analyze_components(current_mask, graph, probs)
         for updated in updated_components:
             if set(component.edge_indices).issubset(set(updated.edge_indices)) and updated.is_closed:
                 preserved_loops.add(_safe_loop_signature(updated))
                 break
 
+    stage_b_stats.total_components_merged += max(
+        len(initial_components) - len(_analyze_components(current_mask, graph, probs)),
+        0,
+    )
     stage_b_mask = current_mask.copy()
+    _log_bridge_stats('self_bridge', stage_b_stats)
+    _log_stage_summary(
+        'self_bridge',
+        current_mask,
+        graph,
+        probs,
+        deleted_components=0,
+        deleted_edges=0,
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
 
     # Stage C
-    bridge_count = 0
-    while True:
+    stage_c_stats = _BridgeStageStats()
+    bridge_count = int(stage_b_stats.accepted_bridges)
+    iteration_cap = 8
+    for _iteration in range(iteration_cap):
         components = _analyze_components(current_mask, graph, probs)
         main_component = _choose_main_open_component(components)
         if main_component is None:
             break
-        component_candidates: list[tuple[float, int, int, tuple[int, ...], _PathCandidate]] = []
-        target_vertices = set(int(vertex) for vertex in main_component.vertex_indices)
+        protected_target_ids = {
+            int(component.component_id)
+            for component in components
+            if _is_protected_component(
+                component,
+                main_component,
+                protect_min_edges=int(protect_min_edges),
+                protect_min_mass=float(protect_min_mass),
+                protect_rel_frac=float(protect_rel_frac),
+            )
+        }
+        protected_target_ids.add(int(main_component.component_id))
+        if len(protected_target_ids) == 0:
+            break
+        blocked_component_ids = set(int(component_id) for component_id in protected_target_ids)
+        edge_component_ids = _build_edge_component_ids(components, graph.edge_count)
+        target_terminals: dict[int, tuple[int, ...]] = {}
+        for component in components:
+            if component.component_id not in protected_target_ids:
+                continue
+            component_terminals = _build_terminal_set(
+                component,
+                _component_vertex_degrees(component.edge_indices, graph),
+            )
+            target_terminals[int(component.component_id)] = component_terminals
+            _record_terminals(debug_export, 'stage_c', int(component.component_id), component_terminals)
+
+        component_candidates: list[_BridgeCandidate] = []
+        component_count_before = len(components)
         for component in components:
             if component.component_id == main_component.component_id or not component.is_open:
                 continue
-            blocked_edges = set(int(edge_idx) for edge_idx in component.edge_indices)
-            candidates: list[_PathCandidate] = []
-            for source_vertex in _boundary_vertices(component, allow_all_if_no_endpoints=True):
-                candidates.extend(_bounded_shortest_path(
-                    graph,
-                    edge_costs,
-                    int(source_vertex),
-                    target_vertices,
-                    max_edges=int(r_cross),
-                    blocked_edges=blocked_edges,
-                    seam_mask=current_mask,
-                ))
-            if not candidates:
+            signature = _safe_loop_signature(component)
+            source_terminals = _build_terminal_set(component, _component_vertex_degrees(component.edge_indices, graph))
+            _record_terminals(debug_export, 'stage_c', int(component.component_id), source_terminals)
+            if len(source_terminals) == 0:
+                failed_cross_bridges.add(signature)
                 continue
-            candidates = [candidate for candidate in candidates if candidate.total_edges <= r_cross and candidate.normalized_cost <= tau_path]
-            if not candidates:
+            valid_candidates: list[_BridgeCandidate] = []
+            for target_component in components:
+                target_component_id = int(target_component.component_id)
+                if target_component_id == int(component.component_id) or target_component_id not in protected_target_ids:
+                    continue
+                for source_vertex in source_terminals:
+                    for target_vertex in target_terminals.get(target_component_id, ()):
+                        stage_c_stats.candidate_pairs_considered += 1
+                        paths = _bounded_shortest_path(
+                            graph,
+                            bridge_edge_costs,
+                            int(source_vertex),
+                            {int(target_vertex)},
+                            max_edges=int(r_cross),
+                        )
+                        if not paths:
+                            continue
+                        stage_c_stats.shortest_paths_found += 1
+                        candidate = _filter_bridge_candidate(
+                            paths[0],
+                            current_mask,
+                            probs,
+                            edge_component_ids,
+                            stage_c_stats,
+                            stage_name='stage_c',
+                            source_component_id=int(component.component_id),
+                            target_component_id=int(target_component_id),
+                            blocked_component_ids=blocked_component_ids,
+                            max_new_edges=int(r_cross),
+                            tau_bridge=float(tau_bridge),
+                            conf_floor=float(conf_floor),
+                            max_low_conf_fraction=float(max_low_conf_fraction),
+                            force_close_max_edges=int(force_close_max_edges),
+                            debug_export=debug_export,
+                        )
+                        if candidate is not None:
+                            valid_candidates.append(candidate)
+            if not valid_candidates:
+                failed_cross_bridges.add(signature)
                 continue
-            candidates.sort(key=lambda item: (round(item.total_cost, 12), item.total_edges, item.source_vertex, item.target_vertex, item.edge_indices))
-            if len(candidates) > 1 and not (candidates[0].normalized_cost + attach_margin < candidates[1].normalized_cost):
+            ranked_candidates = _collapse_duplicate_bridge_paths(
+                valid_candidates,
+                stage_c_stats,
+                stage_name='stage_c',
+                debug_export=debug_export,
+            )
+            if not ranked_candidates:
+                failed_cross_bridges.add(signature)
                 continue
-            component_candidates.append((
-                float(candidates[0].total_cost),
-                int(candidates[0].total_edges),
-                int(component.component_id),
-                candidates[0].edge_indices,
-                candidates[0],
-            ))
+            best_candidate = ranked_candidates[0]
+            ambiguity_competitor = _find_ambiguity_competitor(
+                best_candidate,
+                ranked_candidates,
+                ambiguity_same_path_jaccard=float(ambiguity_same_path_jaccard),
+            )
+            if (
+                ambiguity_competitor is not None
+                and best_candidate.mean_bridge_conf < ambiguity_competitor.mean_bridge_conf + float(ambiguity_margin)
+            ):
+                stage_c_stats.rejected_by_ambiguity += 1
+                _record_rejected_bridge(
+                    debug_export,
+                    'stage_c',
+                    _PathCandidate(
+                        source_vertex=int(best_candidate.source_vertex),
+                        target_vertex=int(best_candidate.target_vertex),
+                        edge_indices=tuple(int(edge_idx) for edge_idx in best_candidate.edge_indices),
+                        total_cost=float(best_candidate.total_cost),
+                        total_edges=len(best_candidate.edge_indices),
+                        normalized_cost=float(best_candidate.total_cost / max(len(best_candidate.edge_indices), 1)),
+                    ),
+                    best_candidate.new_edges,
+                    mean_bridge_conf=float(best_candidate.mean_bridge_conf),
+                    low_conf_fraction=float(best_candidate.low_conf_fraction),
+                    rejection_reason='ambiguity',
+                    source_component_id=int(best_candidate.source_component_id),
+                    target_component_id=int(best_candidate.target_component_id),
+                )
+                failed_cross_bridges.add(signature)
+                continue
+            component_candidates.append(best_candidate)
         if not component_candidates:
             break
-        component_candidates.sort(key=lambda item: (round(item[0], 12), item[1], item[2], item[3]))
-        chosen = component_candidates[0][4]
-        for edge_idx in chosen.edge_indices:
-            current_mask[int(edge_idx)] = True
-            added_bridge_edges.add(int(edge_idx))
-        bridge_count += 1
+        component_candidates = _rank_bridge_candidates(component_candidates)
+        accepted_sources: set[int] = set()
+        any_accepted = False
+        for candidate in component_candidates:
+            if candidate.source_component_id in accepted_sources:
+                continue
+            accepted_sources.add(int(candidate.source_component_id))
+            for edge_idx in candidate.new_edges:
+                current_mask[int(edge_idx)] = True
+                added_bridge_edges.add(int(edge_idx))
+            stage_c_stats.accepted_bridges += 1
+            if candidate.accepted_via_force_close:
+                stage_c_stats.accepted_via_force_close += 1
+            stage_c_stats.total_new_edges_added += len(candidate.new_edges)
+            _record_accepted_bridge(debug_export, 'stage_c', candidate)
+            bridge_count += 1
+            any_accepted = True
+        if not any_accepted:
+            break
+        component_count_after = len(_analyze_components(current_mask, graph, probs))
+        stage_c_stats.total_components_merged += max(component_count_before - component_count_after, 0)
+
+    _log_bridge_stats('cross_bridge', stage_c_stats)
+    _log_stage_summary(
+        'cross_bridge',
+        current_mask,
+        graph,
+        probs,
+        deleted_components=0,
+        deleted_edges=0,
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
 
     # Stage D
     components_after_cross = _analyze_components(current_mask, graph, probs)
     main_component = _choose_main_open_component(components_after_cross)
-    final_main_id = None if main_component is None else int(main_component.component_id)
+    stage_d_deleted_components = 0
+    stage_d_deleted_edges = 0
     for component in components_after_cross:
-        if not component.is_open:
-            continue
-        if component.component_id == final_main_id:
+        if not _is_garbage_component(
+            component,
+            main_component,
+            failed_self_bridges,
+            failed_cross_bridges,
+            protect_min_edges=int(protect_min_edges),
+            protect_min_mass=float(protect_min_mass),
+            protect_rel_frac=float(protect_rel_frac),
+            garbage_max_edges=int(garbage_max_edges),
+            garbage_max_mass=float(garbage_max_mass),
+        ):
             continue
         current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
         pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
         pruned_component_count += 1
+        stage_d_deleted_components += 1
+        stage_d_deleted_edges += component.edge_count
+
+    _log_stage_summary(
+        'garbage_collect',
+        current_mask,
+        graph,
+        probs,
+        deleted_components=stage_d_deleted_components,
+        deleted_edges=stage_d_deleted_edges,
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
 
     # Stage E
     components_before_snap = _analyze_components(current_mask, graph, probs)
     main_component = _choose_main_open_component(components_before_snap)
+    stage_e_deleted_edges = 0
     if main_component is not None:
         for component in components_before_snap:
             if component.component_id == main_component.component_id:
+                continue
+            if _is_protected_component(
+                component,
+                main_component,
+                protect_min_edges=int(protect_min_edges),
+                protect_min_mass=float(protect_min_mass),
+                protect_rel_frac=float(protect_rel_frac),
+            ):
                 continue
             current_mask, removed = _apply_band_collapse(
                 current_mask,
@@ -775,19 +1758,58 @@ def apply_seam_postprocessing_detailed(
             )
             if removed:
                 pruned_edges.update(int(edge_idx) for edge_idx in removed)
+                stage_e_deleted_edges += len(removed)
+
+    _log_stage_summary(
+        'band_collapse',
+        current_mask,
+        graph,
+        probs,
+        deleted_components=0,
+        deleted_edges=stage_e_deleted_edges,
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
 
     # Stage F
     final_components = _analyze_components(current_mask, graph, probs)
     main_component = _choose_main_open_component(final_components)
-    final_main_id = None if main_component is None else int(main_component.component_id)
+    stage_f_deleted_components = 0
+    stage_f_deleted_edges = 0
     for component in final_components:
-        if component.is_open and component.component_id != final_main_id:
-            current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
-            pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
-            pruned_component_count += 1
+        if not _is_garbage_component(
+            component,
+            main_component,
+            failed_self_bridges,
+            failed_cross_bridges,
+            protect_min_edges=int(protect_min_edges),
+            protect_min_mass=float(protect_min_mass),
+            protect_rel_frac=float(protect_rel_frac),
+            garbage_max_edges=int(garbage_max_edges),
+            garbage_max_mass=float(garbage_max_mass),
+        ):
+            continue
+        current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+        pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
+        pruned_component_count += 1
+        stage_f_deleted_components += 1
+        stage_f_deleted_edges += component.edge_count
 
     final_components = _analyze_components(current_mask, graph, probs)
     open_main = _choose_main_open_component(final_components)
+    _write_bridge_debug_exports(debug_export, topology, graph, stage_b_stats, stage_c_stats)
+    _log_stage_summary(
+        'final_cleanup',
+        current_mask,
+        graph,
+        probs,
+        deleted_components=stage_f_deleted_components,
+        deleted_edges=stage_f_deleted_edges,
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
     endpoint_count = 0 if open_main is None else len(open_main.endpoint_vertices)
 
     bridge_mask = np.zeros(len(edges), dtype=bool)

@@ -183,12 +183,14 @@ class PredictSeamsTests(unittest.TestCase):
     def test_postprocess_kwargs_mapping(self):
         args = Namespace(
             postprocess_seam_threshold=0.5,
-            postprocess_lambda_off=0.75,
-            postprocess_r_self=6,
-            postprocess_r_cross=8,
-            postprocess_tau_path=1.35,
-            postprocess_kappa_self=1.5,
-            postprocess_attach_margin=0.10,
+            postprocess_alpha_cost=0.5,
+            postprocess_tau_bridge=0.28,
+            postprocess_conf_floor=0.10,
+            postprocess_max_low_conf_fraction=0.50,
+            postprocess_force_close_max_edges=3,
+            postprocess_r_self=8,
+            postprocess_r_cross=10,
+            postprocess_ambiguity_margin=0.05,
             postprocess_garbage_max_edges=4,
             postprocess_r_snap=3,
             postprocess_snap_max_edges=12,
@@ -199,12 +201,14 @@ class PredictSeamsTests(unittest.TestCase):
         kwargs = predict_seams.postprocess_kwargs_from_args(args)
 
         self.assertEqual(kwargs['seam_threshold'], 0.5)
-        self.assertEqual(kwargs['lambda_off'], 0.75)
-        self.assertEqual(kwargs['r_self'], 6)
-        self.assertEqual(kwargs['r_cross'], 8)
-        self.assertEqual(kwargs['tau_path'], 1.35)
-        self.assertEqual(kwargs['kappa_self'], 1.5)
-        self.assertEqual(kwargs['attach_margin'], 0.10)
+        self.assertEqual(kwargs['alpha_cost'], 0.5)
+        self.assertEqual(kwargs['tau_bridge'], 0.28)
+        self.assertEqual(kwargs['conf_floor'], 0.10)
+        self.assertEqual(kwargs['max_low_conf_fraction'], 0.50)
+        self.assertEqual(kwargs['force_close_max_edges'], 3)
+        self.assertEqual(kwargs['r_self'], 8)
+        self.assertEqual(kwargs['r_cross'], 10)
+        self.assertEqual(kwargs['ambiguity_margin'], 0.05)
         self.assertEqual(kwargs['garbage_max_edges'], 4)
         self.assertEqual(kwargs['r_snap'], 3)
         self.assertEqual(kwargs['snap_max_edges'], 12)

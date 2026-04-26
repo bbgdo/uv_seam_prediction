@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import trimesh
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -22,7 +25,7 @@ from models.utils.filename_parsing import legacy_base_name, parse_mesh_name  # n
 from models.utils.metrics import binary_metrics_from_probs  # noqa: E402
 from models.utils.postprocess import apply_seam_postprocessing_detailed  # noqa: E402
 from preprocessing.feature_registry import resolve_feature_selection  # noqa: E402
-from preprocessing.obj_parser import parse_obj  # noqa: E402
+from preprocessing.obj_parser import parse_obj, parse_obj_text  # noqa: E402
 from preprocessing.topology import WeldConfig, build_topology  # noqa: E402
 from tools import predict_seams as predict_bridge  # noqa: E402
 
@@ -38,6 +41,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--min-island-size', type=int, default=3)
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
     parser.add_argument('--limit-meshes', type=int, default=None)
+    parser.add_argument('--mesh-path', type=str, default=None)
+    parser.add_argument('--triangulate', action='store_true')
+    parser.add_argument('--debug-export', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--output-json', default=None)
     return parser.parse_args(argv)
 
@@ -154,7 +160,11 @@ def _resolve_model_kwargs_for_evaluation(model_type: str, config: dict[str, Any]
     return kwargs
 
 
-def _select_test_samples(dataset, split_info: dict[str, Any], limit_meshes: int | None):
+def _select_test_samples(
+    dataset,
+    split_info: dict[str, Any],
+    limit_meshes: int | None,
+):
     group_mode = str(split_info.get('group_mode') or 'legacy')
     test_groups = set(split_info.get('test') or ())
     if not test_groups:
@@ -227,6 +237,36 @@ def _load_topology(mesh_path: Path, cache: dict[str, Any]):
     return cache[key]
 
 
+def _triangulate_obj_mesh(mesh_path: Path):
+    try:
+        loaded = trimesh.load(mesh_path, force='mesh', process=False, maintain_order=True)
+    except TypeError:
+        loaded = trimesh.load(mesh_path, force='mesh', process=False)
+    if not isinstance(loaded, trimesh.Trimesh):
+        raise ValueError(f'failed to load a single mesh from {mesh_path}')
+
+    vertices = np.asarray(loaded.vertices, dtype=np.float64)
+    faces = np.asarray(loaded.faces, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError(f'invalid vertex array from triangulation for {mesh_path}')
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        raise ValueError(f'triangulation did not produce triangle faces for {mesh_path}')
+
+    lines = ['# evaluate_postprocess triangulated OBJ']
+    lines.extend(f'v {x:.9g} {y:.9g} {z:.9g}' for x, y, z in vertices)
+    lines.extend(f'f {a + 1} {b + 1} {c + 1}' for a, b, c in faces)
+    return parse_obj_text('\n'.join(lines) + '\n', file_path=str(mesh_path))
+
+
+def _load_topology_for_standalone_mesh(mesh_path: Path, triangulate: bool):
+    if triangulate:
+        obj_mesh = _triangulate_obj_mesh(mesh_path)
+        topology = build_topology(obj_mesh, WeldConfig.exact())
+        unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
+        return topology, unique_edges
+    return _load_topology(mesh_path, {})
+
+
 def _binary_metrics_from_mask(mask: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
     preds = np.asarray(mask, dtype=bool).reshape(-1)
     gt = np.asarray(labels, dtype=bool).reshape(-1)
@@ -291,6 +331,191 @@ def _load_model_state_for_evaluation(
         return {'strict': False, 'missing_keys': missing, 'unexpected_keys': unexpected}
 
 
+def _build_single_mesh_inference_inputs(
+    mesh_path: Path,
+    config: dict[str, Any],
+    summary: dict[str, Any],
+    model_type: str,
+    model_kwargs: dict[str, Any],
+    triangulate: bool,
+) -> tuple[Any, np.ndarray, np.ndarray]:
+    prediction_args = argparse.Namespace(
+        feature_bundle='auto',
+        enable_ao=False,
+        enable_dihedral=False,
+        enable_symmetry=False,
+        enable_density=False,
+        threshold=None,
+        fail_if_threshold_missing=False,
+        endpoint_seed=42,
+    )
+    selection, endpoint_order, _resolved_feature_bundle = predict_bridge.resolve_feature_bundle(
+        prediction_args,
+        config,
+        summary,
+    )
+    predict_bridge.validate_feature_metadata(config, summary, selection, model_kwargs)
+
+    topology, unique_edges = _load_topology_for_standalone_mesh(mesh_path, triangulate)
+    feature_mesh = predict_bridge.build_feature_mesh_from_canonical_topology(topology)
+    with contextlib.redirect_stdout(io.StringIO()):
+        edge_features, feature_unique_edges, _ = predict_bridge.compute_edge_features_for_selection(
+            feature_mesh,
+            selection,
+            endpoint_order=endpoint_order,
+            rng_seed=prediction_args.endpoint_seed,
+        )
+    predict_bridge.assert_canonical_edge_order(feature_unique_edges, topology.canonical_edges, mesh_path)
+
+    if model_type == 'meshcnn_full':
+        model_input = predict_bridge.build_meshcnn_inference_sample(
+            mesh_path=mesh_path,
+            feature_mesh=feature_mesh,
+            unique_edges=feature_unique_edges,
+            edge_features=edge_features,
+            selection=selection,
+            endpoint_order=endpoint_order,
+            topology=topology,
+        )
+    else:
+        model_input = predict_bridge.build_dual_data(edge_features, feature_unique_edges)
+    return topology, feature_unique_edges.astype(np.int64, copy=False), model_input
+
+
+def _infer_single_mesh_probabilities(
+    model_type: str,
+    model: torch.nn.Module,
+    model_input: Any,
+    unique_edges: np.ndarray,
+    device: torch.device,
+) -> np.ndarray:
+    with torch.no_grad():
+        if model_type == 'meshcnn_full':
+            logits = model(model_input)
+        else:
+            logits = model(model_input.x.to(device), model_input.edge_index.to(device))
+    return predict_bridge.normalize_probabilities(
+        torch.sigmoid(logits).detach().cpu().numpy(),
+        len(unique_edges),
+    )
+
+
+def _evaluate_arbitrary_mesh(
+    *,
+    args: argparse.Namespace,
+    mesh_path: Path,
+    weights_path: Path,
+    config_path: Path,
+    summary_path: Path,
+    config: dict[str, Any],
+    summary: dict[str, Any],
+    model_type: str,
+    device: torch.device,
+    model_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    threshold = predict_bridge.resolve_threshold(args.threshold, summary, fail_if_missing=True)
+    topology, unique_edges, model_input = _build_single_mesh_inference_inputs(
+        mesh_path,
+        config,
+        summary,
+        model_type,
+        model_kwargs,
+        bool(getattr(args, 'triangulate', False)),
+    )
+
+    model = predict_bridge.build_prediction_model(model_type, model_kwargs).to(device)
+    state_dict = predict_bridge.extract_state_dict(predict_bridge.load_weights_payload(weights_path, device))
+    state_dict_load = _load_model_state_for_evaluation(model, state_dict, model_type)
+    model.eval()
+
+    probabilities = _infer_single_mesh_probabilities(model_type, model, model_input, unique_edges, device)
+    debug_export_dir = (REPO_ROOT / 'debug_output') if bool(getattr(args, 'debug_export', False)) else None
+    result = apply_seam_postprocessing_detailed(
+        topology=topology,
+        unique_edges=unique_edges,
+        probabilities=probabilities,
+        threshold=threshold,
+        max_gap_length=args.max_gap_length,
+        min_island_size=args.min_island_size,
+        debug_export_dir=debug_export_dir,
+    )
+    raw_mask = probabilities >= threshold
+    meshes_with_changes = int(np.any(raw_mask != result.final_mask))
+
+    per_mesh = [{
+        'file_path': str(mesh_path),
+        'edge_count': int(len(unique_edges)),
+        'gt_seam_count': None,
+        'raw_predicted_count': int(np.count_nonzero(raw_mask)),
+        'post_predicted_count': int(np.count_nonzero(result.final_mask)),
+        'raw_metrics': None,
+        'post_metrics': None,
+        'delta': None,
+        'postprocess': {
+            'skeleton_deleted_vertices': [int(idx) for idx in result.skeleton_deleted_vertices],
+            'skeleton_edge_count': int(np.count_nonzero(result.skeleton_mask)),
+            'steiner_added_edges': [int(idx) for idx in result.steiner_added_edges],
+            'pruned_edge_indices': [int(idx) for idx in result.pruned_edge_indices],
+            'steiner_edge_count': int(np.count_nonzero(result.steiner_mask)),
+            'skeleton_terminal_vertex_count': int(result.skeleton_terminal_vertex_count),
+            'steiner_terminal_group_count': int(result.steiner_terminal_group_count),
+            'steiner_tree_count': int(result.steiner_tree_count),
+            'pruned_component_count': int(result.pruned_component_count),
+        },
+    }]
+
+    return {
+        'status': 'completed',
+        'checkpoint': {
+            'model_weights': str(weights_path),
+            'config_json': str(config_path),
+            'summary_json': str(summary_path),
+            'dataset_path': None,
+        },
+        'model': {
+            'model_type': model_type,
+            'model_kwargs': model_kwargs,
+            'device': str(device),
+            'state_dict_load': state_dict_load,
+        },
+        'split': {
+            'group_mode': None,
+            'seed': None,
+            'resolution_tag': None,
+            'test_group_ids': [],
+            'evaluated_mesh_count': 1,
+            'requested_mesh_path': str(mesh_path.resolve()),
+        },
+        'postprocess': {
+            'threshold': float(threshold),
+            'max_gap_length': int(args.max_gap_length),
+            'min_island_size': int(args.min_island_size),
+            'debug_export': bool(getattr(args, 'debug_export', False)),
+            'debug_export_dir': None if debug_export_dir is None else str(debug_export_dir.resolve()),
+            'pipeline': (
+                'local support smoothing, hysteresis thresholding, tiny component pruning, '
+                'low-confidence spur pruning, terminal-set bridging with confidence-gated acceptance, final cleanup'
+            ),
+            'bridge_cost_function': '1 + alpha_cost * (1 - seam_probability)',
+            'standalone_mesh_mode': True,
+            'triangulate': bool(getattr(args, 'triangulate', False)),
+        },
+        'global_metrics': {
+            'pre_pp': None,
+            'post_pp': None,
+            'delta': None,
+        },
+        'aggregate_postprocess': {
+            'meshes_with_changes': int(meshes_with_changes),
+            'total_added_edges': int(len(result.steiner_added_edges)),
+            'total_pruned_edges': int(len(result.pruned_edge_indices)),
+            'total_bridges': int(result.steiner_tree_count),
+            'total_steiner_trees': int(result.steiner_tree_count),
+        },
+        'per_mesh': per_mesh,
+    }
+
+
 def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     weights_path = Path(args.model_weights).resolve()
     config_path = Path(args.config_json).resolve() if args.config_json else weights_path.with_name('config.json')
@@ -301,6 +526,21 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     model_type = predict_bridge.resolve_model_type(args.model_type if hasattr(args, 'model_type') else 'auto', config, weights_path)
     device = predict_bridge.resolve_device(args.device)
     model_kwargs = _resolve_model_kwargs_for_evaluation(model_type, config)
+
+    if args.mesh_path not in (None, ''):
+        mesh_path = _resolve_mesh_path(args.mesh_path)
+        return _evaluate_arbitrary_mesh(
+            args=args,
+            mesh_path=mesh_path,
+            weights_path=weights_path,
+            config_path=config_path,
+            summary_path=summary_path,
+            config=config,
+            summary=summary,
+            model_type=model_type,
+            device=device,
+            model_kwargs=model_kwargs,
+        )
 
     dataset_hint = args.dataset_path or config.get('dataset') or config.get('split', {}).get('dataset_path')
     if not dataset_hint:
@@ -320,7 +560,8 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     resolution_tag = split_info.get('resolution_tag')
     if resolution_tag not in (None, '', 'all'):
         dataset = filter_dataset_by_resolution(dataset, resolution_tag)
-    test_samples = _select_test_samples(dataset, split_info, args.limit_meshes)
+    effective_limit = 1 if bool(getattr(args, 'debug_export', False)) else args.limit_meshes
+    test_samples = _select_test_samples(dataset, split_info, effective_limit)
 
     model = predict_bridge.build_prediction_model(model_type, model_kwargs).to(device)
     state_dict = predict_bridge.extract_state_dict(predict_bridge.load_weights_payload(weights_path, device))
@@ -337,6 +578,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     total_pruned_edges = 0
     total_bridges = 0
     meshes_with_changes = 0
+    debug_export_dir = (REPO_ROOT / 'debug_output') if bool(getattr(args, 'debug_export', False)) else None
 
     for sample in test_samples:
         mesh_path = _resolve_mesh_path(getattr(sample, 'file_path', ''))
@@ -351,6 +593,8 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             original_sample = original_lookup.get(_sample_key(getattr(sample, 'file_path', '')))
             if original_sample is not None:
                 unique_edges = _unique_edges_from_original_sample(original_sample)
+                if debug_export_dir is not None:
+                    topology, _topology_edges = _load_topology(mesh_path, topology_cache)
             else:
                 topology, unique_edges = _load_topology(mesh_path, topology_cache)
             labels = sample.y.detach().cpu().numpy().astype(bool)
@@ -371,6 +615,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             threshold=args.threshold,
             max_gap_length=args.max_gap_length,
             min_island_size=args.min_island_size,
+            debug_export_dir=debug_export_dir,
         )
         raw_metrics = binary_metrics_from_probs(
             torch.from_numpy(probabilities.astype(np.float32)),
@@ -442,16 +687,19 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
             'resolution_tag': resolution_tag,
             'test_group_ids': list(split_info.get('test') or ()),
             'evaluated_mesh_count': len(test_samples),
+            'requested_mesh_path': None if args.mesh_path in (None, '') else str(_resolve_mesh_path(args.mesh_path)),
         },
         'postprocess': {
             'threshold': float(args.threshold),
             'max_gap_length': int(args.max_gap_length),
             'min_island_size': int(args.min_island_size),
+            'debug_export': bool(getattr(args, 'debug_export', False)),
+            'debug_export_dir': None if debug_export_dir is None else str(debug_export_dir.resolve()),
             'pipeline': (
                 'local support smoothing, hysteresis thresholding, tiny component pruning, '
-                'low-confidence spur pruning, bounded endpoint bridging, final cleanup'
+                'low-confidence spur pruning, terminal-set bridging with confidence-gated acceptance, final cleanup'
             ),
-            'bridge_cost_function': 'edge_length * (1 + bridge_lambda * (1 - refined_probability))',
+            'bridge_cost_function': '1 + alpha_cost * (1 - seam_probability)',
         },
         'global_metrics': {
             'pre_pp': raw_global,
@@ -481,11 +729,19 @@ def main(argv: list[str] | None = None) -> int:
             else Path(args.model_weights).resolve().with_name('postprocess_eval.json')
         )
         _write_json(output_json, report)
-        print(
-            f"pre-pp f1 {report['global_metrics']['pre_pp']['f1']:.4f} -> "
-            f"post-pp f1 {report['global_metrics']['post_pp']['f1']:.4f} "
-            f"across {report['split']['evaluated_mesh_count']} mesh(es)"
-        )
+        pre_metrics = report['global_metrics']['pre_pp']
+        post_metrics = report['global_metrics']['post_pp']
+        if pre_metrics is not None and post_metrics is not None:
+            print(
+                f"pre-pp f1 {pre_metrics['f1']:.4f} -> "
+                f"post-pp f1 {post_metrics['f1']:.4f} "
+                f"across {report['split']['evaluated_mesh_count']} mesh(es)"
+            )
+        else:
+            print(
+                f"processed {report['split']['evaluated_mesh_count']} standalone mesh(es) "
+                f"without ground-truth metrics"
+            )
         print(f'report written -> {output_json}')
         return 0
     except Exception as exc:

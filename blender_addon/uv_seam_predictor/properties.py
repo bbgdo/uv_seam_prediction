@@ -25,47 +25,61 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         max=1.0,
         description='Initial seam threshold for the topological post-process',
     )
-    postprocess_lambda_off: bpy.props.FloatProperty(
-        name='Off-Seam Penalty',
-        default=0.75,
+    postprocess_alpha_cost: bpy.props.FloatProperty(
+        name='Alpha Cost',
+        default=0.50,
         min=0.0,
         max=8.0,
-        description='Penalty for stepping through edges below the seam threshold',
+        description='Confidence bias for hop-dominant bridge search cost',
+    )
+    postprocess_tau_bridge: bpy.props.FloatProperty(
+        name='Tau Bridge',
+        default=0.28,
+        min=0.0,
+        max=1.0,
+        description='Minimum mean confidence of newly added bridge edges',
+    )
+    postprocess_conf_floor: bpy.props.FloatProperty(
+        name='Conf Floor',
+        default=0.10,
+        min=0.0,
+        max=1.0,
+        description='Low-confidence floor used by the bridge acceptance guard',
+    )
+    postprocess_max_low_conf_fraction: bpy.props.FloatProperty(
+        name='Max Low Conf Fraction',
+        default=0.50,
+        min=0.0,
+        max=1.0,
+        description='Maximum allowed fraction of new bridge edges below the confidence floor',
+    )
+    postprocess_force_close_max_edges: bpy.props.IntProperty(
+        name='Force Close Max Edges',
+        default=3,
+        min=0,
+        max=16,
+        description='Short bridges up to this many new edges bypass the mean-confidence gate',
     )
     postprocess_r_self: bpy.props.IntProperty(
         name='Self-Bridge Radius',
-        default=6,
+        default=8,
         min=0,
         max=32,
         description='Maximum new edges used to close a broken loop onto itself',
     )
     postprocess_r_cross: bpy.props.IntProperty(
         name='Cross-Bridge Radius',
-        default=8,
+        default=10,
         min=0,
         max=64,
         description='Maximum new edges used to attach an open fragment to the main seam graph',
     )
-    postprocess_tau_path: bpy.props.FloatProperty(
-        name='Path Cost Limit',
-        default=1.35,
-        min=0.0,
-        max=8.0,
-        description='Maximum normalized repair-path cost for accepted bridges',
-    )
-    postprocess_kappa_self: bpy.props.FloatProperty(
-        name='Self-Bridge Scale',
-        default=1.5,
-        min=0.0,
-        max=8.0,
-        description='Maximum self-bridge path length relative to the broken arc length',
-    )
-    postprocess_attach_margin: bpy.props.FloatProperty(
-        name='Attach Margin',
-        default=0.10,
+    postprocess_ambiguity_margin: bpy.props.FloatProperty(
+        name='Ambiguity Margin',
+        default=0.05,
         min=0.0,
         max=2.0,
-        description='Required cost gap between the best and second-best main-graph attachments',
+        description='Minimum mean-confidence gap required to avoid ambiguous bridge choices',
     )
     postprocess_garbage_max_edges: bpy.props.IntProperty(
         name='Garbage Max Edges',

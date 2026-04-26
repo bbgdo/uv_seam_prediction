@@ -60,12 +60,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--postprocess', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--postprocess-seam-threshold', type=float, default=0.50)
-    parser.add_argument('--postprocess-lambda-off', type=float, default=0.75)
-    parser.add_argument('--postprocess-r-self', type=int, default=6)
-    parser.add_argument('--postprocess-r-cross', type=int, default=8)
-    parser.add_argument('--postprocess-tau-path', type=float, default=1.35)
-    parser.add_argument('--postprocess-kappa-self', type=float, default=1.5)
-    parser.add_argument('--postprocess-attach-margin', type=float, default=0.10)
+    parser.add_argument('--postprocess-alpha-cost', type=float, default=0.50)
+    parser.add_argument('--postprocess-tau-bridge', type=float, default=0.28)
+    parser.add_argument('--postprocess-conf-floor', type=float, default=0.10)
+    parser.add_argument('--postprocess-max-low-conf-fraction', type=float, default=0.50)
+    parser.add_argument('--postprocess-force-close-max-edges', type=int, default=3)
+    parser.add_argument('--postprocess-r-self', type=int, default=8)
+    parser.add_argument('--postprocess-r-cross', type=int, default=10)
+    parser.add_argument('--postprocess-ambiguity-margin', type=float, default=0.05)
     parser.add_argument('--postprocess-garbage-max-edges', type=int, default=4)
     parser.add_argument('--postprocess-r-snap', type=int, default=3)
     parser.add_argument('--postprocess-snap-max-edges', type=int, default=12)
@@ -118,12 +120,14 @@ def _validate_threshold(value: Any) -> float:
 def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return {
         'seam_threshold': float(args.postprocess_seam_threshold),
-        'lambda_off': float(args.postprocess_lambda_off),
+        'alpha_cost': float(args.postprocess_alpha_cost),
+        'tau_bridge': float(args.postprocess_tau_bridge),
+        'conf_floor': float(args.postprocess_conf_floor),
+        'max_low_conf_fraction': float(args.postprocess_max_low_conf_fraction),
+        'force_close_max_edges': int(args.postprocess_force_close_max_edges),
         'r_self': int(args.postprocess_r_self),
         'r_cross': int(args.postprocess_r_cross),
-        'tau_path': float(args.postprocess_tau_path),
-        'kappa_self': float(args.postprocess_kappa_self),
-        'attach_margin': float(args.postprocess_attach_margin),
+        'ambiguity_margin': float(args.postprocess_ambiguity_margin),
         'garbage_max_edges': int(args.postprocess_garbage_max_edges),
         'r_snap': int(args.postprocess_r_snap),
         'snap_max_edges': int(args.postprocess_snap_max_edges),

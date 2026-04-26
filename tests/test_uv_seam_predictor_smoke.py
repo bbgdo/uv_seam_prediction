@@ -54,6 +54,21 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         settings = SimpleNamespace(
             model_weights_path='weights.pt',
             threshold=0.42,
+            use_post_processing=True,
+            postprocess_seam_threshold=0.5,
+            postprocess_alpha_cost=0.5,
+            postprocess_tau_bridge=0.28,
+            postprocess_conf_floor=0.10,
+            postprocess_max_low_conf_fraction=0.50,
+            postprocess_force_close_max_edges=3,
+            postprocess_r_self=8,
+            postprocess_r_cross=10,
+            postprocess_ambiguity_margin=0.05,
+            postprocess_garbage_max_edges=4,
+            postprocess_r_snap=3,
+            postprocess_snap_max_edges=12,
+            postprocess_r_band=2,
+            postprocess_eta_main=0.35,
         )
 
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
