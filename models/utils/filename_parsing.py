@@ -6,8 +6,13 @@ from typing import Pattern
 
 DEFAULT_AUGMENTATION_PATTERN = r'_aug\d+$'
 DEFAULT_RESOLUTION_PATTERNS = (
+    r'_h$',
+    r'_l$',
+    r'_high$',
+    r'_low$',
     r'_\d+f$',
     r'_res\d+$',
+    r'_lod\d+$',
 )
 
 
@@ -30,14 +35,19 @@ def _strip_suffix(value: str, pattern: Pattern[str]) -> tuple[str, str | None]:
     if not match:
         return value, None
 
-    token = match.group(0).lstrip('_')
+    token = match.group(0).lstrip('_').lower()
     return value[:match.start()], token
+
+
+def _stem_from_path_or_name(path_or_name: str | Path) -> str:
+    name = re.split(r'[\\/]', str(path_or_name))[-1]
+    return Path(name).stem
 
 
 def parse_mesh_name(path_or_name: str | Path, config: FilenameParseConfig | None = None) -> MeshNameInfo:
     """Parse mesh names consistently for audit and optional family grouping."""
     config = config or FilenameParseConfig()
-    stem = Path(path_or_name).stem
+    stem = _stem_from_path_or_name(path_or_name)
     family_id = stem
     resolution_tag = None
     is_augmented = False
@@ -69,5 +79,5 @@ def parse_mesh_name(path_or_name: str | Path, config: FilenameParseConfig | None
 
 
 def legacy_base_name(path_or_name: str | Path) -> str:
-    stem = Path(path_or_name).stem
+    stem = _stem_from_path_or_name(path_or_name)
     return re.sub(DEFAULT_AUGMENTATION_PATTERN, '', stem, flags=re.IGNORECASE)

@@ -71,12 +71,12 @@ def _normalize_dataset_path(path: str | Path | None) -> str | None:
 
 
 def _group_name(d: Data, group_mode: str, filename_config: FilenameParseConfig | None = None) -> str:
-    name = Path(getattr(d, 'file_path', '')).stem
-    if not name:
+    path_or_name = getattr(d, 'file_path', '')
+    if not path_or_name:
         return str(id(d))
     if group_mode == 'family':
-        return parse_mesh_name(name, filename_config).family_id
-    return legacy_base_name(name)
+        return parse_mesh_name(path_or_name, filename_config).family_id
+    return legacy_base_name(path_or_name)
 
 
 def _group_dataset(
@@ -132,6 +132,158 @@ def _split_json_payload(split_info: dict) -> dict:
         'dataset_path': split_info.get('dataset_path'),
         'resolution_tag': split_info.get('resolution_tag'),
     }
+
+
+def _graph_weight(d: Data) -> int:
+    for attr in ('edge_features', 'x', 'y'):
+        value = getattr(d, attr, None)
+        shape = getattr(value, 'shape', None)
+        if shape and len(shape) > 0:
+            return max(1, int(shape[0]))
+    return 1
+
+
+def _family_weight(graphs: list[Data]) -> int:
+    return sum(_graph_weight(d) for d in graphs)
+
+
+def _choose_forced_split(
+    splits: list[str],
+    targets: dict[str, float],
+    assigned_weights: dict[str, int],
+) -> str:
+    return max(splits, key=lambda split: (targets[split] - assigned_weights[split], split == 'test'))
+
+
+def _choose_improving_split(
+    weight: int,
+    splits: list[str],
+    targets: dict[str, float],
+    assigned_weights: dict[str, int],
+) -> str | None:
+    candidates = []
+    for index, split in enumerate(splits):
+        current = assigned_weights[split]
+        target = targets[split]
+        before = abs(target - current)
+        after = abs(target - (current + weight))
+        if after <= before:
+            candidates.append((target - current, -after, -index, split))
+    if not candidates:
+        return None
+    return max(candidates)[3]
+
+
+def _weighted_split_group_keys(
+    groups: dict[str, list[Data]],
+    val_ratio: float,
+    test_ratio: float,
+    seed: int,
+) -> tuple[list[str], list[str], list[str]]:
+    import random
+
+    group_keys = list(groups)
+    if not group_keys:
+        return [], [], []
+    if len(group_keys) == 1:
+        return group_keys, [], []
+
+    rng = random.Random(seed)
+    rng.shuffle(group_keys)
+    weighted_groups = [
+        (group_id, _family_weight(groups[group_id]), index)
+        for index, group_id in enumerate(group_keys)
+    ]
+    weighted_groups.sort(key=lambda item: (-item[1], item[2]))
+
+    train_keys: list[str] = []
+    val_keys: list[str] = []
+    test_keys: list[str] = []
+    split_keys = {'train': train_keys, 'val': val_keys, 'test': test_keys}
+    assigned_weights = {'train': 0, 'val': 0, 'test': 0}
+
+    if len(weighted_groups) == 2:
+        heldout_split = 'test' if test_ratio > 0 or val_ratio <= 0 else 'val'
+        train_id, train_weight, _ = weighted_groups[0]
+        heldout_id, heldout_weight, _ = weighted_groups[1]
+        split_keys['train'].append(train_id)
+        split_keys[heldout_split].append(heldout_id)
+        assigned_weights['train'] += train_weight
+        assigned_weights[heldout_split] += heldout_weight
+        return train_keys, val_keys, test_keys
+
+    total_weight = sum(weight for _, weight, _ in weighted_groups)
+    active_splits = []
+    if test_ratio > 0:
+        active_splits.append('test')
+    if val_ratio > 0:
+        active_splits.append('val')
+    targets = {
+        'test': total_weight * max(0.0, test_ratio),
+        'val': total_weight * max(0.0, val_ratio),
+    }
+
+    for index, (group_id, weight, _) in enumerate(weighted_groups):
+        remaining_after = len(weighted_groups) - index - 1
+        empty_required = [split for split in active_splits if not split_keys[split]]
+
+        if not train_keys and remaining_after == len(empty_required):
+            split = 'train'
+        elif empty_required and remaining_after < len(empty_required):
+            split = _choose_forced_split(empty_required, targets, assigned_weights)
+        else:
+            split = _choose_improving_split(weight, active_splits, targets, assigned_weights)
+            if split is None:
+                split = 'train'
+
+        split_keys[split].append(group_id)
+        assigned_weights[split] += weight
+
+    return train_keys, val_keys, test_keys
+
+
+def _validate_no_split_leakage(
+    split_keys: dict[str, list[str]],
+    groups: dict[str, list[Data]],
+    group_mode: str,
+    filename_config: FilenameParseConfig | None = None,
+) -> None:
+    assigned = split_keys['train'] + split_keys['val'] + split_keys['test']
+    duplicate_ids = sorted({group_id for group_id in assigned if assigned.count(group_id) > 1})
+    if duplicate_ids:
+        raise ValueError(f"split assigns group(s) to multiple splits: {duplicate_ids}")
+
+    split_sets = {split: set(keys) for split, keys in split_keys.items()}
+    for left, right in (('train', 'val'), ('train', 'test'), ('val', 'test')):
+        overlap = sorted(split_sets[left] & split_sets[right])
+        if overlap:
+            raise ValueError(f"split group overlap between {left} and {right}: {overlap}")
+
+    existing = set(groups)
+    requested = set(assigned)
+    missing_groups = sorted(requested - existing)
+    if missing_groups:
+        raise ValueError(f"split references group(s) not present in filtered dataset: {missing_groups}")
+
+    unassigned_groups = sorted(existing - requested)
+    if unassigned_groups:
+        raise ValueError(f"split does not assign filtered dataset group(s): {unassigned_groups}")
+
+    if group_mode != 'family':
+        return
+
+    family_splits = {'train': set(), 'val': set(), 'test': set()}
+    for split, group_ids in split_keys.items():
+        for group_id in group_ids:
+            for graph in groups[group_id]:
+                path_or_name = getattr(graph, 'file_path', '')
+                family_id = parse_mesh_name(path_or_name, filename_config).family_id if path_or_name else group_id
+                family_splits[split].add(family_id)
+
+    for left, right in (('train', 'val'), ('train', 'test'), ('val', 'test')):
+        overlap = sorted(family_splits[left] & family_splits[right])
+        if overlap:
+            raise ValueError(f"family overlap between {left} and {right}: {overlap}")
 
 
 def save_split_json(path: str | Path, split_info: dict) -> None:
@@ -224,10 +376,7 @@ def split_dataset(
     Returns (train, val, test, split_info) where split_info maps
     split name -> list of base mesh names.
     """
-    import random
-
     groups = _group_dataset(dataset, group_mode, filename_config)
-    rng = random.Random(seed)
 
     if split_json_in:
         payload = load_split_json_metadata(split_json_in)
@@ -236,16 +385,7 @@ def split_dataset(
         val_keys = split_info['val']
         test_keys = split_info['test']
     else:
-        group_keys = list(groups.keys())
-        rng.shuffle(group_keys)
-
-        n = len(group_keys)
-        n_test = max(1, int(n * test_ratio))
-        n_val = max(1, int(n * val_ratio))
-
-        test_keys = group_keys[:n_test]
-        val_keys = group_keys[n_test:n_test + n_val]
-        train_keys = group_keys[n_test + n_val:]
+        train_keys, val_keys, test_keys = _weighted_split_group_keys(groups, val_ratio, test_ratio, seed)
 
         split_info = _split_info(
             train_keys,
@@ -256,6 +396,13 @@ def split_dataset(
             dataset_path,
             resolution_tag,
         )
+
+    _validate_no_split_leakage(
+        {'train': train_keys, 'val': val_keys, 'test': test_keys},
+        groups,
+        group_mode,
+        filename_config,
+    )
 
     train = [d for k in train_keys for d in groups[k]]
     val = [d for k in val_keys for d in groups[k]]

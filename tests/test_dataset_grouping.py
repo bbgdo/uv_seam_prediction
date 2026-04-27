@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,6 +6,7 @@ from tempfile import TemporaryDirectory
 from torch_geometric.data import Data
 
 from models.utils.dataset import filter_dataset_by_resolution, infer_resolution_selector, split_dataset
+from models.utils.filename_parsing import parse_mesh_name
 
 
 def _data(file_path):
@@ -47,6 +49,28 @@ class DatasetGroupingTests(unittest.TestCase):
         self.assertIn('mesh', keys)
         self.assertIn('other', keys)
         self.assertNotIn('mesh_10000f', keys)
+
+    def test_family_grouping_combines_native_resolution_and_aug_variants(self):
+        dataset = [
+            _data('man013.obj'),
+            _data('man013_aug0.obj'),
+            _data('man013_l.obj'),
+            _data('man013_l_aug0.obj'),
+            _data('man013_h.obj'),
+            _data('man013_h_aug1.obj'),
+            _data('other.obj'),
+        ]
+
+        _, _, _, split_info = split_dataset(
+            dataset,
+            val_ratio=0.3,
+            test_ratio=0.3,
+            seed=4,
+            group_mode='family',
+        )
+        keys = set(split_info['train'] + split_info['val'] + split_info['test'])
+
+        self.assertEqual(keys, {'man013', 'other'})
 
     def test_filter_dataset_by_resolution(self):
         dataset = [
@@ -122,6 +146,113 @@ class DatasetGroupingTests(unittest.TestCase):
         self.assertEqual(saved_info['train'], loaded_info['train'])
         self.assertEqual(saved_info['val'], loaded_info['val'])
         self.assertEqual(saved_info['test'], loaded_info['test'])
+
+    def test_saved_split_json_schema_keys_are_stable(self):
+        dataset = [_data(f'mesh_{idx}_10000f.obj') for idx in range(5)]
+
+        with TemporaryDirectory() as tmp:
+            split_path = Path(tmp) / 'split.json'
+            split_dataset(
+                dataset,
+                val_ratio=0.2,
+                test_ratio=0.2,
+                seed=123,
+                group_mode='family',
+                split_json_out=split_path,
+                dataset_path=Path(tmp) / 'dataset_dual.pt',
+                resolution_tag='10000f',
+            )
+
+            with open(split_path) as f:
+                payload = json.load(f)
+
+        self.assertEqual(set(payload), {
+            'train_group_ids',
+            'val_group_ids',
+            'test_group_ids',
+            'seed',
+            'group_mode',
+            'dataset_path',
+            'resolution_tag',
+        })
+
+    def test_loaded_split_json_with_overlapping_groups_raises(self):
+        dataset = [
+            _data('mesh_h.obj'),
+            _data('mesh_l.obj'),
+            _data('other.obj'),
+        ]
+
+        with TemporaryDirectory() as tmp:
+            split_path = Path(tmp) / 'split.json'
+            with open(split_path, 'w') as f:
+                json.dump({
+                    'train_group_ids': ['mesh'],
+                    'val_group_ids': ['mesh'],
+                    'test_group_ids': ['other'],
+                    'seed': 1,
+                    'group_mode': 'family',
+                    'dataset_path': None,
+                    'resolution_tag': None,
+                }, f)
+
+            with self.assertRaisesRegex(ValueError, 'multiple splits'):
+                split_dataset(
+                    dataset,
+                    val_ratio=0.2,
+                    test_ratio=0.2,
+                    seed=99,
+                    group_mode='family',
+                    split_json_in=split_path,
+                )
+
+    def test_generated_family_split_has_no_overlap(self):
+        dataset = [
+            _data('man013.obj'),
+            _data('man013_l.obj'),
+            _data('man013_h_aug0.obj'),
+            _data('fem001.obj'),
+            _data('fem001_h_aug0.obj'),
+            _data('chair_10000f_aug2.obj'),
+            _data('house_lod3_aug0.obj'),
+        ]
+
+        train, val, test, _ = split_dataset(
+            dataset,
+            val_ratio=0.25,
+            test_ratio=0.25,
+            seed=11,
+            group_mode='family',
+        )
+
+        split_families = [
+            {parse_mesh_name(d.file_path).family_id for d in split}
+            for split in (train, val, test)
+        ]
+
+        self.assertFalse(split_families[0] & split_families[1])
+        self.assertFalse(split_families[0] & split_families[2])
+        self.assertFalse(split_families[1] & split_families[2])
+
+    def test_weighted_split_keeps_large_family_in_training(self):
+        dataset = [_data(f'large_aug{idx}.obj') for idx in range(20)]
+        dataset.extend([
+            _data('small_a.obj'),
+            _data('small_b.obj'),
+            _data('small_c.obj'),
+        ])
+
+        train, val, test, split_info = split_dataset(
+            dataset,
+            val_ratio=0.34,
+            test_ratio=0.34,
+            seed=5,
+            group_mode='family',
+        )
+
+        self.assertIn('large', split_info['train'])
+        self.assertGreater(len(train), len(val))
+        self.assertGreater(len(train), len(test))
 
     def test_seeded_split_generation_is_reproducible(self):
         dataset = [_data(f'mesh_{idx}_10000f.obj') for idx in range(8)]
