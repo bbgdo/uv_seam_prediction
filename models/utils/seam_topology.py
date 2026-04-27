@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import heapq
+from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -392,3 +394,337 @@ def _ordered_string_dict(histogram: dict[str, int], bucket_order: tuple[str, ...
         for bucket in bucket_order
         if histogram.get(bucket, 0) > 0
     }
+
+
+@dataclass(frozen=True)
+class SkeletonResult:
+    initial_candidate_vertices: frozenset[int]
+    anchor_vertices: frozenset[int]
+    skeleton_vertices: frozenset[int]
+    skeleton_edge_mask: np.ndarray
+    vertex_scores: np.ndarray
+    iterations_performed: int
+    removals_committed: int
+    refused_by_anchor: int
+    refused_by_simple_test: int
+    refused_by_distance_test: int
+    tau_low: float
+    d_max: int
+    anchor_boundary: bool
+
+
+def boundary_vertices_from_topology(topology: CanonicalTopology | None) -> frozenset[int]:
+    if topology is None:
+        return frozenset()
+
+    boundary_vertices: set[int] = set()
+    for edge_key, occurrences in topology.edge_incidence.items():
+        if len(occurrences) == 1:
+            boundary_vertices.add(int(edge_key[0]))
+            boundary_vertices.add(int(edge_key[1]))
+    return frozenset(boundary_vertices)
+
+
+def lift_edge_probabilities_to_vertices(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+) -> np.ndarray:
+    probs = _validated_probability_vector(view, probabilities)
+    vertex_scores = np.zeros(view.vertex_count, dtype=np.float64)
+    for vertex_index, edge_indices in enumerate(view.vertex_to_edges):
+        if not edge_indices:
+            continue
+        vertex_scores[vertex_index] = float(np.max(probs[np.asarray(edge_indices, dtype=np.int64)]))
+    return vertex_scores
+
+
+def compute_topology_preserving_skeleton(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+    *,
+    tau_low: float = 0.30,
+    d_max: int = 3,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+) -> SkeletonResult:
+    probs = _validated_probability_vector(view, probabilities)
+    tau_low_value = _validated_probability_threshold('tau_low', tau_low)
+    if isinstance(d_max, bool) or not isinstance(d_max, (int, np.integer)) or int(d_max) < 1:
+        raise ValueError('d_max must be an integer greater than or equal to 1')
+    d_max_value = int(d_max)
+    if anchor_boundary and topology is None:
+        raise ValueError('anchor_boundary=True requires a non-None topology argument')
+
+    normalized_extra_anchors: frozenset[int] | None = None
+    if extra_anchor_vertices is not None:
+        normalized_anchor_vertices: set[int] = set()
+        for vertex in extra_anchor_vertices:
+            if isinstance(vertex, bool) or not isinstance(vertex, (int, np.integer)):
+                raise ValueError('extra_anchor_vertices must contain integer vertex indices')
+            vertex_index = int(vertex)
+            if vertex_index < 0 or vertex_index >= view.vertex_count:
+                raise ValueError(
+                    f'extra_anchor_vertices contains out-of-range vertex index {vertex_index} '
+                    f'for vertex_count={view.vertex_count}'
+                )
+            normalized_anchor_vertices.add(vertex_index)
+        normalized_extra_anchors = frozenset(normalized_anchor_vertices)
+
+    vertex_scores = lift_edge_probabilities_to_vertices(view, probs)
+
+    C = {
+        int(vertex_index)
+        for vertex_index in np.flatnonzero(vertex_scores >= tau_low_value)
+    }
+    initial_C = frozenset(C)
+    in_C = np.zeros(view.vertex_count, dtype=bool)
+    if C:
+        in_C[np.asarray(sorted(C), dtype=np.int64)] = True
+
+    A: set[int] = set()
+    if anchor_boundary:
+        A.update(boundary_vertices_from_topology(topology))
+    if normalized_extra_anchors is not None:
+        A.update(int(vertex) for vertex in normalized_extra_anchors)
+    A = {vertex for vertex in A if vertex in C}
+    in_A = np.zeros(view.vertex_count, dtype=bool)
+    for vertex in A:
+        in_A[vertex] = True
+
+    heap: list[tuple[float, int]] = [
+        (float(vertex_scores[vertex_index]), int(vertex_index))
+        for vertex_index in sorted(C)
+        if not in_A[vertex_index]
+    ]
+    heapq.heapify(heap)
+
+    D: set[int] = set()
+    nearest_dist: dict[int, int] = {}
+    adjacency = view.vertex_graph.adj
+
+    iterations_performed = 0
+    removals_committed = 0
+    refused_by_anchor = 0
+    refused_by_simple_test = 0
+    refused_by_distance_test = 0
+
+    while heap:
+        score_v, vertex = heapq.heappop(heap)
+        iterations_performed += 1
+
+        if not in_C[vertex]:
+            continue
+        if in_A[vertex]:
+            refused_by_anchor += 1
+            continue
+
+        del score_v
+        if not _passes_simple_vertex_test(adjacency, vertex, in_C, depth_bound=(2 * d_max_value) + 2):
+            refused_by_simple_test += 1
+            continue
+
+        distance_to_candidates = _bounded_distance_to_candidate_set(
+            adjacency,
+            vertex,
+            in_C,
+            max_distance=d_max_value,
+            excluded_candidate=vertex,
+        )
+        if distance_to_candidates is None:
+            refused_by_distance_test += 1
+            continue
+
+        affected_deleted_vertices = _deleted_vertices_within_radius(
+            adjacency,
+            vertex,
+            D,
+            radius=d_max_value + 1,
+        )
+        updated_nearest_dist: dict[int, int] = {}
+        distance_test_failed = False
+        for deleted_vertex in sorted(affected_deleted_vertices):
+            deleted_distance = _bounded_distance_to_candidate_set(
+                adjacency,
+                deleted_vertex,
+                in_C,
+                max_distance=d_max_value,
+                excluded_candidate=vertex,
+            )
+            if deleted_distance is None:
+                distance_test_failed = True
+                break
+            updated_nearest_dist[deleted_vertex] = deleted_distance
+        if distance_test_failed:
+            refused_by_distance_test += 1
+            continue
+
+        C.remove(vertex)
+        in_C[vertex] = False
+        D.add(vertex)
+        nearest_dist[vertex] = distance_to_candidates
+        nearest_dist.update(updated_nearest_dist)
+        removals_committed += 1
+
+    skeleton_edge_mask = np.zeros(view.edge_count, dtype=bool)
+    for edge_index in range(view.edge_count):
+        vi = int(view.unique_edges[edge_index, 0])
+        vj = int(view.unique_edges[edge_index, 1])
+        if in_C[vi] and in_C[vj] and probs[edge_index] >= tau_low_value:
+            skeleton_edge_mask[edge_index] = True
+
+    return SkeletonResult(
+        initial_candidate_vertices=initial_C,
+        anchor_vertices=frozenset(A),
+        skeleton_vertices=frozenset(C),
+        skeleton_edge_mask=skeleton_edge_mask,
+        vertex_scores=vertex_scores,
+        iterations_performed=iterations_performed,
+        removals_committed=removals_committed,
+        refused_by_anchor=refused_by_anchor,
+        refused_by_simple_test=refused_by_simple_test,
+        refused_by_distance_test=refused_by_distance_test,
+        tau_low=tau_low_value,
+        d_max=d_max_value,
+        anchor_boundary=bool(anchor_boundary),
+    )
+
+
+def diagnose_skeleton_application(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+    *,
+    tau_low: float = 0.30,
+    d_max: int = 3,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+    diagnostics_threshold: float | None = None,
+) -> tuple[SkeletonResult, SeamMaskDiagnostics, SeamMaskDiagnostics]:
+    threshold_value = tau_low if diagnostics_threshold is None else diagnostics_threshold
+    before = compute_seam_mask_diagnostics(view, probabilities, threshold=threshold_value)
+    skeleton = compute_topology_preserving_skeleton(
+        view,
+        probabilities,
+        tau_low=tau_low,
+        d_max=d_max,
+        anchor_boundary=anchor_boundary,
+        extra_anchor_vertices=extra_anchor_vertices,
+        topology=topology,
+    )
+    probs_after = np.where(skeleton.skeleton_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
+    after = compute_seam_mask_diagnostics(view, probs_after, threshold=0.5)
+    return skeleton, before, after
+
+
+def _validated_probability_vector(view: SeamGraphView, probabilities: np.ndarray) -> np.ndarray:
+    probs = np.asarray(probabilities, dtype=np.float64)
+    if probs.shape != (view.edge_count,):
+        raise ValueError(f'probabilities must have shape ({view.edge_count},), got {probs.shape}')
+    if not np.isfinite(probs).all():
+        raise ValueError('probabilities must be finite')
+    if np.any(probs < 0.0) or np.any(probs > 1.0):
+        raise ValueError('probabilities must lie in [0.0, 1.0]')
+    return probs
+
+
+def _validated_probability_threshold(name: str, value: float) -> float:
+    threshold = float(value)
+    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
+        raise ValueError(f'{name} must be finite and lie in [0.0, 1.0]')
+    return threshold
+
+
+def _passes_simple_vertex_test(
+    adjacency: nx.classes.coreviews.AdjacencyView,
+    vertex: int,
+    in_C: np.ndarray,
+    *,
+    depth_bound: int,
+) -> bool:
+    candidate_neighbors = [
+        int(neighbor)
+        for neighbor in adjacency[vertex]
+        if in_C[int(neighbor)]
+    ]
+    if len(candidate_neighbors) <= 1:
+        return True
+
+    start = candidate_neighbors[0]
+    remaining_targets = set(candidate_neighbors[1:])
+    visited = {vertex, start}
+    queue: deque[tuple[int, int]] = deque([(start, 0)])
+
+    while queue:
+        current, depth = queue.popleft()
+        if current in remaining_targets:
+            remaining_targets.remove(current)
+            if not remaining_targets:
+                return True
+        if depth >= depth_bound:
+            continue
+        for neighbor in adjacency[current]:
+            neighbor_index = int(neighbor)
+            if neighbor_index in visited or not in_C[neighbor_index]:
+                continue
+            visited.add(neighbor_index)
+            queue.append((neighbor_index, depth + 1))
+
+    return False
+
+
+def _bounded_distance_to_candidate_set(
+    adjacency: nx.classes.coreviews.AdjacencyView,
+    source: int,
+    in_C: np.ndarray,
+    *,
+    max_distance: int,
+    excluded_candidate: int | None,
+) -> int | None:
+    visited = {source}
+    queue: deque[tuple[int, int]] = deque([(source, 0)])
+
+    while queue:
+        current, distance = queue.popleft()
+        if current != source and in_C[current] and current != excluded_candidate:
+            return distance
+        if distance >= max_distance:
+            continue
+        for neighbor in adjacency[current]:
+            neighbor_index = int(neighbor)
+            if neighbor_index in visited:
+                continue
+            if in_C[neighbor_index] and neighbor_index != excluded_candidate:
+                return distance + 1
+            visited.add(neighbor_index)
+            queue.append((neighbor_index, distance + 1))
+
+    return None
+
+
+def _deleted_vertices_within_radius(
+    adjacency: nx.classes.coreviews.AdjacencyView,
+    source: int,
+    deleted_vertices: set[int],
+    *,
+    radius: int,
+) -> set[int]:
+    if not deleted_vertices:
+        return set()
+
+    found: set[int] = set()
+    visited = {source}
+    queue: deque[tuple[int, int]] = deque([(source, 0)])
+    while queue:
+        current, distance = queue.popleft()
+        if current in deleted_vertices:
+            found.add(current)
+        if distance >= radius:
+            continue
+        for neighbor in adjacency[current]:
+            neighbor_index = int(neighbor)
+            if neighbor_index in visited:
+                continue
+            visited.add(neighbor_index)
+            queue.append((neighbor_index, distance + 1))
+    return found
