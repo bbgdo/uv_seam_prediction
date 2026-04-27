@@ -617,6 +617,346 @@ def diagnose_skeleton_application(
     return skeleton, before, after
 
 
+@dataclass(frozen=True)
+class BridgingResult:
+    bridged_edge_mask: np.ndarray
+    steiner_added_edges: frozenset[int]
+    component_reports: tuple[dict, ...]
+    component_count: int
+    terminals_total: int
+    terminals_dropped_no_component: int
+    steiner_calls: int
+    steiner_edges_added_total: int
+    tau_high: float
+    r_bridge: int
+    epsilon: float
+
+
+def build_skeleton_subgraph(
+    view: SeamGraphView,
+    skeleton_edge_mask: np.ndarray,
+) -> nx.Graph:
+    """
+    Return the graph induced by skeleton edges, preserving canonical edge metadata.
+    """
+    if skeleton_edge_mask.shape != (view.edge_count,):
+        raise ValueError(
+            f'skeleton_edge_mask must have shape ({view.edge_count},), got {skeleton_edge_mask.shape}'
+        )
+    if skeleton_edge_mask.dtype != bool:
+        raise ValueError('skeleton_edge_mask must have dtype bool')
+
+    graph = nx.Graph()
+    for edge_index in np.flatnonzero(skeleton_edge_mask):
+        idx = int(edge_index)
+        vi = int(view.unique_edges[idx, 0])
+        vj = int(view.unique_edges[idx, 1])
+        graph.add_edge(
+            vi,
+            vj,
+            edge_index=idx,
+            length=float(view.edge_lengths[idx]),
+        )
+    return graph
+
+
+def _bounded_search_graph(
+    view: SeamGraphView,
+    seed_vertices: frozenset[int],
+    r_bridge: int,
+    probabilities: np.ndarray,
+    skeleton_edge_mask: np.ndarray,
+    epsilon: float,
+) -> nx.Graph:
+    """
+    Build the mesh subgraph within r_bridge BFS hops of seed_vertices.
+    """
+    if not seed_vertices:
+        return nx.Graph()
+
+    visited: set[int] = {int(vertex) for vertex in seed_vertices}
+    queue: deque[tuple[int, int]] = deque((int(vertex), 0) for vertex in sorted(seed_vertices))
+    while queue:
+        vertex, depth = queue.popleft()
+        if depth >= r_bridge:
+            continue
+        for neighbor in view.vertex_graph.neighbors(vertex):
+            neighbor_index = int(neighbor)
+            if neighbor_index in visited:
+                continue
+            visited.add(neighbor_index)
+            queue.append((neighbor_index, depth + 1))
+
+    graph = nx.Graph()
+    graph.add_nodes_from(sorted(visited))
+    for u, v, data in view.vertex_graph.subgraph(visited).edges(data=True):
+        idx = int(data['edge_index'])
+        if skeleton_edge_mask[idx]:
+            weight = 0.0
+        else:
+            weight = float(max(0.0, -np.log(max(float(probabilities[idx]), float(epsilon)))))
+        graph.add_edge(
+            int(u),
+            int(v),
+            edge_index=idx,
+            length=float(data.get('length', view.edge_lengths[idx])),
+            weight=weight,
+        )
+    return graph
+
+
+def compute_steiner_bridging(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+    skel_result: SkeletonResult,
+    *,
+    tau_high: float = 0.70,
+    r_bridge: int = 6,
+    epsilon: float = 1e-3,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+) -> BridgingResult:
+    probs = _validated_probability_vector(view, probabilities)
+    tau_high_value = _validated_probability_threshold('tau_high', tau_high)
+    if isinstance(r_bridge, bool) or not isinstance(r_bridge, (int, np.integer)) or int(r_bridge) < 0:
+        raise ValueError('r_bridge must be a non-negative integer')
+    r_bridge_value = int(r_bridge)
+    epsilon_value = float(epsilon)
+    if not np.isfinite(epsilon_value) or epsilon_value <= 0.0 or epsilon_value > 1.0:
+        raise ValueError('epsilon must be finite and lie in (0.0, 1.0]')
+    if anchor_boundary and topology is None:
+        raise ValueError('anchor_boundary=True requires a non-None topology argument')
+    if skel_result.skeleton_edge_mask.shape != (view.edge_count,):
+        raise ValueError(
+            f'skeleton_edge_mask must have shape ({view.edge_count},), '
+            f'got {skel_result.skeleton_edge_mask.shape}'
+        )
+    if skel_result.skeleton_edge_mask.dtype != bool:
+        raise ValueError('skeleton_edge_mask must have dtype bool')
+
+    normalized_extra_anchors: frozenset[int] | None = None
+    if extra_anchor_vertices is not None:
+        anchors: set[int] = set()
+        for vertex in extra_anchor_vertices:
+            if isinstance(vertex, bool) or not isinstance(vertex, (int, np.integer)):
+                raise ValueError('extra_anchor_vertices must contain integer vertex indices')
+            vertex_index = int(vertex)
+            if vertex_index < 0 or vertex_index >= view.vertex_count:
+                raise ValueError(
+                    f'extra_anchor_vertices contains out-of-range vertex index {vertex_index} '
+                    f'for vertex_count={view.vertex_count}'
+                )
+            anchors.add(vertex_index)
+        normalized_extra_anchors = frozenset(anchors)
+
+    vertex_scores = skel_result.vertex_scores
+    G_skel = build_skeleton_subgraph(view, skel_result.skeleton_edge_mask)
+    components = [frozenset(int(vertex) for vertex in component) for component in nx.connected_components(G_skel)]
+    component_id_of: dict[int, int] = {}
+    for component_id, component in enumerate(components):
+        for vertex in component:
+            component_id_of[int(vertex)] = component_id
+
+    T_structural_raw: set[int] = set()
+    if anchor_boundary:
+        T_structural_raw.update(boundary_vertices_from_topology(topology))
+    if normalized_extra_anchors is not None:
+        T_structural_raw.update(int(vertex) for vertex in normalized_extra_anchors)
+
+    skeleton_vertices = frozenset(int(vertex) for vertex in skel_result.skeleton_vertices)
+    T_confidence = frozenset(
+        int(vertex)
+        for vertex in skeleton_vertices
+        if float(vertex_scores[int(vertex)]) >= tau_high_value
+    )
+    T_structural = frozenset(T_structural_raw & skeleton_vertices)
+    T_global = frozenset(set(T_structural) | set(T_confidence))
+    terminals_dropped_no_component = sum(1 for vertex in T_global if vertex not in component_id_of)
+
+    bridged_mask = skel_result.skeleton_edge_mask.copy()
+    steiner_added_edges_global: set[int] = set()
+    component_reports: list[dict] = []
+    steiner_calls = 0
+    steiner_edges_added_total = 0
+
+    parent = list(range(len(components)))
+
+    def find(component_id: int) -> int:
+        while parent[component_id] != component_id:
+            parent[component_id] = parent[parent[component_id]]
+            component_id = parent[component_id]
+        return component_id
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[max(left_root, right_root)] = min(left_root, right_root)
+
+    for component_id, component_vertices in enumerate(components):
+        if not T_global:
+            continue
+        G_reach = _bounded_search_graph(
+            view=view,
+            seed_vertices=component_vertices,
+            r_bridge=r_bridge_value,
+            probabilities=probs,
+            skeleton_edge_mask=skel_result.skeleton_edge_mask,
+            epsilon=epsilon_value,
+        )
+        reachable_terminals = T_global & set(int(vertex) for vertex in G_reach.nodes())
+        for terminal in reachable_terminals:
+            other_component_id = component_id_of.get(int(terminal))
+            if other_component_id is not None:
+                union(component_id, other_component_id)
+
+    grouped_component_ids: dict[int, set[int]] = {}
+    for component_id in range(len(components)):
+        grouped_component_ids.setdefault(find(component_id), set()).add(component_id)
+
+    for group_component_ids in sorted(grouped_component_ids.values(), key=lambda ids: min(ids)):
+        comp_id = min(group_component_ids)
+        comp_vertices = frozenset(
+            vertex
+            for component_id in sorted(group_component_ids)
+            for vertex in components[component_id]
+        )
+        T_k = frozenset(vertex for vertex in T_global if component_id_of.get(vertex) in group_component_ids)
+        T_k_structural = frozenset(vertex for vertex in T_structural if component_id_of.get(vertex) in group_component_ids)
+        T_k_confidence = frozenset(vertex for vertex in T_confidence if component_id_of.get(vertex) in group_component_ids)
+        skeleton_edge_count_k = int(G_skel.subgraph(comp_vertices).number_of_edges())
+
+        report = {
+            'component_id': int(comp_id),
+            'skeleton_edge_count': skeleton_edge_count_k,
+            'terminal_count': len(T_k),
+            'terminal_count_structural': len(T_k_structural),
+            'terminal_count_confidence': len(T_k_confidence),
+            'sub_group_count': 0,
+            'steiner_edges_added': 0,
+            'skipped_reason': None,
+        }
+
+        if len(T_k) == 0:
+            report['skipped_reason'] = 'no_terminals'
+            component_reports.append(report)
+            continue
+        if len(T_k) == 1:
+            report['skipped_reason'] = 'too_few_terminals'
+            component_reports.append(report)
+            continue
+
+        G_search = _bounded_search_graph(
+            view=view,
+            seed_vertices=comp_vertices,
+            r_bridge=r_bridge_value,
+            probabilities=probs,
+            skeleton_edge_mask=skel_result.skeleton_edge_mask,
+            epsilon=epsilon_value,
+        )
+
+        assert T_k <= set(G_search.nodes()), f"component {comp_id}: terminals not in bounded search graph"
+
+        sub_components = [frozenset(int(vertex) for vertex in sub) for sub in nx.connected_components(G_search)]
+        sub_component_id_of: dict[int, int] = {}
+        for sub_id, sub_component in enumerate(sub_components):
+            for vertex in sub_component:
+                sub_component_id_of[int(vertex)] = sub_id
+        terminal_groups: dict[int, set[int]] = {}
+        for terminal in T_k:
+            sub_id = sub_component_id_of[int(terminal)]
+            terminal_groups.setdefault(sub_id, set()).add(int(terminal))
+
+        nontrivial_groups = [group for group in terminal_groups.values() if len(group) >= 2]
+        report['sub_group_count'] = len(nontrivial_groups)
+
+        for group in nontrivial_groups:
+            any_terminal = next(iter(group))
+            sub_id = sub_component_id_of[any_terminal]
+            sub_vertices = sub_components[sub_id]
+            G_sub = G_search.subgraph(sub_vertices).copy()
+
+            try:
+                T_steiner = nx.algorithms.approximation.steiner_tree(
+                    G_sub,
+                    terminal_nodes=list(group),
+                    weight='weight',
+                    method='mehlhorn',
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"steiner_tree failed for component {comp_id}, "
+                    f"sub_id {sub_id}: {exc}"
+                ) from exc
+
+            steiner_calls += 1
+
+            added_this_call = 0
+            for u, v, data in T_steiner.edges(data=True):
+                idx = data.get('edge_index')
+                if idx is None:
+                    raise RuntimeError(f"Steiner output edge ({u},{v}) missing 'edge_index'")
+                edge_index = int(idx)
+                if not bridged_mask[edge_index]:
+                    bridged_mask[edge_index] = True
+                    steiner_added_edges_global.add(edge_index)
+                    added_this_call += 1
+
+            report['steiner_edges_added'] += added_this_call
+            steiner_edges_added_total += added_this_call
+
+        component_reports.append(report)
+
+    return BridgingResult(
+        bridged_edge_mask=bridged_mask,
+        steiner_added_edges=frozenset(steiner_added_edges_global),
+        component_reports=tuple(component_reports),
+        component_count=len(components),
+        terminals_total=len(T_global),
+        terminals_dropped_no_component=terminals_dropped_no_component,
+        steiner_calls=steiner_calls,
+        steiner_edges_added_total=steiner_edges_added_total,
+        tau_high=tau_high_value,
+        r_bridge=r_bridge_value,
+        epsilon=epsilon_value,
+    )
+
+
+def diagnose_bridging_application(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+    skel_result: SkeletonResult,
+    *,
+    tau_high: float = 0.70,
+    r_bridge: int = 6,
+    epsilon: float = 1e-3,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+    diagnostics_threshold: float = 0.5,
+) -> tuple[BridgingResult, SeamMaskDiagnostics, SeamMaskDiagnostics]:
+    """
+    Run Stage B and compare the before/after masks topologically.
+    """
+    before_probs = np.where(skel_result.skeleton_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
+    before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
+    bridging = compute_steiner_bridging(
+        view,
+        probabilities,
+        skel_result,
+        tau_high=tau_high,
+        r_bridge=r_bridge,
+        epsilon=epsilon,
+        anchor_boundary=anchor_boundary,
+        extra_anchor_vertices=extra_anchor_vertices,
+        topology=topology,
+    )
+    after_probs = np.where(bridging.bridged_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
+    after = compute_seam_mask_diagnostics(view, after_probs, threshold=diagnostics_threshold)
+    return bridging, before, after
+
+
 def _validated_probability_vector(view: SeamGraphView, probabilities: np.ndarray) -> np.ndarray:
     probs = np.asarray(probabilities, dtype=np.float64)
     if probs.shape != (view.edge_count,):

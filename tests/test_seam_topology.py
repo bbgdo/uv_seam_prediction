@@ -6,10 +6,14 @@ import numpy as np
 
 from models.utils.seam_topology import (
     SeamGraphView,
+    SkeletonResult,
     build_seam_graph_view,
+    build_skeleton_subgraph,
     boundary_vertices_from_topology,
+    compute_steiner_bridging,
     compute_topology_preserving_skeleton,
     compute_seam_mask_diagnostics,
+    diagnose_bridging_application,
     diagnose_skeleton_application,
     diagnostics_to_json_dict,
     lift_edge_probabilities_to_vertices,
@@ -111,6 +115,46 @@ def _distance_to_vertex_set(graph: nx.Graph, source: int, targets: frozenset[int
             visited.add(neighbor_index)
             queue.append((neighbor_index, distance + 1))
     return None
+
+
+def _edge_index(view: SeamGraphView, edge: tuple[int, int]) -> int:
+    edge_key = tuple(sorted(edge))
+    for index, candidate in enumerate(view.unique_edges):
+        if (int(candidate[0]), int(candidate[1])) == edge_key:
+            return int(index)
+    raise AssertionError(f'edge {edge_key} not found')
+
+
+def _manual_skeleton_result(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+    skeleton_edges: set[tuple[int, int]],
+    *,
+    skeleton_vertices: frozenset[int] | None = None,
+) -> SkeletonResult:
+    skeleton_edge_mask = np.zeros(view.edge_count, dtype=bool)
+    touched_vertices: set[int] = set()
+    for edge in skeleton_edges:
+        idx = _edge_index(view, edge)
+        skeleton_edge_mask[idx] = True
+        touched_vertices.update(int(vertex) for vertex in edge)
+    vertex_scores = lift_edge_probabilities_to_vertices(view, probabilities)
+    vertices = frozenset(touched_vertices) if skeleton_vertices is None else skeleton_vertices
+    return SkeletonResult(
+        initial_candidate_vertices=vertices,
+        anchor_vertices=frozenset(),
+        skeleton_vertices=vertices,
+        skeleton_edge_mask=skeleton_edge_mask,
+        vertex_scores=vertex_scores,
+        iterations_performed=0,
+        removals_committed=0,
+        refused_by_anchor=0,
+        refused_by_simple_test=0,
+        refused_by_distance_test=0,
+        tau_low=0.30,
+        d_max=3,
+        anchor_boundary=False,
+    )
 
 
 class SeamTopologyTests(unittest.TestCase):
@@ -693,6 +737,275 @@ class SkeletonTests(unittest.TestCase):
 
         self.assertEqual(boundary_vertices_from_topology(topology), frozenset({0, 1, 2, 3}))
         self.assertEqual(boundary_vertices_from_topology(None), frozenset())
+
+
+class BridgingTests(unittest.TestCase):
+    @staticmethod
+    def _one_edge_gap_fixture() -> tuple[SeamGraphView, CanonicalTopology, np.ndarray, SkeletonResult, int]:
+        _, view = _strip_topology(length=10)
+        skeleton_edges = {
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+        }
+        seam_probabilities = {edge: 0.95 for edge in skeleton_edges}
+        seam_probabilities[(3, 4)] = 0.5
+        probabilities = _edge_probability_vector(view, seam_probabilities, default=0.05)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+        return view, _strip_topology(length=10)[0], probabilities, skel_result, _edge_index(view, (3, 4))
+
+    def test_bridging_validation_errors(self):
+        _, view = _strip_topology(length=2)
+        probabilities = _edge_probability_vector(view, {(0, 1): 0.4}, default=0.0)
+        skel_result = _manual_skeleton_result(view, probabilities, {(0, 1)})
+
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, np.zeros(view.edge_count + 1, dtype=np.float64), skel_result, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            bad = probabilities.copy()
+            bad[0] = np.nan
+            compute_steiner_bridging(view, bad, skel_result, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            bad = probabilities.copy()
+            bad[0] = 1.2
+            compute_steiner_bridging(view, bad, skel_result, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, skel_result, tau_high=-0.1, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, skel_result, r_bridge=-1, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, skel_result, r_bridge=1.5, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, skel_result, epsilon=0.0, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, skel_result, epsilon=1.1, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, skel_result)
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(
+                view,
+                probabilities,
+                skel_result,
+                anchor_boundary=False,
+                extra_anchor_vertices=frozenset({-1}),
+            )
+
+        bad_skel_result = SkeletonResult(
+            initial_candidate_vertices=skel_result.initial_candidate_vertices,
+            anchor_vertices=skel_result.anchor_vertices,
+            skeleton_vertices=skel_result.skeleton_vertices,
+            skeleton_edge_mask=np.zeros(view.edge_count + 1, dtype=bool),
+            vertex_scores=skel_result.vertex_scores,
+            iterations_performed=skel_result.iterations_performed,
+            removals_committed=skel_result.removals_committed,
+            refused_by_anchor=skel_result.refused_by_anchor,
+            refused_by_simple_test=skel_result.refused_by_simple_test,
+            refused_by_distance_test=skel_result.refused_by_distance_test,
+            tau_low=skel_result.tau_low,
+            d_max=skel_result.d_max,
+            anchor_boundary=skel_result.anchor_boundary,
+        )
+        with self.assertRaises(ValueError):
+            compute_steiner_bridging(view, probabilities, bad_skel_result, anchor_boundary=False)
+
+    def test_bridging_no_op_when_no_terminals(self):
+        _, view = _strip_topology(length=4)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (3, 4)}
+        probabilities = _edge_probability_vector(view, {edge: 0.4 for edge in skeleton_edges}, default=0.0)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.terminals_total, 0)
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+        self.assertEqual(result.steiner_calls, 0)
+        self.assertTrue(all(report['skipped_reason'] == 'no_terminals' for report in result.component_reports))
+
+    def test_bridging_single_terminal_component(self):
+        _, view = _strip_topology(length=4)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (3, 4)}
+        probabilities = _edge_probability_vector(view, {edge: 0.4 for edge in skeleton_edges}, default=0.0)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0}),
+        )
+
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+        self.assertEqual(result.steiner_calls, 0)
+        self.assertEqual(result.component_reports[0]['skipped_reason'], 'too_few_terminals')
+
+    def test_bridging_closes_one_edge_gap(self):
+        view, _, probabilities, skel_result, gap_index = self._one_edge_gap_fixture()
+
+        result, before, after = diagnose_bridging_application(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 7}),
+            r_bridge=2,
+        )
+
+        self.assertTrue(result.bridged_edge_mask[gap_index])
+        self.assertIn(gap_index, result.steiner_added_edges)
+        self.assertEqual(len(result.component_reports), 1)
+        self.assertEqual(result.component_reports[0]['sub_group_count'], 1)
+        self.assertEqual(before.component_count, 2)
+        self.assertEqual(after.component_count, 1)
+
+    def test_bridging_respects_r_bridge_radius(self):
+        _, view = _strip_topology(length=14)
+        skeleton_edges = {(0, 1), (1, 2), (11, 12), (12, 13)}
+        probabilities = _edge_probability_vector(view, {edge: 0.4 for edge in skeleton_edges}, default=0.2)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result, before, after = diagnose_bridging_application(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 13}),
+            r_bridge=6,
+        )
+
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+        self.assertEqual([report['sub_group_count'] for report in result.component_reports], [0, 0])
+        self.assertEqual(before.component_count, 2)
+        self.assertEqual(after.component_count, 2)
+
+    def test_bridging_no_cross_component_seam_two_loops(self):
+        topology, view = _strip_topology(length=13)
+        offset = 14
+        loop_edges = {
+            (0, 1),
+            (1, offset + 1),
+            (offset, offset + 1),
+            (0, offset),
+            (12, 13),
+            (13, offset + 13),
+            (offset + 12, offset + 13),
+            (12, offset + 12),
+        }
+        loop_vertices = frozenset(vertex for edge in loop_edges for vertex in edge)
+        probabilities = _edge_probability_vector(view, {edge: 0.95 for edge in loop_edges}, default=0.05)
+
+        skel_result = compute_topology_preserving_skeleton(
+            view,
+            probabilities,
+            tau_low=0.3,
+            d_max=3,
+            anchor_boundary=False,
+            extra_anchor_vertices=loop_vertices,
+            topology=topology,
+        )
+        result, _, after = diagnose_bridging_application(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=loop_vertices,
+            r_bridge=6,
+        )
+
+        allowed_indices = {_edge_index(view, edge) for edge in loop_edges}
+        bridged_indices = set(int(index) for index in np.flatnonzero(result.bridged_edge_mask))
+        self.assertEqual(len(result.component_reports), 2)
+        self.assertTrue(bridged_indices <= allowed_indices)
+        for edge_index in result.steiner_added_edges:
+            u = int(view.unique_edges[edge_index, 0])
+            v = int(view.unique_edges[edge_index, 1])
+            self.assertTrue({u, v} <= set(loop_vertices))
+        self.assertEqual(result.terminals_dropped_no_component, 0)
+        self.assertEqual(after.component_count, 2)
+
+    def test_bridging_routes_through_skeleton_preferentially(self):
+        _, view = _strip_topology(length=4)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (3, 4)}
+        probabilities = _edge_probability_vector(
+            view,
+            {
+                **{edge: 0.95 for edge in skeleton_edges},
+                (0, 5): 0.8,
+                (5, 6): 0.8,
+                (6, 7): 0.8,
+                (7, 8): 0.8,
+                (8, 9): 0.8,
+                (4, 9): 0.8,
+            },
+            default=0.0,
+        )
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 4}),
+            r_bridge=4,
+        )
+
+        self.assertEqual(result.steiner_added_edges, frozenset())
+
+    def test_bridging_superset_invariant(self):
+        rng = np.random.default_rng(4)
+        topology, view = _strip_topology(length=5)
+        probabilities = rng.random(view.edge_count, dtype=np.float64)
+        skel_result = compute_topology_preserving_skeleton(
+            view,
+            probabilities,
+            tau_low=0.3,
+            d_max=3,
+            anchor_boundary=False,
+            topology=topology,
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertTrue(np.all(result.bridged_edge_mask >= skel_result.skeleton_edge_mask))
+        non_skeleton_weights = -np.log(np.maximum(probabilities[~skel_result.skeleton_edge_mask], 1e-3))
+        self.assertTrue(np.all(non_skeleton_weights >= 0.0))
+
+    def test_bridging_drops_confidence_terminals_not_on_skeleton(self):
+        _, view = _strip_topology(length=2)
+        probabilities = _edge_probability_vector(view, {(0, 1): 0.95}, default=0.0)
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            set(),
+            skeleton_vertices=frozenset({0, 1}),
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertGreater(result.terminals_dropped_no_component, 0)
+        self.assertEqual(result.steiner_added_edges, frozenset())
+        self.assertFalse(np.any(result.bridged_edge_mask))
+
+    def test_diagnose_bridging_application_round_trip(self):
+        view, _, probabilities, skel_result, _ = self._one_edge_gap_fixture()
+        skeleton_mask_before = skel_result.skeleton_edge_mask.copy()
+
+        _, before, after = diagnose_bridging_application(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 7}),
+            r_bridge=2,
+        )
+
+        self.assertEqual(before.component_count, 2)
+        self.assertEqual(after.component_count, 1)
+        self.assertTrue(np.array_equal(skel_result.skeleton_edge_mask, skeleton_mask_before))
 
 
 if __name__ == '__main__':
