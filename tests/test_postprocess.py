@@ -133,6 +133,56 @@ class PostprocessTests(unittest.TestCase):
 
         self.assertTrue(np.array_equal(result.final_mask, np.asarray([True, True, True, False, False, False, True, True])))
 
+    def test_stage_e0_collapses_local_parallel_ribbon(self):
+        unique_edges = np.asarray([
+            (0, 1),
+            (1, 2),
+            (0, 3),
+            (3, 2),
+        ], dtype=np.int64)
+        probabilities = np.asarray([0.90, 0.89, 0.90, 0.89], dtype=np.float64)
+
+        result = apply_seam_postprocessing_detailed(
+            topology=None,
+            unique_edges=unique_edges,
+            probabilities=probabilities,
+            threshold=0.5,
+            e0_radius=2,
+            e0_length_penalty=0.05,
+            r_self=0,
+            r_cross=0,
+            garbage_max_edges=0,
+        )
+
+        self.assertEqual(int(result.final_mask.sum()), 2)
+
+    def test_stage_spur_removes_short_bridge_whisker(self):
+        unique_edges = np.asarray([
+            (0, 1),
+            (1, 2),
+            (1, 6),
+            (4, 5),
+            (3, 4),
+            (1, 3),
+        ], dtype=np.int64)
+        probabilities = np.asarray([0.95, 0.94, 0.93, 0.51, 0.06, 0.05], dtype=np.float64)
+
+        result = apply_seam_postprocessing_detailed(
+            topology=None,
+            unique_edges=unique_edges,
+            probabilities=probabilities,
+            threshold=0.5,
+            r_self=0,
+            r_cross=2,
+            force_close_max_edges=5,
+            max_spur_edges=3,
+            spur_mean_conf=0.35,
+            spur_added_fraction_min=0.50,
+            garbage_max_edges=0,
+        )
+
+        self.assertTrue(np.array_equal(result.final_mask, np.asarray([True, True, True, False, False, False])))
+
     def test_simple_api_returns_binary_mask(self):
         unique_edges = np.asarray([
             (0, 1),
@@ -200,8 +250,10 @@ class PostprocessTests(unittest.TestCase):
             self.assertIn('l ', accepted_obj.read_text(encoding='utf-8'))
 
             payload = json.loads(candidates_json.read_text(encoding='utf-8'))
+            self.assertIn('stage_e0', payload)
             self.assertIn('stage_b', payload)
             self.assertIn('stage_c', payload)
+            self.assertIn('stage_spur', payload)
             self.assertIn('top_rejected_bridges', payload)
             self.assertIn('accepted_bridges', payload)
 

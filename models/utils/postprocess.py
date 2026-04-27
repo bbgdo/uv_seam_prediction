@@ -117,10 +117,28 @@ class _BridgeStageStats:
     rejected_by_low_conf_fraction: int = 0
     rejected_by_ambiguity: int = 0
     duplicate_paths_collapsed: int = 0
+    rejected_force_close_empty: int = 0
+    rejected_force_close_third_party_protected: int = 0
     accepted_bridges: int = 0
     accepted_via_force_close: int = 0
     total_new_edges_added: int = 0
     total_components_merged: int = 0
+
+
+@dataclass
+class _StageE0Stats:
+    e0_bands_considered: int = 0
+    e0_bands_collapsed: int = 0
+    e0_edges_removed: int = 0
+    e0_edges_kept: int = 0
+    e0_components_changed: int = 0
+
+
+@dataclass
+class _SpurStageStats:
+    spur_chains_considered: int = 0
+    spur_chains_removed: int = 0
+    spur_edges_removed: int = 0
 
 
 @dataclass(frozen=True)
@@ -154,12 +172,33 @@ class _AcceptedBridgeRecord:
     new_edges: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class _E0BandRecord:
+    component_id: int
+    kept_edge_ids: tuple[int, ...]
+    removed_edge_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _RemovedSpurRecord:
+    source_vertex: int
+    attach_vertex: int
+    chain_edges: tuple[int, ...]
+    mean_conf: float
+    added_fraction: float
+
+
 @dataclass
 class _BridgeDebugExport:
     export_dir: Path
     terminals: list[_BridgeTerminalRecord]
     rejected_bridges: list[_RejectedBridgeRecord]
     accepted_bridges: list[_AcceptedBridgeRecord]
+    e0_bands: list[_E0BandRecord]
+    removed_spurs: list[_RemovedSpurRecord]
+    accepted_bridge_edge_order: list[int]
+    removed_bridge_reasons: dict[int, str]
+    persistence_checks: dict[str, dict[str, Any]]
 
 
 def _canonical_edge_key(a: int, b: int) -> tuple[int, int]:
@@ -521,6 +560,347 @@ def _rank_bridge_candidates(candidates: list[_BridgeCandidate]) -> list[_BridgeC
     return sorted(candidates, key=_bridge_candidate_sort_key)
 
 
+def _subgraph_vertex_degrees(edge_indices: tuple[int, ...], graph: _GraphViews) -> dict[int, int]:
+    return _component_vertex_degrees(edge_indices, graph)
+
+
+def _subgraph_cycle_rank(edge_indices: tuple[int, ...], graph: _GraphViews) -> int:
+    vertex_count = len(_component_vertices(edge_indices, graph))
+    return int(len(edge_indices) - vertex_count + 1)
+
+
+def _seam_edge_neighborhood(
+    seed_edge: int,
+    component_edge_set: set[int],
+    graph: _GraphViews,
+    *,
+    radius: int,
+) -> tuple[int, ...]:
+    band_edges = {int(seed_edge)}
+    queue = deque([(int(seed_edge), 0)])
+    seen = {int(seed_edge)}
+    while queue:
+        edge_idx, depth = queue.popleft()
+        if depth >= radius:
+            continue
+        for neighbor in graph.edge_neighbors[int(edge_idx)]:
+            neighbor = int(neighbor)
+            if neighbor in seen or neighbor not in component_edge_set:
+                continue
+            seen.add(neighbor)
+            band_edges.add(neighbor)
+            queue.append((neighbor, depth + 1))
+    return tuple(sorted(band_edges))
+
+
+def _band_boundary_vertices(
+    band_edges: tuple[int, ...],
+    component_edge_set: set[int],
+    graph: _GraphViews,
+) -> tuple[int, ...]:
+    band_set = set(int(edge_idx) for edge_idx in band_edges)
+    band_degrees = _subgraph_vertex_degrees(band_edges, graph)
+    boundary: set[int] = set()
+    for vertex_idx in _component_vertices(band_edges, graph):
+        incident_component_edges = [
+            int(edge_idx)
+            for edge_idx in graph.vertex_to_edges[int(vertex_idx)]
+            if int(edge_idx) in component_edge_set
+        ]
+        local_degree = int(band_degrees.get(int(vertex_idx), 0))
+        has_external_component_edge = any(edge_idx not in band_set for edge_idx in incident_component_edges)
+        if has_external_component_edge or local_degree != 2:
+            boundary.add(int(vertex_idx))
+    if boundary:
+        return tuple(sorted(boundary))
+    irregular = tuple(sorted(vertex for vertex, degree in band_degrees.items() if degree != 2))
+    if irregular:
+        return irregular
+    return ()
+
+
+def _band_diameter_vertex_pairs(
+    band_edges: tuple[int, ...],
+    graph: _GraphViews,
+) -> list[tuple[int, int]]:
+    band_edge_set = set(int(edge_idx) for edge_idx in band_edges)
+    band_vertices = _component_vertices(band_edges, graph)
+    max_hops = -1
+    pairs: list[tuple[int, int]] = []
+    for index, source_vertex in enumerate(band_vertices):
+        paths = _bounded_shortest_path(
+            graph,
+            np.ones(graph.edge_count, dtype=np.float64),
+            int(source_vertex),
+            set(int(vertex_idx) for vertex_idx in band_vertices[index + 1:]),
+            max_edges=max(len(band_edges), 1),
+            allowed_edges=band_edge_set,
+        )
+        for path in paths:
+            hops = len(path.edge_indices)
+            pair = tuple(sorted((int(path.source_vertex), int(path.target_vertex))))
+            if hops > max_hops:
+                max_hops = hops
+                pairs = [pair]
+            elif hops == max_hops:
+                pairs.append(pair)
+    return sorted(set(pairs))
+
+
+def _band_path_score(
+    edge_indices: tuple[int, ...],
+    probabilities: np.ndarray,
+    *,
+    e0_length_penalty: float,
+) -> float:
+    if not edge_indices:
+        return -np.inf
+    probs = probabilities[np.asarray(edge_indices, dtype=np.int64)]
+    return float(np.sum(probs) - e0_length_penalty * len(edge_indices))
+
+
+def _best_band_representative_path(
+    band_edges: tuple[int, ...],
+    component_edge_set: set[int],
+    graph: _GraphViews,
+    probabilities: np.ndarray,
+    *,
+    e0_length_penalty: float,
+) -> tuple[int, ...]:
+    boundary_vertices = _band_boundary_vertices(band_edges, component_edge_set, graph)
+    keep_costs = (1.0 + float(e0_length_penalty)) - probabilities
+    best_score = -np.inf
+    best_path: tuple[int, ...] = ()
+    band_allowed_edges = set(int(edge_idx) for edge_idx in band_edges)
+    max_edges = max(len(band_edges), 1)
+    terminal_pairs: list[tuple[int, int]] = []
+    if len(boundary_vertices) >= 2:
+        for index, source_vertex in enumerate(boundary_vertices):
+            for target_vertex in boundary_vertices[index + 1:]:
+                terminal_pairs.append((int(source_vertex), int(target_vertex)))
+    else:
+        terminal_pairs.extend(_band_diameter_vertex_pairs(band_edges, graph))
+    for source_vertex, target_vertex in terminal_pairs:
+        paths = _bounded_shortest_path(
+            graph,
+            keep_costs,
+            int(source_vertex),
+            {int(target_vertex)},
+            max_edges=max_edges,
+            allowed_edges=band_allowed_edges,
+        )
+        if not paths:
+            continue
+        path_edges = tuple(int(edge_idx) for edge_idx in paths[0].edge_indices)
+        if not path_edges:
+            continue
+        score = _band_path_score(path_edges, probabilities, e0_length_penalty=float(e0_length_penalty))
+        candidate_key = tuple(int(edge_idx) for edge_idx in path_edges)
+        best_key = tuple(int(edge_idx) for edge_idx in best_path)
+        if (
+            score > best_score
+            or (
+                np.isclose(score, best_score)
+                and (
+                    len(path_edges) < len(best_path)
+                    or (len(path_edges) == len(best_path) and candidate_key < best_key)
+                )
+            )
+        ):
+            best_score = float(score)
+            best_path = path_edges
+    return best_path
+
+
+def _collect_stage_e0_band_keys(
+    component: _SeamComponent,
+    graph: _GraphViews,
+    *,
+    e0_radius: int,
+) -> list[tuple[int, ...]]:
+    component_edge_set = set(int(edge_idx) for edge_idx in component.edge_indices)
+    seen_band_keys: set[tuple[int, ...]] = set()
+    band_keys: list[tuple[int, ...]] = []
+    max_band_edges = max(6, 4 * int(e0_radius) + 4)
+    for seed_edge in component.edge_indices:
+        band_edges = _seam_edge_neighborhood(int(seed_edge), component_edge_set, graph, radius=int(e0_radius))
+        if len(band_edges) < 4 or len(band_edges) > max_band_edges:
+            continue
+        band_degrees = _subgraph_vertex_degrees(band_edges, graph)
+        if _subgraph_cycle_rank(band_edges, graph) < 1 and max(band_degrees.values(), default=0) <= 2:
+            continue
+        band_key = tuple(sorted(int(edge_idx) for edge_idx in band_edges))
+        if band_key in seen_band_keys:
+            continue
+        seen_band_keys.add(band_key)
+        band_keys.append(band_key)
+    band_keys.sort(key=lambda item: (len(item), item))
+    return band_keys
+
+
+def _apply_stage_e0(
+    seam_mask: np.ndarray,
+    graph: _GraphViews,
+    probabilities: np.ndarray,
+    edge_origin: np.ndarray,
+    *,
+    e0_radius: int,
+    e0_length_penalty: float,
+    debug_export: _BridgeDebugExport | None,
+) -> tuple[np.ndarray, _StageE0Stats]:
+    stats = _StageE0Stats()
+    if e0_radius <= 0:
+        return seam_mask.copy(), stats
+
+    working_mask = seam_mask.copy()
+    used_edges: set[int] = set()
+    components_before = _analyze_components(working_mask, graph, probabilities)
+    changed_component_ids: set[int] = set()
+
+    for component in components_before:
+        component_edge_set = set(int(edge_idx) for edge_idx in component.edge_indices)
+        for band_edges in _collect_stage_e0_band_keys(component, graph, e0_radius=int(e0_radius)):
+            if any(int(edge_idx) in used_edges for edge_idx in band_edges):
+                continue
+            if any(not bool(working_mask[int(edge_idx)]) for edge_idx in band_edges):
+                continue
+            stats.e0_bands_considered += 1
+            kept_path = _best_band_representative_path(
+                band_edges,
+                component_edge_set,
+                graph,
+                probabilities,
+                e0_length_penalty=float(e0_length_penalty),
+            )
+            if not kept_path:
+                continue
+            kept_edges = tuple(sorted(int(edge_idx) for edge_idx in kept_path))
+            removed_edges = tuple(
+                int(edge_idx)
+                for edge_idx in band_edges
+                if int(edge_idx) not in set(int(kept) for kept in kept_edges)
+            )
+            if not removed_edges:
+                continue
+            for edge_idx in removed_edges:
+                working_mask[int(edge_idx)] = False
+                used_edges.add(int(edge_idx))
+            for edge_idx in kept_edges:
+                edge_origin[int(edge_idx)] = 'stage_e0'
+                used_edges.add(int(edge_idx))
+            stats.e0_bands_collapsed += 1
+            stats.e0_edges_removed += len(removed_edges)
+            stats.e0_edges_kept += len(kept_edges)
+            changed_component_ids.add(int(component.component_id))
+            _record_e0_band(debug_export, int(component.component_id), kept_edges, removed_edges)
+
+    stats.e0_components_changed = len(changed_component_ids)
+    return working_mask, stats
+
+
+def _walk_spur_chain(
+    start_vertex: int,
+    component_edges: set[int],
+    seam_vertex_degrees: dict[int, int],
+    graph: _GraphViews,
+    *,
+    max_spur_edges: int,
+) -> tuple[int, int, tuple[int, ...]] | None:
+    current_vertex = int(start_vertex)
+    previous_edge = -1
+    chain_edges: list[int] = []
+    while len(chain_edges) < max_spur_edges:
+        available_edges = [
+            int(edge_idx)
+            for edge_idx in graph.vertex_to_edges[current_vertex]
+            if int(edge_idx) in component_edges and int(edge_idx) != previous_edge
+        ]
+        if not available_edges:
+            break
+        if len(chain_edges) > 0 and seam_vertex_degrees.get(current_vertex, 0) != 2:
+            break
+        next_edge = min(available_edges)
+        chain_edges.append(int(next_edge))
+        vi, vj = graph.edge_to_vertices[int(next_edge)]
+        next_vertex = int(vj) if int(vi) == current_vertex else int(vi)
+        previous_edge = int(next_edge)
+        current_vertex = next_vertex
+        if seam_vertex_degrees.get(current_vertex, 0) != 2:
+            break
+    if not chain_edges:
+        return None
+    return int(start_vertex), int(current_vertex), tuple(chain_edges)
+
+
+def _apply_spur_cleanup(
+    seam_mask: np.ndarray,
+    graph: _GraphViews,
+    probabilities: np.ndarray,
+    edge_origin: np.ndarray,
+    *,
+    max_spur_edges: int,
+    spur_mean_conf: float,
+    spur_added_fraction_min: float,
+    debug_export: _BridgeDebugExport | None,
+) -> tuple[np.ndarray, _SpurStageStats, tuple[int, ...]]:
+    stats = _SpurStageStats()
+    if max_spur_edges <= 0:
+        return seam_mask.copy(), stats, ()
+
+    working_mask = seam_mask.copy()
+    removed_edges: set[int] = set()
+    removable_origins = {'bridge_b', 'bridge_c', 'stage_e0', 'stage_e'}
+    components = _analyze_components(working_mask, graph, probabilities)
+    for component in components:
+        seam_vertex_degrees = _component_vertex_degrees(component.edge_indices, graph)
+        component_edges = set(int(edge_idx) for edge_idx in component.edge_indices)
+        leaf_vertices = sorted(
+            int(vertex_idx)
+            for vertex_idx, degree in seam_vertex_degrees.items()
+            if int(degree) == 1
+        )
+        for leaf_vertex in leaf_vertices:
+            walked = _walk_spur_chain(
+                int(leaf_vertex),
+                component_edges,
+                seam_vertex_degrees,
+                graph,
+                max_spur_edges=int(max_spur_edges),
+            )
+            if walked is None:
+                continue
+            source_vertex, attach_vertex, chain_edges = walked
+            if any(int(edge_idx) in removed_edges for edge_idx in chain_edges):
+                continue
+            stats.spur_chains_considered += 1
+            if len(chain_edges) > max_spur_edges:
+                continue
+            if seam_vertex_degrees.get(int(attach_vertex), 0) < 3:
+                continue
+            mean_conf = float(np.mean(probabilities[np.asarray(chain_edges, dtype=np.int64)]))
+            added_fraction = float(np.mean([
+                str(edge_origin[int(edge_idx)]) in removable_origins
+                for edge_idx in chain_edges
+            ]))
+            if mean_conf >= spur_mean_conf or added_fraction < spur_added_fraction_min:
+                continue
+            for edge_idx in chain_edges:
+                working_mask[int(edge_idx)] = False
+                removed_edges.add(int(edge_idx))
+            stats.spur_chains_removed += 1
+            stats.spur_edges_removed += len(chain_edges)
+            _record_removed_spur(
+                debug_export,
+                source_vertex=int(source_vertex),
+                attach_vertex=int(attach_vertex),
+                chain_edges=chain_edges,
+                mean_conf=mean_conf,
+                added_fraction=added_fraction,
+            )
+
+    return working_mask, stats, tuple(sorted(removed_edges))
+
+
 def _log_bridge_stats(stage_name: str, stats: _BridgeStageStats) -> None:
     if not _LOGGER.isEnabledFor(logging.DEBUG):
         return
@@ -558,11 +938,55 @@ def _bridge_stage_stats_payload(stats: _BridgeStageStats) -> dict[str, int]:
         'rejected_by_low_conf_fraction': int(stats.rejected_by_low_conf_fraction),
         'rejected_by_ambiguity': int(stats.rejected_by_ambiguity),
         'duplicate_paths_collapsed': int(stats.duplicate_paths_collapsed),
+        'rejected_force_close_empty': int(stats.rejected_force_close_empty),
+        'rejected_force_close_third_party_protected': int(stats.rejected_force_close_third_party_protected),
         'accepted_bridges': int(stats.accepted_bridges),
         'accepted_via_force_close': int(stats.accepted_via_force_close),
         'total_new_edges_added': int(stats.total_new_edges_added),
         'total_components_merged': int(stats.total_components_merged),
     }
+
+
+def _stage_e0_stats_payload(stats: _StageE0Stats) -> dict[str, int]:
+    return {
+        'e0_bands_considered': int(stats.e0_bands_considered),
+        'e0_bands_collapsed': int(stats.e0_bands_collapsed),
+        'e0_edges_removed': int(stats.e0_edges_removed),
+        'e0_edges_kept': int(stats.e0_edges_kept),
+        'e0_components_changed': int(stats.e0_components_changed),
+    }
+
+
+def _spur_stage_stats_payload(stats: _SpurStageStats) -> dict[str, int]:
+    return {
+        'spur_chains_considered': int(stats.spur_chains_considered),
+        'spur_chains_removed': int(stats.spur_chains_removed),
+        'spur_edges_removed': int(stats.spur_edges_removed),
+    }
+
+
+def _log_stage_e0_stats(stats: _StageE0Stats) -> None:
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    _LOGGER.debug(
+        'Postprocess thickness_collapse stats: bands=%d collapsed=%d edges_removed=%d edges_kept=%d components_changed=%d',
+        int(stats.e0_bands_considered),
+        int(stats.e0_bands_collapsed),
+        int(stats.e0_edges_removed),
+        int(stats.e0_edges_kept),
+        int(stats.e0_components_changed),
+    )
+
+
+def _log_spur_stats(stats: _SpurStageStats) -> None:
+    if not _LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    _LOGGER.debug(
+        'Postprocess spur_cleanup stats: chains=%d removed=%d edges_removed=%d',
+        int(stats.spur_chains_considered),
+        int(stats.spur_chains_removed),
+        int(stats.spur_edges_removed),
+    )
 
 
 def _make_debug_export(debug_export_dir: str | Path | None) -> _BridgeDebugExport | None:
@@ -575,6 +999,11 @@ def _make_debug_export(debug_export_dir: str | Path | None) -> _BridgeDebugExpor
         terminals=[],
         rejected_bridges=[],
         accepted_bridges=[],
+        e0_bands=[],
+        removed_spurs=[],
+        accepted_bridge_edge_order=[],
+        removed_bridge_reasons={},
+        persistence_checks={},
     )
 
 
@@ -636,6 +1065,97 @@ def _record_accepted_bridge(
         target_vertex=int(candidate.target_vertex),
         new_edges=tuple(int(edge_idx) for edge_idx in candidate.new_edges),
     ))
+
+
+def _record_e0_band(
+    debug_export: _BridgeDebugExport | None,
+    component_id: int,
+    kept_edge_ids: tuple[int, ...],
+    removed_edge_ids: tuple[int, ...],
+) -> None:
+    if debug_export is None:
+        return
+    debug_export.e0_bands.append(_E0BandRecord(
+        component_id=int(component_id),
+        kept_edge_ids=tuple(int(edge_idx) for edge_idx in kept_edge_ids),
+        removed_edge_ids=tuple(int(edge_idx) for edge_idx in removed_edge_ids),
+    ))
+
+
+def _record_removed_spur(
+    debug_export: _BridgeDebugExport | None,
+    *,
+    source_vertex: int,
+    attach_vertex: int,
+    chain_edges: tuple[int, ...],
+    mean_conf: float,
+    added_fraction: float,
+) -> None:
+    if debug_export is None:
+        return
+    debug_export.removed_spurs.append(_RemovedSpurRecord(
+        source_vertex=int(source_vertex),
+        attach_vertex=int(attach_vertex),
+        chain_edges=tuple(int(edge_idx) for edge_idx in chain_edges),
+        mean_conf=float(mean_conf),
+        added_fraction=float(added_fraction),
+    ))
+
+
+def _record_accepted_bridge_edges(
+    debug_export: _BridgeDebugExport | None,
+    new_edges: tuple[int, ...],
+) -> None:
+    if debug_export is None:
+        return
+    seen = set(int(edge_idx) for edge_idx in debug_export.accepted_bridge_edge_order)
+    for edge_idx in new_edges:
+        edge_idx = int(edge_idx)
+        if edge_idx not in seen:
+            debug_export.accepted_bridge_edge_order.append(edge_idx)
+            seen.add(edge_idx)
+
+
+def _mark_removed_bridge_edges(
+    debug_export: _BridgeDebugExport | None,
+    removed_edges: tuple[int, ...] | list[int] | np.ndarray,
+    removal_reason: str,
+) -> None:
+    if debug_export is None:
+        return
+    accepted_edges = set(int(edge_idx) for edge_idx in debug_export.accepted_bridge_edge_order)
+    for edge_idx in removed_edges:
+        edge_idx = int(edge_idx)
+        if edge_idx in accepted_edges and edge_idx not in debug_export.removed_bridge_reasons:
+            debug_export.removed_bridge_reasons[edge_idx] = str(removal_reason)
+
+
+def _record_bridge_persistence_checkpoint(
+    debug_export: _BridgeDebugExport | None,
+    checkpoint_name: str,
+    working_seam_mask: np.ndarray,
+    accepted_bridge_edges: set[int],
+) -> None:
+    if debug_export is None:
+        return
+    accepted_edges_sorted = tuple(sorted(int(edge_idx) for edge_idx in accepted_bridge_edges))
+    present_count = sum(1 for edge_idx in accepted_edges_sorted if bool(working_seam_mask[int(edge_idx)]))
+    missing_without_reason = sum(
+        1
+        for edge_idx in accepted_edges_sorted
+        if not bool(working_seam_mask[int(edge_idx)])
+        and int(edge_idx) not in debug_export.removed_bridge_reasons
+    )
+    debug_export.persistence_checks[str(checkpoint_name)] = {
+        'accepted_bridge_edges_total': int(len(accepted_edges_sorted)),
+        'accepted_bridge_edges_present': int(present_count),
+        'accepted_bridge_edges_missing_without_reason': int(missing_without_reason),
+        'removed_edges': {
+            str(int(edge_idx)): debug_export.removed_bridge_reasons[int(edge_idx)]
+            for edge_idx in accepted_edges_sorted
+            if int(edge_idx) in debug_export.removed_bridge_reasons
+        },
+    }
 
 
 def _debug_vertex_coords(graph: _GraphViews, topology: Any) -> np.ndarray:
@@ -705,8 +1225,10 @@ def _rejected_bridge_sort_key(record: _RejectedBridgeRecord) -> tuple[float, int
 
 def _write_bridge_candidates_json(
     path: Path,
+    stage_e0_stats: _StageE0Stats,
     stage_b_stats: _BridgeStageStats,
     stage_c_stats: _BridgeStageStats,
+    spur_stats: _SpurStageStats,
     debug_export: _BridgeDebugExport,
     rejected_limit: int = 20,
 ) -> None:
@@ -726,8 +1248,33 @@ def _write_bridge_candidates_json(
         for record in sorted(debug_export.rejected_bridges, key=_rejected_bridge_sort_key)[:rejected_limit]
     ]
     payload = {
+        'stage_e0': _stage_e0_stats_payload(stage_e0_stats),
         'stage_b': _bridge_stage_stats_payload(stage_b_stats),
         'stage_c': _bridge_stage_stats_payload(stage_c_stats),
+        'stage_spur': _spur_stage_stats_payload(spur_stats),
+        'bridge_persistence_summary': {
+            'accepted_bridge_edges_total': int(
+                debug_export.persistence_checks.get('before_final_return', {}).get(
+                    'accepted_bridge_edges_total',
+                    len(debug_export.accepted_bridge_edge_order),
+                )
+            ),
+            'accepted_bridge_edges_present_after_stage_b': int(
+                debug_export.persistence_checks.get('end_of_stage_b', {}).get('accepted_bridge_edges_present', 0)
+            ),
+            'accepted_bridge_edges_present_after_stage_c': int(
+                debug_export.persistence_checks.get('end_of_stage_c', {}).get('accepted_bridge_edges_present', 0)
+            ),
+            'accepted_bridge_edges_present_before_return': int(
+                debug_export.persistence_checks.get('before_final_return', {}).get('accepted_bridge_edges_present', 0)
+            ),
+            'accepted_bridge_edges_missing_without_reason': int(
+                debug_export.persistence_checks.get('before_final_return', {}).get(
+                    'accepted_bridge_edges_missing_without_reason',
+                    0,
+                )
+            ),
+        },
         'terminal_groups': [
             {
                 'stage': record.stage_name,
@@ -747,6 +1294,25 @@ def _write_bridge_candidates_json(
             }
             for record in debug_export.accepted_bridges
         ],
+        'e0_bands': [
+            {
+                'component_id': int(record.component_id),
+                'kept_edge_ids': [int(edge_idx) for edge_idx in record.kept_edge_ids],
+                'removed_edge_ids': [int(edge_idx) for edge_idx in record.removed_edge_ids],
+            }
+            for record in debug_export.e0_bands
+        ],
+        'removed_spurs': [
+            {
+                'source_vertex': int(record.source_vertex),
+                'attach_vertex': int(record.attach_vertex),
+                'chain_edges': [int(edge_idx) for edge_idx in record.chain_edges],
+                'mean_conf': float(record.mean_conf),
+                'added_fraction': float(record.added_fraction),
+            }
+            for record in debug_export.removed_spurs
+        ],
+        'bridge_persistence': debug_export.persistence_checks,
         'top_rejected_bridges': rejected_rows,
     }
     path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
@@ -756,8 +1322,10 @@ def _write_bridge_debug_exports(
     debug_export: _BridgeDebugExport | None,
     topology: Any,
     graph: _GraphViews,
+    stage_e0_stats: _StageE0Stats,
     stage_b_stats: _BridgeStageStats,
     stage_c_stats: _BridgeStageStats,
+    spur_stats: _SpurStageStats,
 ) -> None:
     if debug_export is None:
         return
@@ -771,8 +1339,10 @@ def _write_bridge_debug_exports(
     )
     _write_bridge_candidates_json(
         debug_export.export_dir / 'bridge_candidates.json',
+        stage_e0_stats,
         stage_b_stats,
         stage_c_stats,
+        spur_stats,
         debug_export,
     )
 
@@ -798,6 +1368,7 @@ def _filter_bridge_candidate(
     new_edges = _path_new_edges_from_indices(path.edge_indices, seam_mask)
     if not new_edges:
         stage_stats.rejected_no_new_edges += 1
+        stage_stats.rejected_force_close_empty += 1
         _record_rejected_bridge(
             debug_export,
             stage_name,
@@ -827,6 +1398,7 @@ def _filter_bridge_candidate(
     allowed_component_ids = {int(source_component_id)}
     if target_component_id is not None:
         allowed_component_ids.add(int(target_component_id))
+    is_force_close = len(new_edges) <= force_close_max_edges
     if _path_uses_blocked_third_party_seam(
         path.edge_indices,
         seam_mask,
@@ -835,6 +1407,8 @@ def _filter_bridge_candidate(
         blocked_component_ids,
     ):
         stage_stats.rejected_by_third_party_protected += 1
+        if is_force_close:
+            stage_stats.rejected_force_close_third_party_protected += 1
         _record_rejected_bridge(
             debug_export,
             stage_name,
@@ -849,8 +1423,22 @@ def _filter_bridge_candidate(
         return None
     mean_bridge_conf = float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)]))
     low_conf_fraction = float(np.mean(probabilities[np.asarray(new_edges, dtype=np.int64)] < conf_floor))
-    accepted_via_force_close = len(new_edges) <= force_close_max_edges
-    if not accepted_via_force_close and mean_bridge_conf < tau_bridge:
+    accepted_via_force_close = is_force_close
+    if accepted_via_force_close:
+        return _BridgeCandidate(
+            source_component_id=int(source_component_id),
+            target_component_id=None if target_component_id is None else int(target_component_id),
+            source_vertex=int(path.source_vertex),
+            target_vertex=int(path.target_vertex),
+            edge_indices=tuple(int(edge_idx) for edge_idx in path.edge_indices),
+            new_edges=tuple(int(edge_idx) for edge_idx in new_edges),
+            path_key=_candidate_path_key(new_edges),
+            total_cost=float(path.total_cost),
+            mean_bridge_conf=mean_bridge_conf,
+            low_conf_fraction=low_conf_fraction,
+            accepted_via_force_close=True,
+        )
+    if mean_bridge_conf < tau_bridge:
         stage_stats.rejected_by_mean_conf += 1
         _record_rejected_bridge(
             debug_export,
@@ -1042,16 +1630,16 @@ def _apply_band_collapse(
     r_band: int,
     eta_main: float,
     r_cross: int,
-) -> tuple[np.ndarray, tuple[int, ...]]:
+) -> tuple[np.ndarray, tuple[int, ...], tuple[int, ...]]:
     if component.edge_count > snap_max_edges:
-        return mask.copy(), ()
+        return mask.copy(), (), ()
     if frozenset(component.edge_indices) in preserved_loops:
-        return mask.copy(), ()
+        return mask.copy(), (), ()
 
     distance_map = _edge_distance_map(main_component.edge_indices, graph.edge_neighbors)
     distance_to_main = _component_distance_to_edges(component, distance_map)
     if distance_to_main is None or distance_to_main > r_snap:
-        return mask.copy(), ()
+        return mask.copy(), (), ()
 
     attachment_paths = _lowest_attachment_paths(component, main_component, graph, edge_costs, mask, r_cross=r_cross)
     distinct_targets: list[_PathCandidate] = []
@@ -1064,7 +1652,7 @@ def _apply_band_collapse(
         if len(distinct_targets) == 2:
             break
     if len(distinct_targets) < 2:
-        return mask.copy(), ()
+        return mask.copy(), (), ()
 
     attachment_edges = distinct_targets[0].edge_indices + distinct_targets[1].edge_indices
     band_edges = set(_collect_band_edges(
@@ -1085,7 +1673,7 @@ def _apply_band_collapse(
         allowed_edges=band_edges,
     )
     if not backbone_candidates:
-        return mask.copy(), ()
+        return mask.copy(), (), ()
 
     backbone_edges = set(int(edge_idx) for edge_idx in backbone_candidates[0].edge_indices)
     backbone_edges.update(int(edge_idx) for edge_idx in attachment_edges)
@@ -1100,7 +1688,7 @@ def _apply_band_collapse(
         removed.append(int(edge_idx))
     for edge_idx in backbone_edges:
         out[int(edge_idx)] = True
-    return out, tuple(sorted(removed))
+    return out, tuple(sorted(removed)), tuple(sorted(int(edge_idx) for edge_idx in backbone_edges))
 
 
 def _safe_loop_signature(component: _SeamComponent) -> frozenset[int]:
@@ -1211,10 +1799,10 @@ def apply_seam_postprocessing_detailed(
     *,
     seam_threshold: float | None = None,
     alpha_cost: float = 0.5,
-    tau_bridge: float = 0.28,
+    tau_bridge: float = 0.20,
     conf_floor: float = 0.10,
     max_low_conf_fraction: float = 0.50,
-    force_close_max_edges: int = 3,
+    force_close_max_edges: int = 5,
     lambda_off: float = 0.75,
     r_self: int = 8,
     r_cross: int = 10,
@@ -1228,6 +1816,8 @@ def apply_seam_postprocessing_detailed(
     protect_rel_frac: float = 0.20,
     garbage_max_edges: int = 5,
     garbage_max_mass: float = 2.5,
+    e0_radius: int = 2,
+    e0_length_penalty: float = 0.05,
     r_snap: int = 3,
     snap_max_edges: int = 10,
     r_band: int = 2,
@@ -1240,8 +1830,10 @@ def apply_seam_postprocessing_detailed(
     max_island_edges: int | None = None,
     island_attach_hops: int | None = None,
     keep_small_cycle_conf: float | None = None,
-    max_spur_edges: int = 2,
+    max_spur_edges: int = 3,
+    spur_mean_conf: float | None = None,
     spur_mean_max: float = 0.50,
+    spur_added_fraction_min: float = 0.50,
     bridge_lambda: float | None = None,
     max_bridge_edges: int | None = None,
     bridge_min_mean_conf: float | None = None,
@@ -1268,8 +1860,6 @@ def apply_seam_postprocessing_detailed(
         max_island_edges,
         island_attach_hops,
         keep_small_cycle_conf,
-        max_spur_edges,
-        spur_mean_max,
         bridge_lambda,
         max_bridge_edges,
         bridge_min_mean_conf,
@@ -1290,9 +1880,11 @@ def apply_seam_postprocessing_detailed(
     )
 
     seam_threshold_value = float(threshold if seam_threshold is None else seam_threshold)
+    spur_mean_conf_value = float(spur_mean_max if spur_mean_conf is None else spur_mean_conf)
     _validate_probability_threshold('threshold', seam_threshold_value)
     _validate_probability_threshold('tau_bridge', float(tau_bridge))
     _validate_probability_threshold('conf_floor', float(conf_floor))
+    _validate_probability_threshold('spur_mean_conf', spur_mean_conf_value)
     if alpha_cost < 0.0:
         raise ValueError(f'alpha_cost must be non-negative, got {alpha_cost}')
     if force_close_max_edges < 0:
@@ -1325,10 +1917,18 @@ def apply_seam_postprocessing_detailed(
         raise ValueError(f'protect_rel_frac must be non-negative, got {protect_rel_frac}')
     if garbage_max_mass < 0.0:
         raise ValueError(f'garbage_max_mass must be non-negative, got {garbage_max_mass}')
-    if garbage_max_edges < 0 or r_snap < 0 or snap_max_edges < 0 or r_band < 0:
+    if garbage_max_edges < 0 or e0_radius < 0 or r_snap < 0 or snap_max_edges < 0 or r_band < 0:
         raise ValueError('graph-radius parameters must be non-negative')
+    if e0_length_penalty < 0.0:
+        raise ValueError(f'e0_length_penalty must be non-negative, got {e0_length_penalty}')
     if eta_main < 0.0:
         raise ValueError(f'eta_main must be non-negative, got {eta_main}')
+    if max_spur_edges < 0:
+        raise ValueError(f'max_spur_edges must be non-negative, got {max_spur_edges}')
+    if spur_added_fraction_min < 0.0 or spur_added_fraction_min > 1.0:
+        raise ValueError(
+            f'spur_added_fraction_min must be a finite value in [0, 1], got {spur_added_fraction_min}'
+        )
 
     probs = _as_probability_array(probabilities)
     edges = _as_unique_edges(unique_edges)
@@ -1360,17 +1960,19 @@ def apply_seam_postprocessing_detailed(
     debug_export = _make_debug_export(debug_export_dir)
 
     threshold_mask = probs >= seam_threshold_value
-    current_mask = threshold_mask.copy()
+    working_seam_mask = threshold_mask.copy()
     added_bridge_edges: set[int] = set()
+    stage_b_accepted_bridge_edges: set[int] = set()
     preserved_loops: set[frozenset[int]] = set()
     failed_self_bridges: set[frozenset[int]] = set()
     failed_cross_bridges: set[frozenset[int]] = set()
     pruned_edges: set[int] = set()
     pruned_component_count = 0
+    edge_origin = np.full(len(edges), 'threshold', dtype=object)
 
     _log_stage_summary(
         'threshold',
-        current_mask,
+        working_seam_mask,
         graph,
         probs,
         deleted_components=0,
@@ -1380,9 +1982,32 @@ def apply_seam_postprocessing_detailed(
         protect_rel_frac=float(protect_rel_frac),
     )
 
+    # Stage E0
+    working_seam_mask, stage_e0_stats = _apply_stage_e0(
+        working_seam_mask,
+        graph,
+        probs,
+        edge_origin,
+        e0_radius=int(e0_radius),
+        e0_length_penalty=float(e0_length_penalty),
+        debug_export=debug_export,
+    )
+    _log_stage_e0_stats(stage_e0_stats)
+    _log_stage_summary(
+        'pre_bridge_thickness_collapse',
+        working_seam_mask,
+        graph,
+        probs,
+        deleted_components=0,
+        deleted_edges=int(stage_e0_stats.e0_edges_removed),
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
+
     # Stage B
     stage_b_stats = _BridgeStageStats()
-    initial_components = _analyze_components(current_mask, graph, probs)
+    initial_components = _analyze_components(working_seam_mask, graph, probs)
     initial_edge_component_ids = _build_edge_component_ids(initial_components, graph.edge_count)
     main_component = _choose_main_open_component(initial_components)
     main_component_id = None if main_component is None else int(main_component.component_id)
@@ -1434,7 +2059,7 @@ def apply_seam_postprocessing_detailed(
                 stage_b_stats.shortest_paths_found += 1
                 candidate = _filter_bridge_candidate(
                     paths[0],
-                    current_mask,
+                    working_seam_mask,
                     probs,
                     initial_edge_component_ids,
                     stage_b_stats,
@@ -1463,13 +2088,16 @@ def apply_seam_postprocessing_detailed(
         if not ranked_candidates:
             failed_self_bridges.add(signature)
             continue
-        best_candidate = ranked_candidates[0]
+        force_close_candidates = [candidate for candidate in ranked_candidates if candidate.accepted_via_force_close]
+        best_candidate = force_close_candidates[0] if force_close_candidates else ranked_candidates[0]
         ambiguity_competitor = _find_ambiguity_competitor(
             best_candidate,
             ranked_candidates,
             ambiguity_same_path_jaccard=float(ambiguity_same_path_jaccard),
         )
         if (
+            not best_candidate.accepted_via_force_close
+            and
             ambiguity_competitor is not None
             and best_candidate.mean_bridge_conf < ambiguity_competitor.mean_bridge_conf + float(ambiguity_margin)
         ):
@@ -1495,28 +2123,32 @@ def apply_seam_postprocessing_detailed(
             failed_self_bridges.add(signature)
             continue
         for edge_idx in best_candidate.new_edges:
-            current_mask[int(edge_idx)] = True
+            working_seam_mask[int(edge_idx)] = True
+            edge_origin[int(edge_idx)] = 'bridge_b'
             added_bridge_edges.add(int(edge_idx))
+            stage_b_accepted_bridge_edges.add(int(edge_idx))
+        _record_accepted_bridge_edges(debug_export, best_candidate.new_edges)
         stage_b_stats.accepted_bridges += 1
         if best_candidate.accepted_via_force_close:
             stage_b_stats.accepted_via_force_close += 1
         stage_b_stats.total_new_edges_added += len(best_candidate.new_edges)
         _record_accepted_bridge(debug_export, 'stage_b', best_candidate)
-        updated_components = _analyze_components(current_mask, graph, probs)
+        updated_components = _analyze_components(working_seam_mask, graph, probs)
         for updated in updated_components:
             if set(component.edge_indices).issubset(set(updated.edge_indices)) and updated.is_closed:
                 preserved_loops.add(_safe_loop_signature(updated))
                 break
 
     stage_b_stats.total_components_merged += max(
-        len(initial_components) - len(_analyze_components(current_mask, graph, probs)),
+        len(initial_components) - len(_analyze_components(working_seam_mask, graph, probs)),
         0,
     )
-    stage_b_mask = current_mask.copy()
+    _record_bridge_persistence_checkpoint(debug_export, 'end_of_stage_b', working_seam_mask, stage_b_accepted_bridge_edges)
+    stage_b_mask = working_seam_mask.copy()
     _log_bridge_stats('self_bridge', stage_b_stats)
     _log_stage_summary(
         'self_bridge',
-        current_mask,
+        working_seam_mask,
         graph,
         probs,
         deleted_components=0,
@@ -1531,7 +2163,7 @@ def apply_seam_postprocessing_detailed(
     bridge_count = int(stage_b_stats.accepted_bridges)
     iteration_cap = 8
     for _iteration in range(iteration_cap):
-        components = _analyze_components(current_mask, graph, probs)
+        components = _analyze_components(working_seam_mask, graph, probs)
         main_component = _choose_main_open_component(components)
         if main_component is None:
             break
@@ -1593,7 +2225,7 @@ def apply_seam_postprocessing_detailed(
                         stage_c_stats.shortest_paths_found += 1
                         candidate = _filter_bridge_candidate(
                             paths[0],
-                            current_mask,
+                            working_seam_mask,
                             probs,
                             edge_component_ids,
                             stage_c_stats,
@@ -1622,13 +2254,16 @@ def apply_seam_postprocessing_detailed(
             if not ranked_candidates:
                 failed_cross_bridges.add(signature)
                 continue
-            best_candidate = ranked_candidates[0]
+            force_close_candidates = [candidate for candidate in ranked_candidates if candidate.accepted_via_force_close]
+            best_candidate = force_close_candidates[0] if force_close_candidates else ranked_candidates[0]
             ambiguity_competitor = _find_ambiguity_competitor(
                 best_candidate,
                 ranked_candidates,
                 ambiguity_same_path_jaccard=float(ambiguity_same_path_jaccard),
             )
             if (
+                not best_candidate.accepted_via_force_close
+                and
                 ambiguity_competitor is not None
                 and best_candidate.mean_bridge_conf < ambiguity_competitor.mean_bridge_conf + float(ambiguity_margin)
             ):
@@ -1664,8 +2299,10 @@ def apply_seam_postprocessing_detailed(
                 continue
             accepted_sources.add(int(candidate.source_component_id))
             for edge_idx in candidate.new_edges:
-                current_mask[int(edge_idx)] = True
+                working_seam_mask[int(edge_idx)] = True
+                edge_origin[int(edge_idx)] = 'bridge_c'
                 added_bridge_edges.add(int(edge_idx))
+            _record_accepted_bridge_edges(debug_export, candidate.new_edges)
             stage_c_stats.accepted_bridges += 1
             if candidate.accepted_via_force_close:
                 stage_c_stats.accepted_via_force_close += 1
@@ -1673,15 +2310,17 @@ def apply_seam_postprocessing_detailed(
             _record_accepted_bridge(debug_export, 'stage_c', candidate)
             bridge_count += 1
             any_accepted = True
+            break
         if not any_accepted:
             break
-        component_count_after = len(_analyze_components(current_mask, graph, probs))
+        component_count_after = len(_analyze_components(working_seam_mask, graph, probs))
         stage_c_stats.total_components_merged += max(component_count_before - component_count_after, 0)
 
+    _record_bridge_persistence_checkpoint(debug_export, 'end_of_stage_c', working_seam_mask, added_bridge_edges)
     _log_bridge_stats('cross_bridge', stage_c_stats)
     _log_stage_summary(
         'cross_bridge',
-        current_mask,
+        working_seam_mask,
         graph,
         probs,
         deleted_components=0,
@@ -1692,7 +2331,7 @@ def apply_seam_postprocessing_detailed(
     )
 
     # Stage D
-    components_after_cross = _analyze_components(current_mask, graph, probs)
+    components_after_cross = _analyze_components(working_seam_mask, graph, probs)
     main_component = _choose_main_open_component(components_after_cross)
     stage_d_deleted_components = 0
     stage_d_deleted_edges = 0
@@ -1709,7 +2348,8 @@ def apply_seam_postprocessing_detailed(
             garbage_max_mass=float(garbage_max_mass),
         ):
             continue
-        current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+        working_seam_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+        _mark_removed_bridge_edges(debug_export, component.edge_indices, 'removed_by_other_named_stage')
         pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
         pruned_component_count += 1
         stage_d_deleted_components += 1
@@ -1717,7 +2357,7 @@ def apply_seam_postprocessing_detailed(
 
     _log_stage_summary(
         'garbage_collect',
-        current_mask,
+        working_seam_mask,
         graph,
         probs,
         deleted_components=stage_d_deleted_components,
@@ -1727,8 +2367,35 @@ def apply_seam_postprocessing_detailed(
         protect_rel_frac=float(protect_rel_frac),
     )
 
+    # Stage Spur
+    working_seam_mask, spur_stats, spur_removed_edges = _apply_spur_cleanup(
+        working_seam_mask,
+        graph,
+        probs,
+        edge_origin,
+        max_spur_edges=int(max_spur_edges),
+        spur_mean_conf=spur_mean_conf_value,
+        spur_added_fraction_min=float(spur_added_fraction_min),
+        debug_export=debug_export,
+    )
+    if spur_removed_edges:
+        _mark_removed_bridge_edges(debug_export, spur_removed_edges, 'removed_by_spur_cleanup')
+        pruned_edges.update(int(edge_idx) for edge_idx in spur_removed_edges)
+    _log_spur_stats(spur_stats)
+    _log_stage_summary(
+        'spur_cleanup',
+        working_seam_mask,
+        graph,
+        probs,
+        deleted_components=0,
+        deleted_edges=int(spur_stats.spur_edges_removed),
+        protect_min_edges=int(protect_min_edges),
+        protect_min_mass=float(protect_min_mass),
+        protect_rel_frac=float(protect_rel_frac),
+    )
+
     # Stage E
-    components_before_snap = _analyze_components(current_mask, graph, probs)
+    components_before_snap = _analyze_components(working_seam_mask, graph, probs)
     main_component = _choose_main_open_component(components_before_snap)
     stage_e_deleted_edges = 0
     if main_component is not None:
@@ -1743,8 +2410,8 @@ def apply_seam_postprocessing_detailed(
                 protect_rel_frac=float(protect_rel_frac),
             ):
                 continue
-            current_mask, removed = _apply_band_collapse(
-                current_mask,
+            working_seam_mask, removed, kept_backbone = _apply_band_collapse(
+                working_seam_mask,
                 component,
                 main_component,
                 graph,
@@ -1757,12 +2424,15 @@ def apply_seam_postprocessing_detailed(
                 r_cross=int(r_cross),
             )
             if removed:
+                _mark_removed_bridge_edges(debug_export, removed, 'removed_by_stage_e')
                 pruned_edges.update(int(edge_idx) for edge_idx in removed)
                 stage_e_deleted_edges += len(removed)
+            for edge_idx in kept_backbone:
+                edge_origin[int(edge_idx)] = 'stage_e'
 
     _log_stage_summary(
         'band_collapse',
-        current_mask,
+        working_seam_mask,
         graph,
         probs,
         deleted_components=0,
@@ -1773,7 +2443,7 @@ def apply_seam_postprocessing_detailed(
     )
 
     # Stage F
-    final_components = _analyze_components(current_mask, graph, probs)
+    final_components = _analyze_components(working_seam_mask, graph, probs)
     main_component = _choose_main_open_component(final_components)
     stage_f_deleted_components = 0
     stage_f_deleted_edges = 0
@@ -1790,18 +2460,28 @@ def apply_seam_postprocessing_detailed(
             garbage_max_mass=float(garbage_max_mass),
         ):
             continue
-        current_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+        working_seam_mask[np.asarray(component.edge_indices, dtype=np.int64)] = False
+        _mark_removed_bridge_edges(debug_export, component.edge_indices, 'removed_by_final_cleanup')
         pruned_edges.update(int(edge_idx) for edge_idx in component.edge_indices)
         pruned_component_count += 1
         stage_f_deleted_components += 1
         stage_f_deleted_edges += component.edge_count
 
-    final_components = _analyze_components(current_mask, graph, probs)
+    final_components = _analyze_components(working_seam_mask, graph, probs)
     open_main = _choose_main_open_component(final_components)
-    _write_bridge_debug_exports(debug_export, topology, graph, stage_b_stats, stage_c_stats)
+    _record_bridge_persistence_checkpoint(debug_export, 'before_final_return', working_seam_mask, added_bridge_edges)
+    _write_bridge_debug_exports(
+        debug_export,
+        topology,
+        graph,
+        stage_e0_stats,
+        stage_b_stats,
+        stage_c_stats,
+        spur_stats,
+    )
     _log_stage_summary(
         'final_cleanup',
-        current_mask,
+        working_seam_mask,
         graph,
         probs,
         deleted_components=stage_f_deleted_components,
@@ -1820,7 +2500,7 @@ def apply_seam_postprocessing_detailed(
         threshold_mask=threshold_mask,
         skeleton_mask=stage_b_mask,
         steiner_mask=bridge_mask,
-        final_mask=current_mask.copy(),
+        final_mask=working_seam_mask.copy(),
         skeleton_deleted_vertices=(),
         steiner_added_edges=tuple(sorted(added_bridge_edges)),
         pruned_edge_indices=tuple(sorted(pruned_edges)),

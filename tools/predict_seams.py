@@ -23,6 +23,11 @@ from models.baselines.registry import get_baseline  # noqa: E402
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa: E402
 from models.meshcnn_full.model import MeshCNNSegmenter  # noqa: E402
 from models.utils.postprocess import apply_seam_postprocessing  # noqa: E402
+from models.utils.seam_topology import (  # noqa: E402
+    build_seam_graph_view,
+    compute_seam_mask_diagnostics,
+    diagnostics_to_json_dict,
+)
 from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
@@ -61,10 +66,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--postprocess', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--postprocess-seam-threshold', type=float, default=0.50)
     parser.add_argument('--postprocess-alpha-cost', type=float, default=0.50)
-    parser.add_argument('--postprocess-tau-bridge', type=float, default=0.28)
+    parser.add_argument('--postprocess-tau-bridge', type=float, default=0.20)
     parser.add_argument('--postprocess-conf-floor', type=float, default=0.10)
     parser.add_argument('--postprocess-max-low-conf-fraction', type=float, default=0.50)
-    parser.add_argument('--postprocess-force-close-max-edges', type=int, default=3)
+    parser.add_argument('--postprocess-force-close-max-edges', type=int, default=5)
+    parser.add_argument('--postprocess-e0-radius', type=int, default=2)
+    parser.add_argument('--postprocess-e0-length-penalty', type=float, default=0.05)
     parser.add_argument('--postprocess-r-self', type=int, default=8)
     parser.add_argument('--postprocess-r-cross', type=int, default=10)
     parser.add_argument('--postprocess-ambiguity-margin', type=float, default=0.05)
@@ -73,6 +80,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--postprocess-snap-max-edges', type=int, default=12)
     parser.add_argument('--postprocess-r-band', type=int, default=2)
     parser.add_argument('--postprocess-eta-main', type=float, default=0.35)
+    parser.add_argument('--postprocess-max-spur-edges', type=int, default=3)
+    parser.add_argument('--postprocess-spur-mean-conf', type=float, default=0.35)
+    parser.add_argument('--postprocess-spur-added-fraction-min', type=float, default=0.50)
     return parser.parse_args(argv)
 
 
@@ -125,6 +135,8 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
         'conf_floor': float(args.postprocess_conf_floor),
         'max_low_conf_fraction': float(args.postprocess_max_low_conf_fraction),
         'force_close_max_edges': int(args.postprocess_force_close_max_edges),
+        'e0_radius': int(args.postprocess_e0_radius),
+        'e0_length_penalty': float(args.postprocess_e0_length_penalty),
         'r_self': int(args.postprocess_r_self),
         'r_cross': int(args.postprocess_r_cross),
         'ambiguity_margin': float(args.postprocess_ambiguity_margin),
@@ -133,6 +145,9 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
         'snap_max_edges': int(args.postprocess_snap_max_edges),
         'r_band': int(args.postprocess_r_band),
         'eta_main': float(args.postprocess_eta_main),
+        'max_spur_edges': int(args.postprocess_max_spur_edges),
+        'spur_mean_conf': float(args.postprocess_spur_mean_conf),
+        'spur_added_fraction_min': float(args.postprocess_spur_added_fraction_min),
     }
 
 
@@ -646,7 +661,14 @@ def _json_vector(values: np.ndarray) -> list[float | None]:
     return [_json_float(value) for value in np.asarray(values, dtype=np.float64).reshape(-1)]
 
 
-def build_mesh_diagnostics(feature_mesh: trimesh.Trimesh, edge_features: np.ndarray) -> dict[str, Any]:
+def build_mesh_diagnostics(
+    feature_mesh: trimesh.Trimesh,
+    edge_features: np.ndarray,
+    probabilities: np.ndarray | None = None,
+    threshold: float | None = None,
+    topology: CanonicalTopology | None = None,
+    unique_edges: np.ndarray | None = None,
+) -> dict[str, Any]:
     vertices = np.asarray(feature_mesh.vertices, dtype=np.float64)
     faces = np.asarray(feature_mesh.faces, dtype=np.int64)
     if len(vertices):
@@ -661,7 +683,7 @@ def build_mesh_diagnostics(feature_mesh: trimesh.Trimesh, edge_features: np.ndar
     diag = float(np.linalg.norm(size))
     features = np.asarray(edge_features, dtype=np.float64)
     finite_features = features[np.isfinite(features)]
-    return {
+    diagnostics = {
         'coordinate_space': {
             'exported_basis': 'mesh_local',
             'object_matrix_applied': False,
@@ -685,6 +707,26 @@ def build_mesh_diagnostics(feature_mesh: trimesh.Trimesh, edge_features: np.ndar
             'mean': _json_float(finite_features.mean()) if finite_features.size else None,
         },
     }
+    if (
+        probabilities is not None
+        and threshold is not None
+        and topology is not None
+        and unique_edges is not None
+    ):
+        seam_graph_view = build_seam_graph_view(
+            topology=topology,
+            unique_edges=np.asarray(unique_edges, dtype=np.int64),
+        )
+        diagnostics['seam_topology'] = diagnostics_to_json_dict(
+            compute_seam_mask_diagnostics(
+                view=seam_graph_view,
+                probabilities=np.asarray(probabilities, dtype=np.float64),
+                threshold=float(threshold),
+            )
+        )
+    else:
+        diagnostics['seam_topology'] = None
+    return diagnostics
 
 
 def build_output_payload(
@@ -831,8 +873,6 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
             rng_seed=args.endpoint_seed,
         )
     assert_canonical_edge_order(unique_edges, topology.canonical_edges, mesh_path)
-    diagnostics = build_mesh_diagnostics(feature_mesh, edge_features)
-
     model = build_prediction_model(model_type, model_kwargs)
     weights_payload = load_weights_payload(weights_path, device)
     state_dict = extract_state_dict(weights_payload)
@@ -860,6 +900,14 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
             logits = model(dual_data.x.to(device), dual_data.edge_index.to(device))
         probs = torch.sigmoid(logits).cpu().numpy()
     probabilities = normalize_probabilities(probs, len(unique_edges))
+    diagnostics = build_mesh_diagnostics(
+        feature_mesh,
+        edge_features,
+        probabilities=probabilities,
+        threshold=threshold,
+        topology=topology,
+        unique_edges=unique_edges,
+    )
     if bool(getattr(args, 'postprocess', True)):
         seam_mask = apply_seam_postprocessing(
             topology=topology,

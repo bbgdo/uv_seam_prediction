@@ -57,10 +57,12 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             use_post_processing=True,
             postprocess_seam_threshold=0.5,
             postprocess_alpha_cost=0.5,
-            postprocess_tau_bridge=0.28,
+            postprocess_tau_bridge=0.20,
             postprocess_conf_floor=0.10,
             postprocess_max_low_conf_fraction=0.50,
-            postprocess_force_close_max_edges=3,
+            postprocess_force_close_max_edges=5,
+            postprocess_e0_radius=2,
+            postprocess_e0_length_penalty=0.05,
             postprocess_r_self=8,
             postprocess_r_cross=10,
             postprocess_ambiguity_margin=0.05,
@@ -69,6 +71,9 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             postprocess_snap_max_edges=12,
             postprocess_r_band=2,
             postprocess_eta_main=0.35,
+            postprocess_max_spur_edges=3,
+            postprocess_spur_mean_conf=0.35,
+            postprocess_spur_added_fraction_min=0.50,
         )
 
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
@@ -78,6 +83,8 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('--threshold', args)
         self.assertIn('--output-json', args)
         self.assertNotIn('--feature-bundle', args)
+        self.assertIn('--postprocess-e0-radius', args)
+        self.assertIn('--postprocess-max-spur-edges', args)
 
     def test_triangulation_only_diagonal_is_ignored_without_exception(self):
         seam_mapping = load_module('uvsp_seam_mapping_diagonal_smoke', ADDON_DIR / 'seam_mapping.py')

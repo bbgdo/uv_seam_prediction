@@ -58,6 +58,8 @@ def _resolved_run_settings(settings):
         postprocess_conf_floor=settings.postprocess_conf_floor,
         postprocess_max_low_conf_fraction=settings.postprocess_max_low_conf_fraction,
         postprocess_force_close_max_edges=settings.postprocess_force_close_max_edges,
+        postprocess_e0_radius=settings.postprocess_e0_radius,
+        postprocess_e0_length_penalty=settings.postprocess_e0_length_penalty,
         postprocess_r_self=settings.postprocess_r_self,
         postprocess_r_cross=settings.postprocess_r_cross,
         postprocess_ambiguity_margin=settings.postprocess_ambiguity_margin,
@@ -66,6 +68,9 @@ def _resolved_run_settings(settings):
         postprocess_snap_max_edges=settings.postprocess_snap_max_edges,
         postprocess_r_band=settings.postprocess_r_band,
         postprocess_eta_main=settings.postprocess_eta_main,
+        postprocess_max_spur_edges=settings.postprocess_max_spur_edges,
+        postprocess_spur_mean_conf=settings.postprocess_spur_mean_conf,
+        postprocess_spur_added_fraction_min=settings.postprocess_spur_added_fraction_min,
         clear_existing_seams=settings.clear_existing_seams,
     )
 

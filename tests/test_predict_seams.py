@@ -184,10 +184,12 @@ class PredictSeamsTests(unittest.TestCase):
         args = Namespace(
             postprocess_seam_threshold=0.5,
             postprocess_alpha_cost=0.5,
-            postprocess_tau_bridge=0.28,
+            postprocess_tau_bridge=0.20,
             postprocess_conf_floor=0.10,
             postprocess_max_low_conf_fraction=0.50,
-            postprocess_force_close_max_edges=3,
+            postprocess_force_close_max_edges=5,
+            postprocess_e0_radius=2,
+            postprocess_e0_length_penalty=0.05,
             postprocess_r_self=8,
             postprocess_r_cross=10,
             postprocess_ambiguity_margin=0.05,
@@ -196,16 +198,21 @@ class PredictSeamsTests(unittest.TestCase):
             postprocess_snap_max_edges=12,
             postprocess_r_band=2,
             postprocess_eta_main=0.35,
+            postprocess_max_spur_edges=3,
+            postprocess_spur_mean_conf=0.35,
+            postprocess_spur_added_fraction_min=0.50,
         )
 
         kwargs = predict_seams.postprocess_kwargs_from_args(args)
 
         self.assertEqual(kwargs['seam_threshold'], 0.5)
         self.assertEqual(kwargs['alpha_cost'], 0.5)
-        self.assertEqual(kwargs['tau_bridge'], 0.28)
+        self.assertEqual(kwargs['tau_bridge'], 0.20)
         self.assertEqual(kwargs['conf_floor'], 0.10)
         self.assertEqual(kwargs['max_low_conf_fraction'], 0.50)
-        self.assertEqual(kwargs['force_close_max_edges'], 3)
+        self.assertEqual(kwargs['force_close_max_edges'], 5)
+        self.assertEqual(kwargs['e0_radius'], 2)
+        self.assertEqual(kwargs['e0_length_penalty'], 0.05)
         self.assertEqual(kwargs['r_self'], 8)
         self.assertEqual(kwargs['r_cross'], 10)
         self.assertEqual(kwargs['ambiguity_margin'], 0.05)
@@ -214,6 +221,9 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(kwargs['snap_max_edges'], 12)
         self.assertEqual(kwargs['r_band'], 2)
         self.assertEqual(kwargs['eta_main'], 0.35)
+        self.assertEqual(kwargs['max_spur_edges'], 3)
+        self.assertEqual(kwargs['spur_mean_conf'], 0.35)
+        self.assertEqual(kwargs['spur_added_fraction_min'], 0.50)
 
     def test_dual_edge_index_helper_matches_vertex_sharing_semantics(self):
         unique_edges = np.asarray([(0, 1), (0, 2), (1, 2), (2, 3)], dtype=np.int64)

@@ -34,7 +34,7 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
     )
     postprocess_tau_bridge: bpy.props.FloatProperty(
         name='Tau Bridge',
-        default=0.28,
+        default=0.20,
         min=0.0,
         max=1.0,
         description='Minimum mean confidence of newly added bridge edges',
@@ -55,10 +55,24 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
     )
     postprocess_force_close_max_edges: bpy.props.IntProperty(
         name='Force Close Max Edges',
-        default=3,
+        default=5,
         min=0,
         max=16,
-        description='Short bridges up to this many new edges bypass the mean-confidence gate',
+        description='Short bridges up to this many new edges bypass the soft bridge acceptance filters',
+    )
+    postprocess_e0_radius: bpy.props.IntProperty(
+        name='E0 Radius',
+        default=2,
+        min=0,
+        max=8,
+        description='Local edge-neighborhood radius for pre-bridge thickness collapse',
+    )
+    postprocess_e0_length_penalty: bpy.props.FloatProperty(
+        name='E0 Length Penalty',
+        default=0.05,
+        min=0.0,
+        max=1.0,
+        description='Penalty applied per kept edge when choosing the E0 representative path',
     )
     postprocess_r_self: bpy.props.IntProperty(
         name='Self-Bridge Radius',
@@ -115,6 +129,27 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         min=0.0,
         max=8.0,
         description='Penalty for drifting away from the current main seam during band collapse',
+    )
+    postprocess_max_spur_edges: bpy.props.IntProperty(
+        name='Max Spur Edges',
+        default=3,
+        min=0,
+        max=16,
+        description='Maximum spur-chain length eligible for post-bridge whisker cleanup',
+    )
+    postprocess_spur_mean_conf: bpy.props.FloatProperty(
+        name='Spur Mean Conf',
+        default=0.35,
+        min=0.0,
+        max=1.0,
+        description='Maximum mean confidence allowed for a removable spur chain',
+    )
+    postprocess_spur_added_fraction_min: bpy.props.FloatProperty(
+        name='Spur Added Fraction',
+        default=0.50,
+        min=0.0,
+        max=1.0,
+        description='Minimum fraction of spur edges that must come from bridge or collapse stages',
     )
     clear_existing_seams: bpy.props.BoolProperty(
         name='Clear Existing Seams',

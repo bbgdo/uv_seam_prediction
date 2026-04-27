@@ -58,6 +58,10 @@ def build_cli_args(prefs, settings, obj_path, json_path):
         str(settings.postprocess_max_low_conf_fraction),
         '--postprocess-force-close-max-edges',
         str(settings.postprocess_force_close_max_edges),
+        '--postprocess-e0-radius',
+        str(settings.postprocess_e0_radius),
+        '--postprocess-e0-length-penalty',
+        str(settings.postprocess_e0_length_penalty),
         '--postprocess-r-self',
         str(settings.postprocess_r_self),
         '--postprocess-r-cross',
@@ -74,6 +78,12 @@ def build_cli_args(prefs, settings, obj_path, json_path):
         str(settings.postprocess_r_band),
         '--postprocess-eta-main',
         str(settings.postprocess_eta_main),
+        '--postprocess-max-spur-edges',
+        str(settings.postprocess_max_spur_edges),
+        '--postprocess-spur-mean-conf',
+        str(settings.postprocess_spur_mean_conf),
+        '--postprocess-spur-added-fraction-min',
+        str(settings.postprocess_spur_added_fraction_min),
     ])
     return args
 
