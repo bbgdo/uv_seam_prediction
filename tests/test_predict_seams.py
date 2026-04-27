@@ -194,72 +194,18 @@ class PredictSeamsTests(unittest.TestCase):
             with self.assertRaisesRegex(predict_seams.PredictionError, 'CUDA is unavailable'):
                 predict_seams.resolve_device('cuda')
 
-    def test_postprocess_kwargs_mapping(self):
+    def test_postprocess_kwargs_from_args(self):
         args = Namespace(
-            postprocess_seam_threshold=0.5,
-            postprocess_alpha_cost=0.5,
-            postprocess_tau_bridge=0.20,
-            postprocess_conf_floor=0.10,
-            postprocess_max_low_conf_fraction=0.50,
-            postprocess_force_close_max_edges=5,
-            postprocess_e0_radius=2,
-            postprocess_e0_length_penalty=0.05,
-            postprocess_r_self=8,
-            postprocess_r_cross=10,
-            postprocess_ambiguity_margin=0.05,
-            postprocess_garbage_max_edges=4,
-            postprocess_r_snap=3,
-            postprocess_snap_max_edges=12,
-            postprocess_r_band=2,
-            postprocess_eta_main=0.35,
-            postprocess_max_spur_edges=3,
-            postprocess_spur_mean_conf=0.35,
-            postprocess_spur_added_fraction_min=0.50,
+            postprocess_tau_low=0.25,
+            postprocess_tau_high=0.65,
+            postprocess_d_max=2,
+            postprocess_r_bridge=5,
+            postprocess_l_min=3,
+            postprocess_epsilon=1e-2,
+            postprocess_anchor_boundary=False,
         )
 
         kwargs = predict_seams.postprocess_kwargs_from_args(args)
-
-        self.assertEqual(kwargs['seam_threshold'], 0.5)
-        self.assertEqual(kwargs['alpha_cost'], 0.5)
-        self.assertEqual(kwargs['tau_bridge'], 0.20)
-        self.assertEqual(kwargs['conf_floor'], 0.10)
-        self.assertEqual(kwargs['max_low_conf_fraction'], 0.50)
-        self.assertEqual(kwargs['force_close_max_edges'], 5)
-        self.assertEqual(kwargs['e0_radius'], 2)
-        self.assertEqual(kwargs['e0_length_penalty'], 0.05)
-        self.assertEqual(kwargs['r_self'], 8)
-        self.assertEqual(kwargs['r_cross'], 10)
-        self.assertEqual(kwargs['ambiguity_margin'], 0.05)
-        self.assertEqual(kwargs['garbage_max_edges'], 4)
-        self.assertEqual(kwargs['r_snap'], 3)
-        self.assertEqual(kwargs['snap_max_edges'], 12)
-        self.assertEqual(kwargs['r_band'], 2)
-        self.assertEqual(kwargs['eta_main'], 0.35)
-        self.assertEqual(kwargs['max_spur_edges'], 3)
-        self.assertEqual(kwargs['spur_mean_conf'], 0.35)
-        self.assertEqual(kwargs['spur_added_fraction_min'], 0.50)
-
-    def test_postprocess_version_default_is_v1(self):
-        args = predict_seams.parse_args([
-            '--mesh-path', 'mesh.obj',
-            '--model-weights', 'best_model.pth',
-            '--output-json', 'out.json',
-        ])
-
-        self.assertEqual(args.postprocess_version, 'v1')
-
-    def test_postprocess_v2_kwargs_from_args(self):
-        args = Namespace(
-            postprocess_v2_tau_low=0.25,
-            postprocess_v2_tau_high=0.65,
-            postprocess_v2_d_max=2,
-            postprocess_v2_r_bridge=5,
-            postprocess_v2_l_min=3,
-            postprocess_v2_epsilon=1e-2,
-            postprocess_v2_anchor_boundary=False,
-        )
-
-        kwargs = predict_seams.postprocess_v2_kwargs_from_args(args)
 
         self.assertEqual(kwargs, {
             'tau_low': 0.25,
@@ -274,39 +220,12 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertIs(type(kwargs['d_max']), int)
         self.assertIs(type(kwargs['anchor_boundary']), bool)
 
-    def test_postprocess_v1_path_unchanged_when_v1_selected(self):
-        calls = {'v1': 0, 'v2': 0}
-
-        def fake_v1(**kwargs):
-            calls['v1'] += 1
-            return np.asarray(kwargs['probabilities']) >= float(kwargs['threshold'])
-
-        def fake_v2(**kwargs):
-            calls['v2'] += 1
-            raise AssertionError('v2 should not run')
-
-        with self._patched_prediction_env(), \
-                patch('predict_seams_bridge.apply_seam_postprocessing', side_effect=fake_v1), \
-                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_v2):
-            with tempfile.TemporaryDirectory() as tmp:
-                args = self._run_args(tmp, postprocess_version='v1')
-                payload = predict_seams.run_prediction(args)
-
-        self.assertEqual(calls['v1'], 1)
-        self.assertEqual(calls['v2'], 0)
-        self.assertNotIn('postprocess_v2', payload.get('diagnostics', {}))
-
-    def test_postprocess_v2_path_invokes_pipeline_when_v2_selected(self):
-        calls = {'v1': 0, 'v2': 0}
+    def test_postprocess_path_invokes_pipeline_when_enabled(self):
+        calls = {'pipeline': 0}
         real_pipeline = predict_seams.apply_topology_pipeline
 
-        def fake_v1(**kwargs):
-            del kwargs
-            calls['v1'] += 1
-            raise AssertionError('v1 should not run')
-
-        def fake_v2(**kwargs):
-            calls['v2'] += 1
+        def fake_pipeline(**kwargs):
+            calls['pipeline'] += 1
             return real_pipeline(
                 view=kwargs['view'],
                 probabilities=kwargs['probabilities'],
@@ -321,57 +240,48 @@ class PredictSeamsTests(unittest.TestCase):
             )
 
         with self._patched_prediction_env(), \
-                patch('predict_seams_bridge.apply_seam_postprocessing', side_effect=fake_v1), \
-                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_v2):
+                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_pipeline):
             with tempfile.TemporaryDirectory() as tmp:
-                args = self._run_args(tmp, postprocess_version='v2')
+                args = self._run_args(tmp)
                 payload = predict_seams.run_prediction(args)
 
-        telemetry = payload['diagnostics']['postprocess_v2']
-        self.assertEqual(calls['v1'], 0)
-        self.assertEqual(calls['v2'], 1)
+        telemetry = payload['diagnostics']['postprocess']
+        self.assertEqual(calls['pipeline'], 1)
         json.dumps(telemetry)
         self.assertEqual(set(telemetry), {'parameters', 'skeleton', 'bridging', 'pruning', 'final_edge_count'})
 
-    def test_postprocess_disabled_skips_both_versions(self):
-        calls = {'v1': 0, 'v2': 0}
+    def test_postprocess_disabled_skips_pipeline(self):
+        calls = {'pipeline': 0}
 
-        def fake_v1(**kwargs):
+        def fake_pipeline(**kwargs):
             del kwargs
-            calls['v1'] += 1
-            raise AssertionError('v1 should not run')
-
-        def fake_v2(**kwargs):
-            del kwargs
-            calls['v2'] += 1
-            raise AssertionError('v2 should not run')
+            calls['pipeline'] += 1
+            raise AssertionError('pipeline should not run')
 
         with self._patched_prediction_env(probabilities=(0.2, 0.8, 0.6, 0.4, 0.9)), \
-                patch('predict_seams_bridge.apply_seam_postprocessing', side_effect=fake_v1), \
-                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_v2):
+                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_pipeline):
             with tempfile.TemporaryDirectory() as tmp:
-                args = self._run_args(tmp, postprocess=False, postprocess_version='v2')
+                args = self._run_args(tmp, postprocess=False)
                 payload = predict_seams.run_prediction(args)
 
-        self.assertEqual(calls['v1'], 0)
-        self.assertEqual(calls['v2'], 0)
+        self.assertEqual(calls['pipeline'], 0)
         self.assertEqual(payload['seam_edge_indices'], [1, 2, 4])
-        self.assertNotIn('postprocess_v2', payload.get('diagnostics', {}))
+        self.assertNotIn('postprocess', payload.get('diagnostics', {}))
 
-    def test_postprocess_v2_failure_raises_clear_error(self):
-        def fake_v2(**kwargs):
+    def test_postprocess_failure_raises_clear_error(self):
+        def fake_pipeline(**kwargs):
             del kwargs
-            raise RuntimeError('deliberate v2 failure')
+            raise RuntimeError('deliberate pipeline failure')
 
         with self._patched_prediction_env(), \
-                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_v2):
+                patch('predict_seams_bridge.apply_topology_pipeline', side_effect=fake_pipeline):
             with tempfile.TemporaryDirectory() as tmp:
-                args = self._run_args(tmp, postprocess_version='v2')
+                args = self._run_args(tmp)
                 with self.assertRaises(predict_seams.PredictionError) as caught:
                     predict_seams.run_prediction(args)
 
-        self.assertEqual(caught.exception.error_type, 'PostprocessV2Failed')
-        self.assertIn('deliberate v2 failure', str(caught.exception))
+        self.assertEqual(caught.exception.error_type, 'PostprocessFailed')
+        self.assertIn('deliberate pipeline failure', str(caught.exception))
 
     def test_dual_edge_index_helper_matches_vertex_sharing_semantics(self):
         unique_edges = np.asarray([(0, 1), (0, 2), (1, 2), (2, 3)], dtype=np.int64)
@@ -398,7 +308,6 @@ class PredictSeamsTests(unittest.TestCase):
         tmp: str,
         *,
         postprocess: bool = True,
-        postprocess_version: str = 'v1',
     ) -> Namespace:
         tmp_path = Path(tmp)
         mesh_path = tmp_path / 'mesh.obj'
@@ -427,7 +336,6 @@ class PredictSeamsTests(unittest.TestCase):
             '--device', 'cpu',
             '--model-type', 'gatv2',
             '--feature-bundle', 'paper14_locked',
-            '--postprocess-version', postprocess_version,
         ])
         args.postprocess = postprocess
         return args

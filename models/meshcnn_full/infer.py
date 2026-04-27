@@ -11,9 +11,11 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.meshcnn_full.model import build_model_from_checkpoint_payload
-from models.utils.postprocess import postprocess_seams
+from models.utils.seam_topology import apply_topology_pipeline, build_seam_graph_view
 from preprocessing.build_meshcnn_dataset_v2 import build_meshcnn_sample
 from preprocessing.feature_registry import resolve_feature_selection
+from preprocessing.obj_parser import parse_obj
+from preprocessing.topology import WeldConfig, build_topology
 
 
 def _feature_selection_from_metadata(metadata: dict[str, Any]):
@@ -36,19 +38,12 @@ def _feature_selection_from_metadata(metadata: dict[str, Any]):
     return selection
 
 
-def _edge_to_faces_dict(unique_edges: np.ndarray, edge_to_faces: np.ndarray) -> dict[tuple[int, int], list[int]]:
-    result: dict[tuple[int, int], list[int]] = {}
-    for edge, faces in zip(unique_edges, edge_to_faces):
-        result[(int(edge[0]), int(edge[1]))] = [int(face) for face in faces if int(face) >= 0]
-    return result
-
-
 @torch.no_grad()
 def predict_obj(
     obj_path: str | Path,
     checkpoint_path: str | Path,
     device: torch.device | str | None = None,
-) -> tuple[np.ndarray, np.ndarray, dict[tuple[int, int], list[int]]]:
+) -> tuple[np.ndarray, np.ndarray, Any]:
     device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
     payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
     metadata = dict(payload.get('feature_metadata') or {})
@@ -60,8 +55,8 @@ def predict_obj(
     logits = model(sample)
     probs = torch.sigmoid(logits).detach().cpu().numpy().astype(np.float32)
     unique_edges = sample.unique_edges.detach().cpu().numpy().astype(np.int64)
-    edge_to_faces = _edge_to_faces_dict(unique_edges, sample.edge_to_faces.detach().cpu().numpy())
-    return probs, unique_edges, edge_to_faces
+    topology = build_topology(parse_obj(obj_path), WeldConfig.exact())
+    return probs, unique_edges, topology
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -70,13 +65,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--checkpoint', required=True, help='Path to best_model.pth')
     parser.add_argument('--output-probs', default=None, help='Optional .npz path for probabilities and edge indices')
     parser.add_argument('--output-seams', default=None, help='Optional txt path for thresholded seam edge indices')
-    parser.add_argument('--threshold', type=float, default=0.5)
-    parser.add_argument('--min-component-size', type=int, default=3)
-    parser.add_argument('--max-gap', type=int, default=3)
     parser.add_argument('--device', default=None)
     args = parser.parse_args(argv)
 
-    probs, unique_edges, edge_to_faces = predict_obj(args.obj, args.checkpoint, args.device)
+    probs, unique_edges, topology = predict_obj(args.obj, args.checkpoint, args.device)
     print(f'edges: {len(unique_edges)}')
     print(f'probabilities: min {probs.min():.4f}, mean {probs.mean():.4f}, max {probs.max():.4f}')
 
@@ -87,14 +79,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f'saved probabilities -> {out_path.resolve()}')
 
     if args.output_seams:
-        mask = postprocess_seams(
-            probs,
-            unique_edges,
-            edge_to_faces=edge_to_faces,
-            threshold=args.threshold,
-            min_component_size=args.min_component_size,
-            max_gap=args.max_gap,
-        )
+        view = build_seam_graph_view(topology, unique_edges)
+        pipeline_result = apply_topology_pipeline(view, probs, topology=topology)
+        mask = pipeline_result.final_edge_mask
         seam_indices = np.flatnonzero(mask)
         out_path = Path(args.output_seams)
         out_path.parent.mkdir(parents=True, exist_ok=True)

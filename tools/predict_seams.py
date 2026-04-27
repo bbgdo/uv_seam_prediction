@@ -22,7 +22,6 @@ import trimesh  # noqa: E402
 from models.baselines.registry import get_baseline  # noqa: E402
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa: E402
 from models.meshcnn_full.model import MeshCNNSegmenter  # noqa: E402
-from models.utils.postprocess import apply_seam_postprocessing  # noqa: E402
 from models.utils.seam_topology import (  # noqa: E402
     apply_topology_pipeline,
     build_seam_graph_view,
@@ -66,63 +65,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--write-all-edges', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--postprocess', action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--postprocess-seam-threshold', type=float, default=0.50)
-    parser.add_argument('--postprocess-alpha-cost', type=float, default=0.50)
-    parser.add_argument('--postprocess-tau-bridge', type=float, default=0.20)
-    parser.add_argument('--postprocess-conf-floor', type=float, default=0.10)
-    parser.add_argument('--postprocess-max-low-conf-fraction', type=float, default=0.50)
-    parser.add_argument('--postprocess-force-close-max-edges', type=int, default=5)
-    parser.add_argument('--postprocess-e0-radius', type=int, default=2)
-    parser.add_argument('--postprocess-e0-length-penalty', type=float, default=0.05)
-    parser.add_argument('--postprocess-r-self', type=int, default=8)
-    parser.add_argument('--postprocess-r-cross', type=int, default=10)
-    parser.add_argument('--postprocess-ambiguity-margin', type=float, default=0.05)
-    parser.add_argument('--postprocess-garbage-max-edges', type=int, default=4)
-    parser.add_argument('--postprocess-r-snap', type=int, default=3)
-    parser.add_argument('--postprocess-snap-max-edges', type=int, default=12)
-    parser.add_argument('--postprocess-r-band', type=int, default=2)
-    parser.add_argument('--postprocess-eta-main', type=float, default=0.35)
     parser.add_argument(
-        '--postprocess-version',
-        choices=('v1', 'v2'),
-        default='v1',
-        help='Which postprocessing pipeline to apply. v1 = legacy '
-             'apply_seam_postprocessing (default). v2 = three-stage '
-             'topology pipeline (skeletonize -> bridge -> prune).'
+        '--postprocess-tau-low', type=float, default=0.30,
+        help='Candidate-set threshold for skeletonization (Stage A).'
     )
     parser.add_argument(
-        '--postprocess-v2-tau-low', type=float, default=0.30,
-        help='v2 only: candidate-set threshold for skeletonization.'
+        '--postprocess-tau-high', type=float, default=0.70,
+        help='Confidence-terminal threshold for Steiner bridging (Stage B).'
     )
     parser.add_argument(
-        '--postprocess-v2-tau-high', type=float, default=0.70,
-        help='v2 only: confidence-terminal threshold for Steiner bridging.'
+        '--postprocess-d-max', type=int, default=3,
+        help='Thickness-preservation distance for skeletonization (Stage A).'
     )
     parser.add_argument(
-        '--postprocess-v2-d-max', type=int, default=3,
-        help='v2 only: thickness-preservation distance for skeletonization.'
+        '--postprocess-r-bridge', type=int, default=6,
+        help='Bounded-search radius for Steiner bridging (Stage B).'
     )
     parser.add_argument(
-        '--postprocess-v2-r-bridge', type=int, default=6,
-        help='v2 only: bounded-search radius for Steiner bridging.'
+        '--postprocess-l-min', type=int, default=4,
+        help='Minimum branch length for spur pruning (Stage C).'
     )
     parser.add_argument(
-        '--postprocess-v2-l-min', type=int, default=4,
-        help='v2 only: minimum branch length for spur pruning.'
+        '--postprocess-epsilon', type=float, default=1e-3,
+        help='Numerical floor for -log(p) edge weights.'
     )
     parser.add_argument(
-        '--postprocess-v2-epsilon', type=float, default=1e-3,
-        help='v2 only: numerical floor for -log(p) edge weights.'
-    )
-    parser.add_argument(
-        '--postprocess-v2-anchor-boundary',
+        '--postprocess-anchor-boundary',
         action=argparse.BooleanOptionalAction, default=True,
-        help='v2 only: whether to use mesh-boundary vertices as '
-             'structural anchors.'
+        help='Whether to use mesh-boundary vertices as structural anchors.'
     )
-    parser.add_argument('--postprocess-max-spur-edges', type=int, default=3)
-    parser.add_argument('--postprocess-spur-mean-conf', type=float, default=0.35)
-    parser.add_argument('--postprocess-spur-added-fraction-min', type=float, default=0.50)
     return parser.parse_args(argv)
 
 
@@ -169,37 +140,13 @@ def _validate_threshold(value: Any) -> float:
 
 def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return {
-        'seam_threshold': float(args.postprocess_seam_threshold),
-        'alpha_cost': float(args.postprocess_alpha_cost),
-        'tau_bridge': float(args.postprocess_tau_bridge),
-        'conf_floor': float(args.postprocess_conf_floor),
-        'max_low_conf_fraction': float(args.postprocess_max_low_conf_fraction),
-        'force_close_max_edges': int(args.postprocess_force_close_max_edges),
-        'e0_radius': int(args.postprocess_e0_radius),
-        'e0_length_penalty': float(args.postprocess_e0_length_penalty),
-        'r_self': int(args.postprocess_r_self),
-        'r_cross': int(args.postprocess_r_cross),
-        'ambiguity_margin': float(args.postprocess_ambiguity_margin),
-        'garbage_max_edges': int(args.postprocess_garbage_max_edges),
-        'r_snap': int(args.postprocess_r_snap),
-        'snap_max_edges': int(args.postprocess_snap_max_edges),
-        'r_band': int(args.postprocess_r_band),
-        'eta_main': float(args.postprocess_eta_main),
-        'max_spur_edges': int(args.postprocess_max_spur_edges),
-        'spur_mean_conf': float(args.postprocess_spur_mean_conf),
-        'spur_added_fraction_min': float(args.postprocess_spur_added_fraction_min),
-    }
-
-
-def postprocess_v2_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        'tau_low': float(args.postprocess_v2_tau_low),
-        'tau_high': float(args.postprocess_v2_tau_high),
-        'd_max': int(args.postprocess_v2_d_max),
-        'r_bridge': int(args.postprocess_v2_r_bridge),
-        'l_min': int(args.postprocess_v2_l_min),
-        'epsilon': float(args.postprocess_v2_epsilon),
-        'anchor_boundary': bool(args.postprocess_v2_anchor_boundary),
+        'tau_low': float(args.postprocess_tau_low),
+        'tau_high': float(args.postprocess_tau_high),
+        'd_max': int(args.postprocess_d_max),
+        'r_bridge': int(args.postprocess_r_bridge),
+        'l_min': int(args.postprocess_l_min),
+        'epsilon': float(args.postprocess_epsilon),
+        'anchor_boundary': bool(args.postprocess_anchor_boundary),
     }
 
 
@@ -960,45 +907,31 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
         topology=topology,
         unique_edges=unique_edges,
     )
-    v2_telemetry: dict[str, Any] | None = None
-    postprocess_version = getattr(args, 'postprocess_version', 'v1')
+    pipeline_telemetry: dict[str, Any] | None = None
     if not bool(getattr(args, 'postprocess', True)):
         seam_mask = probabilities >= threshold
-    elif postprocess_version == 'v1':
-        seam_mask = apply_seam_postprocessing(
-            topology=topology,
-            unique_edges=unique_edges,
-            probabilities=probabilities,
-            threshold=threshold,
-            **postprocess_kwargs_from_args(args),
-        )
-    elif postprocess_version == 'v2':
+    else:
         try:
             view = build_seam_graph_view(topology, unique_edges)
-            v2_kwargs = postprocess_v2_kwargs_from_args(args)
+            pp_kwargs = postprocess_kwargs_from_args(args)
             pipeline_result = apply_topology_pipeline(
                 view=view,
                 probabilities=probabilities,
                 topology=topology,
-                **v2_kwargs,
+                **pp_kwargs,
             )
         except Exception as exc:
             raise PredictionError(
-                f'postprocess v2 pipeline failed: {exc}',
-                'PostprocessV2Failed',
+                f'postprocess pipeline failed: {exc}',
+                'PostprocessFailed',
             ) from exc
         seam_mask = pipeline_result.final_edge_mask
-        v2_telemetry = topology_pipeline_result_to_json_dict(pipeline_result)
-    else:
-        raise PredictionError(
-            f'unknown postprocess version: {postprocess_version!r}',
-            'InvalidArgument',
-        )
+        pipeline_telemetry = topology_pipeline_result_to_json_dict(pipeline_result)
 
-    if v2_telemetry is not None:
+    if pipeline_telemetry is not None:
         if diagnostics is None:
             diagnostics = {}
-        diagnostics['postprocess_v2'] = v2_telemetry
+        diagnostics['postprocess'] = pipeline_telemetry
 
     return build_output_payload(
         mesh_path=mesh_path,

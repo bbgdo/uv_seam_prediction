@@ -16,7 +16,9 @@ if _ROOT not in sys.path:
 import torch
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.build_dual_graph import build_dual_graph_data
-from models.utils.postprocess import threshold_and_clean, stitch_seam_gaps
+from models.utils.seam_topology import apply_topology_pipeline, build_seam_graph_view
+from preprocessing.obj_parser import parse_obj
+from preprocessing.topology import WeldConfig, build_topology
 from evaluation.uv_metrics import parse_obj_with_uv, compute_all_uv_metrics
 
 import trimesh
@@ -51,13 +53,12 @@ def _infer_seam_indices(
     model,
     model_type: str,
     device: torch.device,
-    threshold: float,
-    min_component: int,
-    max_gap: int,
 ) -> tuple[list[int], np.ndarray]:
-    mesh = trimesh.load(str(mesh_path), process=False, force='mesh')
+    topology = build_topology(parse_obj(mesh_path), WeldConfig.exact())
+    vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
+    faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     features, unique_edges, _ = compute_edge_features(mesh)
-    faces = np.asarray(mesh.faces, dtype=np.int64)
 
     if model_type == 'meshcnn':
         from preprocessing.build_meshcnn_data import build_edge_neighbors
@@ -98,15 +99,9 @@ def _infer_seam_indices(
 
     probs = torch.sigmoid(logits).cpu().numpy()
 
-    edge_to_faces: dict = {}
-    for f_idx, face in enumerate(faces):
-        for k in range(3):
-            vi, vj = int(face[k]), int(face[(k + 1) % 3])
-            key = (min(vi, vj), max(vi, vj))
-            edge_to_faces.setdefault(key, []).append(f_idx)
-
-    mask = threshold_and_clean(probs, unique_edges, threshold, min_component)
-    mask = stitch_seam_gaps(probs, mask, unique_edges, edge_to_faces, max_gap)
+    view = build_seam_graph_view(topology, unique_edges)
+    pipeline_result = apply_topology_pipeline(view, probs, topology=topology)
+    mask = pipeline_result.final_edge_mask
 
     return np.where(mask)[0].tolist(), unique_edges
 
@@ -335,9 +330,6 @@ def main() -> None:
                         help='Blender executable path (default: blender)')
     parser.add_argument('--output-dir', required=True,
                         help='Directory to write results')
-    parser.add_argument('--threshold', type=float, default=0.5)
-    parser.add_argument('--min-component', type=int, default=3)
-    parser.add_argument('--max-gap', type=int, default=3)
     parser.add_argument('--unwrap-method', default='ANGLE_BASED',
                         choices=['ANGLE_BASED', 'CONFORMAL'])
     parser.add_argument('--max-meshes', type=int, default=None,
@@ -390,7 +382,6 @@ def main() -> None:
             try:
                 seam_indices, unique_edges = _infer_seam_indices(
                     str(mesh_path), model, args.model_type, device,
-                    args.threshold, args.min_component, args.max_gap,
                 )
                 print(f'  inference: {len(seam_indices)} seam edges predicted')
             except Exception as e:
@@ -469,7 +460,6 @@ def main() -> None:
         'model': args.model_type,
         'weights': args.weights,
         'n_meshes': len(per_mesh_results),
-        'threshold': args.threshold,
         'unwrap_method': args.unwrap_method,
         'aggregated': {
             'ground_truth': _agg(per_mesh_results, 'ground_truth', metric_keys),
