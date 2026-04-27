@@ -632,6 +632,20 @@ class BridgingResult:
     epsilon: float
 
 
+@dataclass(frozen=True)
+class PruningResult:
+    pruned_edge_mask: np.ndarray
+    removed_edges: frozenset[int]
+    iteration_reports: tuple[dict, ...]
+    total_iterations: int
+    total_branches_pruned: int
+    total_edges_removed: int
+    protected_leaves_skipped: int
+    stale_entries_skipped: int
+    l_min: int
+    anchor_boundary: bool
+
+
 def build_skeleton_subgraph(
     view: SeamGraphView,
     skeleton_edge_mask: np.ndarray,
@@ -955,6 +969,189 @@ def diagnose_bridging_application(
     after_probs = np.where(bridging.bridged_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     after = compute_seam_mask_diagnostics(view, after_probs, threshold=diagnostics_threshold)
     return bridging, before, after
+
+
+def compute_spur_pruning(
+    view: SeamGraphView,
+    bridging_result: BridgingResult,
+    *,
+    l_min: int = 4,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+) -> PruningResult:
+    if isinstance(l_min, bool) or not isinstance(l_min, (int, np.integer)) or int(l_min) < 1:
+        raise ValueError('l_min must be an integer greater than or equal to 1')
+    l_min_value = int(l_min)
+    if bridging_result.bridged_edge_mask.shape != (view.edge_count,):
+        raise ValueError(
+            f'bridged_edge_mask must have shape ({view.edge_count},), '
+            f'got {bridging_result.bridged_edge_mask.shape}'
+        )
+    if bridging_result.bridged_edge_mask.dtype != bool:
+        raise ValueError('bridged_edge_mask must have dtype bool')
+    if anchor_boundary and topology is None:
+        raise ValueError('anchor_boundary=True requires a non-None topology argument')
+
+    normalized_extra_anchors: frozenset[int] | None = None
+    if extra_anchor_vertices is not None:
+        anchors: set[int] = set()
+        for vertex in extra_anchor_vertices:
+            if isinstance(vertex, bool) or not isinstance(vertex, (int, np.integer)):
+                raise ValueError('extra_anchor_vertices must contain integer vertex indices')
+            vertex_index = int(vertex)
+            if vertex_index < 0 or vertex_index >= view.vertex_count:
+                raise ValueError(
+                    f'extra_anchor_vertices contains out-of-range vertex index {vertex_index} '
+                    f'for vertex_count={view.vertex_count}'
+                )
+            anchors.add(vertex_index)
+        normalized_extra_anchors = frozenset(anchors)
+
+    A_struct: set[int] = set()
+    if anchor_boundary:
+        A_struct.update(boundary_vertices_from_topology(topology))
+    if normalized_extra_anchors is not None:
+        A_struct.update(int(vertex) for vertex in normalized_extra_anchors)
+
+    H = nx.Graph()
+    bridged_mask = bridging_result.bridged_edge_mask
+    for idx in range(view.edge_count):
+        if bridged_mask[idx]:
+            u = int(view.unique_edges[idx, 0])
+            v = int(view.unique_edges[idx, 1])
+            H.add_edge(u, v, edge_index=int(idx))
+
+    deg: dict[int, int] = dict(H.degree())
+    pruned_mask = bridged_mask.copy()
+    removed_edges_global: set[int] = set()
+    iteration_reports: list[dict] = []
+    protected_leaves_skipped = 0
+    stale_entries_skipped = 0
+    total_branches_pruned = 0
+    total_edges_removed = 0
+
+    iteration = 0
+    while True:
+        leaves_examined = 0
+        branches_pruned_this_iter = 0
+        edges_removed_this_iter = 0
+        queue = deque(
+            vertex
+            for vertex, degree in deg.items()
+            if degree == 1 and vertex not in A_struct
+        )
+
+        while queue:
+            v0 = int(queue.popleft())
+            leaves_examined += 1
+
+            if deg.get(v0, 0) != 1:
+                stale_entries_skipped += 1
+                continue
+            if v0 in A_struct:
+                protected_leaves_skipped += 1
+                continue
+
+            path_vertices: list[int] = [v0]
+            path_edge_indices: list[int] = []
+            prev: int | None = None
+            cur = v0
+
+            while True:
+                next_vertex: int | None = None
+                next_edge_idx: int | None = None
+                for neighbor in H.neighbors(cur):
+                    u = int(neighbor)
+                    if u == prev:
+                        continue
+                    next_vertex = u
+                    next_edge_idx = int(H[cur][u]['edge_index'])
+                    break
+                if next_vertex is None or next_edge_idx is None:
+                    break
+
+                path_vertices.append(next_vertex)
+                path_edge_indices.append(next_edge_idx)
+                prev, cur = cur, next_vertex
+
+                if deg[cur] >= 3:
+                    break
+                if deg[cur] == 1:
+                    break
+                if cur == v0:
+                    break
+
+            branch_length = len(path_edge_indices)
+            if branch_length >= l_min_value:
+                continue
+
+            for edge_index in path_edge_indices:
+                pruned_mask[edge_index] = False
+                removed_edges_global.add(edge_index)
+            for i in range(len(path_vertices) - 1):
+                u = path_vertices[i]
+                w = path_vertices[i + 1]
+                if H.has_edge(u, w):
+                    H.remove_edge(u, w)
+                    deg[u] -= 1
+                    deg[w] -= 1
+            branches_pruned_this_iter += 1
+            edges_removed_this_iter += branch_length
+
+        iteration_reports.append({
+            'iteration': iteration,
+            'leaves_examined': leaves_examined,
+            'branches_pruned': branches_pruned_this_iter,
+            'edges_removed': edges_removed_this_iter,
+        })
+        total_branches_pruned += branches_pruned_this_iter
+        total_edges_removed += edges_removed_this_iter
+        iteration += 1
+
+        if branches_pruned_this_iter == 0:
+            break
+
+    return PruningResult(
+        pruned_edge_mask=pruned_mask,
+        removed_edges=frozenset(removed_edges_global),
+        iteration_reports=tuple(iteration_reports),
+        total_iterations=iteration,
+        total_branches_pruned=total_branches_pruned,
+        total_edges_removed=total_edges_removed,
+        protected_leaves_skipped=protected_leaves_skipped,
+        stale_entries_skipped=stale_entries_skipped,
+        l_min=l_min_value,
+        anchor_boundary=bool(anchor_boundary),
+    )
+
+
+def diagnose_pruning_application(
+    view: SeamGraphView,
+    bridging_result: BridgingResult,
+    *,
+    l_min: int = 4,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+    diagnostics_threshold: float = 0.5,
+) -> tuple[PruningResult, SeamMaskDiagnostics, SeamMaskDiagnostics]:
+    """
+    Run Stage C and compare the before/after masks topologically.
+    """
+    before_probs = np.where(bridging_result.bridged_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
+    before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
+    pruning = compute_spur_pruning(
+        view,
+        bridging_result,
+        l_min=l_min,
+        anchor_boundary=anchor_boundary,
+        extra_anchor_vertices=extra_anchor_vertices,
+        topology=topology,
+    )
+    after_probs = np.where(pruning.pruned_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
+    after = compute_seam_mask_diagnostics(view, after_probs, threshold=diagnostics_threshold)
+    return pruning, before, after
 
 
 def _validated_probability_vector(view: SeamGraphView, probabilities: np.ndarray) -> np.ndarray:

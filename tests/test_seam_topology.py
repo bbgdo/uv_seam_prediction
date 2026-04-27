@@ -5,15 +5,18 @@ import networkx as nx
 import numpy as np
 
 from models.utils.seam_topology import (
+    BridgingResult,
     SeamGraphView,
     SkeletonResult,
     build_seam_graph_view,
     build_skeleton_subgraph,
     boundary_vertices_from_topology,
+    compute_spur_pruning,
     compute_steiner_bridging,
     compute_topology_preserving_skeleton,
     compute_seam_mask_diagnostics,
     diagnose_bridging_application,
+    diagnose_pruning_application,
     diagnose_skeleton_application,
     diagnostics_to_json_dict,
     lift_edge_probabilities_to_vertices,
@@ -1006,6 +1009,323 @@ class BridgingTests(unittest.TestCase):
         self.assertEqual(before.component_count, 2)
         self.assertEqual(after.component_count, 1)
         self.assertTrue(np.array_equal(skel_result.skeleton_edge_mask, skeleton_mask_before))
+
+
+class PruningTests(unittest.TestCase):
+    @staticmethod
+    def _view_for_seam_edges(
+        seam_edges: set[tuple[int, int]],
+    ) -> tuple[SeamGraphView, CanonicalTopology]:
+        max_vertex = max((max(edge) for edge in seam_edges), default=-1)
+        vertices = [(float(index), 0.0, 0.0) for index in range(max_vertex + 1)]
+        faces: list[tuple[int, int, int]] = []
+        for edge_index, edge in enumerate(sorted(tuple(sorted(edge)) for edge in seam_edges)):
+            u, v = edge
+            aux = len(vertices)
+            ux, _, _ = vertices[u]
+            vx, _, _ = vertices[v]
+            vertices.append(((ux + vx) * 0.5, float(edge_index + 1), 0.0))
+            faces.append((u, v, aux))
+        return _build_view_from_faces(faces, vertices)
+
+    @staticmethod
+    def _grid_view(size: int = 4) -> tuple[SeamGraphView, CanonicalTopology]:
+        vertices = [
+            (float(x), float(y), 0.0)
+            for y in range(size)
+            for x in range(size)
+        ]
+        faces: list[tuple[int, int, int]] = []
+        for y in range(size - 1):
+            for x in range(size - 1):
+                a = y * size + x
+                b = a + 1
+                c = a + size
+                d = c + 1
+                faces.append((a, b, c))
+                faces.append((b, d, c))
+        return _build_view_from_faces(faces, vertices)
+
+    @staticmethod
+    def _bridging_result(view: SeamGraphView, seam_edges: set[tuple[int, int]]) -> BridgingResult:
+        mask = np.zeros(view.edge_count, dtype=bool)
+        for edge in seam_edges:
+            mask[_edge_index(view, edge)] = True
+        return BridgingResult(
+            bridged_edge_mask=mask,
+            steiner_added_edges=frozenset(),
+            component_reports=tuple(),
+            component_count=0,
+            terminals_total=0,
+            terminals_dropped_no_component=0,
+            steiner_calls=0,
+            steiner_edges_added_total=0,
+            tau_high=0.70,
+            r_bridge=6,
+            epsilon=1e-3,
+        )
+
+    @staticmethod
+    def _mask_edges(view: SeamGraphView, mask: np.ndarray) -> set[tuple[int, int]]:
+        return {
+            (int(view.unique_edges[index, 0]), int(view.unique_edges[index, 1]))
+            for index in np.flatnonzero(mask)
+        }
+
+    @staticmethod
+    def _masked_graph(view: SeamGraphView, mask: np.ndarray) -> nx.Graph:
+        graph = nx.Graph()
+        for index in np.flatnonzero(mask):
+            u = int(view.unique_edges[index, 0])
+            v = int(view.unique_edges[index, 1])
+            graph.add_edge(u, v, edge_index=int(index))
+        return graph
+
+    def test_pruning_validation_errors(self):
+        seam_edges = {(0, 1), (1, 2)}
+        view, _ = self._view_for_seam_edges(seam_edges)
+        result = self._bridging_result(view, seam_edges)
+
+        bad_shape = BridgingResult(
+            bridged_edge_mask=np.zeros(view.edge_count + 1, dtype=bool),
+            steiner_added_edges=frozenset(),
+            component_reports=tuple(),
+            component_count=0,
+            terminals_total=0,
+            terminals_dropped_no_component=0,
+            steiner_calls=0,
+            steiner_edges_added_total=0,
+            tau_high=0.70,
+            r_bridge=6,
+            epsilon=1e-3,
+        )
+        with self.assertRaises(ValueError):
+            compute_spur_pruning(view, bad_shape, anchor_boundary=False)
+
+        bad_dtype = BridgingResult(
+            bridged_edge_mask=result.bridged_edge_mask.astype(np.float64),
+            steiner_added_edges=frozenset(),
+            component_reports=tuple(),
+            component_count=0,
+            terminals_total=0,
+            terminals_dropped_no_component=0,
+            steiner_calls=0,
+            steiner_edges_added_total=0,
+            tau_high=0.70,
+            r_bridge=6,
+            epsilon=1e-3,
+        )
+        with self.assertRaises(ValueError):
+            compute_spur_pruning(view, bad_dtype, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_spur_pruning(view, result, l_min=0, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_spur_pruning(view, result, l_min=4.5, anchor_boundary=False)
+        with self.assertRaises(ValueError):
+            compute_spur_pruning(view, result)
+        with self.assertRaises(ValueError):
+            compute_spur_pruning(view, result, anchor_boundary=False, extra_anchor_vertices=frozenset({-1}))
+
+    def test_pruning_no_op_on_clean_long_chain(self):
+        seam_edges = {(index, index + 1) for index in range(8)}
+        view, _ = self._view_for_seam_edges(seam_edges)
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=False)
+
+        self.assertEqual(result.removed_edges, frozenset())
+        self.assertTrue(np.array_equal(result.pruned_edge_mask, bridging.bridged_edge_mask))
+        self.assertEqual(result.total_iterations, 1)
+        self.assertEqual(result.total_branches_pruned, 0)
+
+    def test_pruning_removes_short_spur(self):
+        main_chain = {(index, index + 1) for index in range(9)}
+        spur = {(4, 10), (10, 11)}
+        seam_edges = main_chain | spur
+        view, _ = self._view_for_seam_edges(seam_edges)
+        bridging = self._bridging_result(view, seam_edges)
+
+        result, before, after = diagnose_pruning_application(view, bridging, l_min=4, anchor_boundary=False)
+
+        self.assertEqual(self._mask_edges(view, result.pruned_edge_mask), main_chain)
+        self.assertEqual(result.total_branches_pruned, 1)
+        self.assertEqual(result.total_edges_removed, 2)
+        self.assertGreaterEqual(before.junction_count, 1)
+        self.assertEqual(after.junction_count, 0)
+
+    def test_pruning_iterative_unmasking(self):
+        seam_edges = {
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (3, 8),
+            (3, 9),
+            (6, 10),
+        }
+        view, _ = self._view_for_seam_edges(seam_edges)
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(
+            view,
+            bridging,
+            l_min=4,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({7}),
+        )
+
+        expected_survivors = {(3, 4), (4, 5), (5, 6), (6, 7)}
+        expected_survivors.add((3, 9))
+        self.assertEqual(result.total_iterations, 2)
+        self.assertEqual(result.total_branches_pruned, 3)
+        self.assertEqual(result.total_edges_removed, 5)
+        self.assertEqual(self._mask_edges(view, result.pruned_edge_mask), expected_survivors)
+        self.assertEqual([report['branches_pruned'] for report in result.iteration_reports], [3, 0])
+
+    def test_pruning_protects_boundary_anchor_leaf(self):
+        """A short stick ending at a boundary anchor is still pruned from the unanchored leaf."""
+        view, topology = self._grid_view()
+        seam_edges = {(1, 5), (5, 6)}
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=True, topology=topology)
+
+        self.assertEqual(result.total_branches_pruned, 1)
+        self.assertEqual(result.total_edges_removed, 2)
+        self.assertFalse(np.any(result.pruned_edge_mask))
+
+    def test_pruning_protects_boundary_anchor_root(self):
+        view, topology = self._grid_view()
+        seam_edges = {(0, 1), (1, 2), (1, 5), (5, 6)}
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=True, topology=topology)
+        graph = self._masked_graph(view, result.pruned_edge_mask)
+
+        self.assertEqual(result.total_branches_pruned, 1)
+        self.assertEqual(result.total_edges_removed, 2)
+        self.assertEqual(int(graph.degree[1]), 2)
+
+    def test_pruning_anchor_to_anchor_short_chain_preserved(self):
+        view, topology = self._grid_view()
+        seam_edges = {(0, 1), (1, 2)}
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=True, topology=topology)
+
+        self.assertEqual(result.total_branches_pruned, 0)
+        self.assertEqual(result.total_edges_removed, 0)
+        self.assertTrue(np.array_equal(result.pruned_edge_mask, bridging.bridged_edge_mask))
+
+    def test_pruning_stick_component_both_unanchored(self):
+        seam_edges = {(0, 1), (1, 2), (2, 3)}
+        view, _ = self._view_for_seam_edges(seam_edges)
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=False)
+
+        self.assertEqual(result.total_branches_pruned, 1)
+        self.assertEqual(result.total_edges_removed, 3)
+        self.assertFalse(np.any(result.pruned_edge_mask))
+
+    def test_pruning_cycle_no_leaves_unchanged(self):
+        seam_edges = {(0, 1), (1, 2), (0, 2)}
+        view, _ = self._view_for_seam_edges(seam_edges)
+        bridging = self._bridging_result(view, seam_edges)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=False)
+
+        self.assertEqual(result.total_iterations, 1)
+        self.assertEqual(result.total_branches_pruned, 0)
+        self.assertTrue(np.array_equal(result.pruned_edge_mask, bridging.bridged_edge_mask))
+
+    def test_pruning_lollipop_cuts_tail_keeps_loop(self):
+        cycle = {(0, 1), (1, 2), (0, 2)}
+        tail = {(0, 3), (3, 4)}
+        view, _ = self._view_for_seam_edges(cycle | tail)
+        bridging = self._bridging_result(view, cycle | tail)
+
+        result = compute_spur_pruning(view, bridging, l_min=4, anchor_boundary=False)
+
+        self.assertEqual(self._mask_edges(view, result.pruned_edge_mask), cycle)
+        self.assertEqual(result.total_branches_pruned, 1)
+        self.assertEqual(result.total_edges_removed, 2)
+
+    def test_pruning_subset_invariant(self):
+        rng = np.random.default_rng(12)
+        topology, view = _strip_topology(length=6)
+        mask = rng.random(view.edge_count) > 0.45
+        bridging = BridgingResult(
+            bridged_edge_mask=mask.astype(bool),
+            steiner_added_edges=frozenset(),
+            component_reports=tuple(),
+            component_count=0,
+            terminals_total=0,
+            terminals_dropped_no_component=0,
+            steiner_calls=0,
+            steiner_edges_added_total=0,
+            tau_high=0.70,
+            r_bridge=6,
+            epsilon=1e-3,
+        )
+        anchors = frozenset(int(vertex) for vertex in rng.choice(view.vertex_count, size=3, replace=False))
+
+        result = compute_spur_pruning(
+            view,
+            bridging,
+            l_min=4,
+            anchor_boundary=True,
+            extra_anchor_vertices=anchors,
+            topology=topology,
+        )
+
+        self.assertTrue(np.all(result.pruned_edge_mask <= bridging.bridged_edge_mask))
+
+    def test_pruning_branch_length_invariant(self):
+        view, topology = self._grid_view()
+        seam_edges = {(0, 1), (1, 2), (5, 6), (6, 7), (7, 11), (11, 15)}
+        bridging = self._bridging_result(view, seam_edges)
+        l_min = 4
+
+        result = compute_spur_pruning(view, bridging, l_min=l_min, anchor_boundary=True, topology=topology)
+        graph = self._masked_graph(view, result.pruned_edge_mask)
+        anchors = set(boundary_vertices_from_topology(topology))
+
+        for leaf in sorted(vertex for vertex, degree in graph.degree() if int(degree) == 1):
+            previous = None
+            current = int(leaf)
+            length = 0
+            endpoint = current
+            while True:
+                neighbors = [int(node) for node in graph.neighbors(current) if int(node) != previous]
+                if not neighbors:
+                    endpoint = current
+                    break
+                next_node = neighbors[0]
+                length += 1
+                endpoint = next_node
+                if int(graph.degree[next_node]) != 2:
+                    break
+                previous = current
+                current = next_node
+            self.assertTrue(length >= l_min or int(leaf) in anchors or endpoint in anchors)
+
+    def test_diagnose_pruning_application_round_trip(self):
+        main_chain = {(index, index + 1) for index in range(9)}
+        spur_a = {(4, 10), (10, 11)}
+        spur_b = {(5, 12), (12, 13)}
+        view, _ = self._view_for_seam_edges(main_chain | spur_a | spur_b)
+        bridging = self._bridging_result(view, main_chain | spur_a | spur_b)
+
+        pruning, before, after = diagnose_pruning_application(view, bridging, l_min=4, anchor_boundary=False)
+
+        self.assertIsInstance(pruning, object)
+        self.assertGreater(before.branch_count, after.branch_count)
+        self.assertGreaterEqual(before.junction_count, after.junction_count)
+        self.assertEqual(before.seam_edge_count - after.seam_edge_count, 4)
 
 
 if __name__ == '__main__':
