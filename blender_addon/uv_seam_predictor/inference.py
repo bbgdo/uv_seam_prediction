@@ -46,45 +46,24 @@ def build_cli_args(prefs, settings, obj_path, json_path):
     ]
     args.append('--postprocess' if settings.use_post_processing else '--no-postprocess')
     args.extend([
-        '--postprocess-seam-threshold',
-        str(settings.postprocess_seam_threshold),
-        '--postprocess-alpha-cost',
-        str(settings.postprocess_alpha_cost),
-        '--postprocess-tau-bridge',
-        str(settings.postprocess_tau_bridge),
-        '--postprocess-conf-floor',
-        str(settings.postprocess_conf_floor),
-        '--postprocess-max-low-conf-fraction',
-        str(settings.postprocess_max_low_conf_fraction),
-        '--postprocess-force-close-max-edges',
-        str(settings.postprocess_force_close_max_edges),
-        '--postprocess-e0-radius',
-        str(settings.postprocess_e0_radius),
-        '--postprocess-e0-length-penalty',
-        str(settings.postprocess_e0_length_penalty),
-        '--postprocess-r-self',
-        str(settings.postprocess_r_self),
-        '--postprocess-r-cross',
-        str(settings.postprocess_r_cross),
-        '--postprocess-ambiguity-margin',
-        str(settings.postprocess_ambiguity_margin),
-        '--postprocess-garbage-max-edges',
-        str(settings.postprocess_garbage_max_edges),
-        '--postprocess-r-snap',
-        str(settings.postprocess_r_snap),
-        '--postprocess-snap-max-edges',
-        str(settings.postprocess_snap_max_edges),
-        '--postprocess-r-band',
-        str(settings.postprocess_r_band),
-        '--postprocess-eta-main',
-        str(settings.postprocess_eta_main),
-        '--postprocess-max-spur-edges',
-        str(settings.postprocess_max_spur_edges),
-        '--postprocess-spur-mean-conf',
-        str(settings.postprocess_spur_mean_conf),
-        '--postprocess-spur-added-fraction-min',
-        str(settings.postprocess_spur_added_fraction_min),
+        '--postprocess-tau-low',
+        str(settings.postprocess_tau_low),
+        '--postprocess-tau-high',
+        str(settings.postprocess_tau_high),
+        '--postprocess-d-max',
+        str(settings.postprocess_d_max),
+        '--postprocess-r-bridge',
+        str(settings.postprocess_r_bridge),
+        '--postprocess-l-min',
+        str(settings.postprocess_l_min),
+        '--postprocess-epsilon',
+        str(settings.postprocess_epsilon),
     ])
+    # BooleanOptionalAction: emit a single token, no separate value.
+    if settings.postprocess_anchor_boundary:
+        args.append('--postprocess-anchor-boundary')
+    else:
+        args.append('--no-postprocess-anchor-boundary')
     return args
 
 

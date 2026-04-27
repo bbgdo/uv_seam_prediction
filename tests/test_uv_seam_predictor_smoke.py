@@ -55,25 +55,13 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             model_weights_path='weights.pt',
             threshold=0.42,
             use_post_processing=True,
-            postprocess_seam_threshold=0.5,
-            postprocess_alpha_cost=0.5,
-            postprocess_tau_bridge=0.20,
-            postprocess_conf_floor=0.10,
-            postprocess_max_low_conf_fraction=0.50,
-            postprocess_force_close_max_edges=5,
-            postprocess_e0_radius=2,
-            postprocess_e0_length_penalty=0.05,
-            postprocess_r_self=8,
-            postprocess_r_cross=10,
-            postprocess_ambiguity_margin=0.05,
-            postprocess_garbage_max_edges=4,
-            postprocess_r_snap=3,
-            postprocess_snap_max_edges=12,
-            postprocess_r_band=2,
-            postprocess_eta_main=0.35,
-            postprocess_max_spur_edges=3,
-            postprocess_spur_mean_conf=0.35,
-            postprocess_spur_added_fraction_min=0.50,
+            postprocess_tau_low=0.30,
+            postprocess_tau_high=0.70,
+            postprocess_d_max=3,
+            postprocess_r_bridge=6,
+            postprocess_l_min=4,
+            postprocess_epsilon=1e-3,
+            postprocess_anchor_boundary=True,
         )
 
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
@@ -83,8 +71,94 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('--threshold', args)
         self.assertIn('--output-json', args)
         self.assertNotIn('--feature-bundle', args)
-        self.assertIn('--postprocess-e0-radius', args)
-        self.assertIn('--postprocess-max-spur-edges', args)
+
+    def test_cli_emits_new_topology_flags_only(self):
+        """Regression guard: the addon must emit only the new
+        topology-pipeline flags, never the deleted v1 flags."""
+        inference = load_module(
+            'uvsp_inference_topology_smoke',
+            ADDON_DIR / 'inference.py',
+        )
+        prefs = SimpleNamespace(
+            python_executable='python',
+            predict_script_path='tools/predict_seams.py',
+        )
+        settings = SimpleNamespace(
+            model_weights_path='weights.pt',
+            threshold=0.42,
+            use_post_processing=True,
+            postprocess_tau_low=0.30,
+            postprocess_tau_high=0.70,
+            postprocess_d_max=3,
+            postprocess_r_bridge=6,
+            postprocess_l_min=4,
+            postprocess_epsilon=1e-3,
+            postprocess_anchor_boundary=True,
+        )
+        args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
+        # New flags present:
+        for flag in (
+            '--postprocess-tau-low',
+            '--postprocess-tau-high',
+            '--postprocess-d-max',
+            '--postprocess-r-bridge',
+            '--postprocess-l-min',
+            '--postprocess-epsilon',
+        ):
+            self.assertIn(flag, args, f'expected new flag {flag} in cmd')
+        self.assertIn('--postprocess-anchor-boundary', args)
+        # Deleted v1 flags absent:
+        for suffix in (
+            'seam_threshold',
+            'alpha_cost',
+            'tau_bridge',
+            'conf_floor',
+            'max_low_conf_fraction',
+            'force_close_max_edges',
+            'r_self',
+            'r_cross',
+            'ambiguity_margin',
+            'garbage_max_edges',
+            'r_snap',
+            'snap_max_edges',
+            'r_band',
+            'eta_main',
+        ):
+            flag = '--postprocess-' + suffix.replace('_', '-')
+            self.assertNotIn(flag, args, f'deleted v1 flag {flag} reappeared')
+        # Removed routing flag absent:
+        self.assertNotIn('--postprocess-version', args)
+
+    def test_cli_emits_no_form_when_anchor_boundary_disabled(self):
+        """BooleanOptionalAction handling: must emit
+        --no-postprocess-anchor-boundary when the toggle is False."""
+        inference = load_module(
+            'uvsp_inference_anchor_off_smoke',
+            ADDON_DIR / 'inference.py',
+        )
+        prefs = SimpleNamespace(
+            python_executable='python',
+            predict_script_path='tools/predict_seams.py',
+        )
+        settings = SimpleNamespace(
+            model_weights_path='weights.pt',
+            threshold=0.42,
+            use_post_processing=True,
+            postprocess_tau_low=0.30,
+            postprocess_tau_high=0.70,
+            postprocess_d_max=3,
+            postprocess_r_bridge=6,
+            postprocess_l_min=4,
+            postprocess_epsilon=1e-3,
+            postprocess_anchor_boundary=False,
+        )
+        args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
+        self.assertIn('--no-postprocess-anchor-boundary', args)
+        self.assertNotIn('--postprocess-anchor-boundary', args)
+        # The True/False string must NEVER appear as a positional
+        # argument to argparse:
+        self.assertNotIn('True', args)
+        self.assertNotIn('False', args)
 
     def test_triangulation_only_diagonal_is_ignored_without_exception(self):
         seam_mapping = load_module('uvsp_seam_mapping_diagonal_smoke', ADDON_DIR / 'seam_mapping.py')
