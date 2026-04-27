@@ -23,6 +23,7 @@ from models.utils.seam_topology import (
     diagnostics_to_json_dict,
     lift_edge_probabilities_to_vertices,
     topology_pipeline_result_to_json_dict,
+    _build_bridging_clusters,
 )
 from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
@@ -883,8 +884,11 @@ class BridgingTests(unittest.TestCase):
 
         self.assertTrue(result.bridged_edge_mask[gap_index])
         self.assertIn(gap_index, result.steiner_added_edges)
-        self.assertEqual(len(result.component_reports), 1)
+        self.assertEqual(result.component_count, 2)
+        self.assertEqual(result.cluster_count, 1)
+        self.assertEqual(len(result.component_reports), 2)
         self.assertEqual(result.component_reports[0]['sub_group_count'], 1)
+        self.assertEqual(result.component_reports[1]['skipped_reason'], 'cluster_member')
         self.assertEqual(before.component_count, 2)
         self.assertEqual(after.component_count, 1)
 
@@ -904,6 +908,8 @@ class BridgingTests(unittest.TestCase):
         )
 
         self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+        self.assertEqual(result.cluster_count, 2)
+        self.assertEqual(result.steiner_edges_added_total, 0)
         self.assertEqual([report['sub_group_count'] for report in result.component_reports], [0, 0])
         self.assertEqual(before.component_count, 2)
         self.assertEqual(after.component_count, 2)
@@ -945,6 +951,7 @@ class BridgingTests(unittest.TestCase):
         allowed_indices = {_edge_index(view, edge) for edge in loop_edges}
         bridged_indices = set(int(index) for index in np.flatnonzero(result.bridged_edge_mask))
         self.assertEqual(len(result.component_reports), 2)
+        self.assertEqual(result.cluster_count, 2)
         self.assertTrue(bridged_indices <= allowed_indices)
         for edge_index in result.steiner_added_edges:
             u = int(view.unique_edges[edge_index, 0])
@@ -1035,6 +1042,268 @@ class BridgingTests(unittest.TestCase):
         self.assertTrue(np.array_equal(skel_result.skeleton_edge_mask, skeleton_mask_before))
 
 
+class BridgingClusterTests(unittest.TestCase):
+    @staticmethod
+    def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
+        vertices = [(float(index), 0.0, 0.0) for index in range(vertex_count)]
+        faces: list[tuple[int, int, int]] = []
+        for index in range(vertex_count - 1):
+            aux = len(vertices)
+            vertices.append((float(index) + 0.5, 1.0, 0.0))
+            faces.append((index, index + 1, aux))
+        return _build_view_from_faces(faces, vertices)
+
+    @staticmethod
+    def _chain_probabilities(
+        view: SeamGraphView,
+        skeleton_edges: set[tuple[int, int]],
+        gap_edges: dict[tuple[int, int], float] | None = None,
+    ) -> np.ndarray:
+        seam_probabilities = {edge: 0.95 for edge in skeleton_edges}
+        if gap_edges is not None:
+            seam_probabilities.update(gap_edges)
+        return _edge_probability_vector(view, seam_probabilities, default=0.05)
+
+    @staticmethod
+    def _chain_components(
+        view: SeamGraphView,
+        skeleton_edges: set[tuple[int, int]],
+    ) -> list[set[int]]:
+        mask = np.zeros(view.edge_count, dtype=bool)
+        for edge in skeleton_edges:
+            mask[_edge_index(view, edge)] = True
+        graph = build_skeleton_subgraph(view, mask)
+        components = [set(int(vertex) for vertex in component) for component in nx.connected_components(graph)]
+        components.sort(key=lambda component: min(component))
+        return components
+
+    def test_cluster_helper_single_component_returns_single_cluster(self):
+        view, _ = self._chain_view(3)
+        components = [{0, 1, 2}]
+
+        clusters, component_to_cluster = _build_bridging_clusters(view, components, r_bridge=6)
+
+        self.assertEqual(clusters, [frozenset({0})])
+        self.assertEqual(component_to_cluster, {0: 0})
+
+    def test_cluster_helper_two_far_components_stay_separate(self):
+        view, _ = self._chain_view(20)
+        skeleton_edges = {(0, 1), (1, 2), (17, 18), (18, 19)}
+        components = self._chain_components(view, skeleton_edges)
+
+        clusters, component_to_cluster = _build_bridging_clusters(view, components, r_bridge=6)
+
+        self.assertEqual(len(clusters), 2)
+        self.assertEqual(clusters, [frozenset({0}), frozenset({1})])
+        self.assertNotEqual(component_to_cluster[0], component_to_cluster[1])
+
+    def test_cluster_helper_two_close_components_merge(self):
+        view, _ = self._chain_view(20)
+        skeleton_edges = {
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (6, 7),
+            (7, 8),
+            (8, 9),
+        }
+        components = self._chain_components(view, skeleton_edges)
+
+        clusters, component_to_cluster = _build_bridging_clusters(view, components, r_bridge=6)
+
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(clusters[0], frozenset({0, 1}))
+        self.assertEqual(component_to_cluster, {0: 0, 1: 0})
+
+    def test_cluster_helper_chain_of_three_with_transitive_merge(self):
+        view, _ = self._chain_view(20)
+        skeleton_edges = {(0, 1), (5, 6), (10, 11)}
+        components = self._chain_components(view, skeleton_edges)
+
+        clusters, _ = _build_bridging_clusters(view, components, r_bridge=6)
+
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(clusters[0], frozenset({0, 1, 2}))
+
+    def test_cluster_helper_chain_of_three_breaks_at_long_gap(self):
+        view, _ = self._chain_view(24)
+        skeleton_edges = {(0, 1), (5, 6), (14, 15)}
+        components = self._chain_components(view, skeleton_edges)
+
+        clusters, _ = _build_bridging_clusters(view, components, r_bridge=6)
+
+        self.assertEqual(clusters, [frozenset({0, 1}), frozenset({2})])
+
+    def test_cluster_helper_r_bridge_zero_keeps_all_components_separate(self):
+        view, _ = self._chain_view(12)
+        skeleton_edges = {(0, 1), (4, 5), (8, 9)}
+        components = self._chain_components(view, skeleton_edges)
+
+        clusters, component_to_cluster = _build_bridging_clusters(view, components, r_bridge=0)
+
+        self.assertEqual(len(clusters), len(components))
+        self.assertEqual(clusters, [frozenset({0}), frozenset({1}), frozenset({2})])
+        self.assertEqual(component_to_cluster, {0: 0, 1: 1, 2: 2})
+
+    def test_cluster_helper_empty_components(self):
+        view, _ = self._chain_view(2)
+
+        clusters, component_to_cluster = _build_bridging_clusters(view, [], r_bridge=6)
+
+        self.assertEqual(clusters, [])
+        self.assertEqual(component_to_cluster, {})
+
+    def test_bridging_closes_one_edge_gap_between_two_components(self):
+        view, _ = self._chain_view(8)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (6, 7)}
+        probabilities = self._chain_probabilities(view, skeleton_edges, {(3, 4): 0.40})
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 7}),
+            r_bridge=6,
+        )
+
+        gap_index = _edge_index(view, (3, 4))
+        self.assertEqual(result.cluster_count, 1)
+        self.assertTrue(result.bridged_edge_mask[gap_index])
+        self.assertGreaterEqual(result.steiner_calls, 1)
+        self.assertGreaterEqual(result.steiner_edges_added_total, 1)
+        self.assertEqual({report['component_id'] for report in result.component_reports}, {0, 1})
+        self.assertEqual({report['cluster_id'] for report in result.component_reports}, {0})
+        skipped_reasons = [report['skipped_reason'] for report in result.component_reports]
+        self.assertEqual(skipped_reasons.count('cluster_member'), 1)
+        self.assertEqual(sum(report['steiner_edges_added'] for report in result.component_reports), 1)
+
+    def test_bridging_closes_two_edge_gap(self):
+        view, _ = self._chain_view(8)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (5, 6), (6, 7)}
+        probabilities = self._chain_probabilities(
+            view,
+            skeleton_edges,
+            {(3, 4): 0.40, (4, 5): 0.40},
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset({0, 1, 2, 3, 5, 6, 7}),
+        )
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 7}),
+            r_bridge=6,
+        )
+
+        self.assertEqual(result.cluster_count, 1)
+        self.assertTrue(result.bridged_edge_mask[_edge_index(view, (3, 4))])
+        self.assertTrue(result.bridged_edge_mask[_edge_index(view, (4, 5))])
+        self.assertGreaterEqual(result.steiner_edges_added_total, 2)
+
+    def test_bridging_does_not_cross_far_components(self):
+        view, _ = self._chain_view(20)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (17, 18), (18, 19)}
+        probabilities = self._chain_probabilities(view, skeleton_edges, default_gap_probabilities(3, 17))
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 3, 17, 19}),
+            r_bridge=6,
+        )
+
+        self.assertEqual(result.cluster_count, 2)
+        for left in range(3, 17):
+            self.assertFalse(result.bridged_edge_mask[_edge_index(view, (left, left + 1))])
+        self.assertEqual(result.steiner_edges_added_total, 0)
+        self.assertEqual(result.terminals_dropped_no_component, 0)
+
+    def test_bridging_three_close_components_all_merge(self):
+        view, _ = self._chain_view(10)
+        skeleton_edges = {(0, 1), (3, 4), (6, 7)}
+        probabilities = self._chain_probabilities(
+            view,
+            skeleton_edges,
+            {(1, 2): 0.45, (2, 3): 0.45, (4, 5): 0.45, (5, 6): 0.45},
+        )
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 3, 6}),
+            r_bridge=6,
+        )
+
+        self.assertEqual(result.cluster_count, 1)
+        bridged_graph = build_skeleton_subgraph(view, result.bridged_edge_mask)
+        self.assertTrue(nx.has_path(bridged_graph, 0, 7))
+        self.assertGreaterEqual(result.steiner_calls, 1)
+
+    def test_bridging_split_when_middle_component_far(self):
+        view, _ = self._chain_view(28)
+        skeleton_edges = {(0, 1), (10, 11), (20, 21)}
+        probabilities = self._chain_probabilities(view, skeleton_edges)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(
+            view,
+            probabilities,
+            skel_result,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({0, 10, 20}),
+            r_bridge=6,
+        )
+
+        self.assertEqual(result.cluster_count, 3)
+        self.assertEqual(result.steiner_edges_added_total, 0)
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+
+    def test_bridging_result_has_cluster_count_field(self):
+        view, _ = self._chain_view(4)
+        skeleton_edges = {(0, 1), (2, 3)}
+        probabilities = self._chain_probabilities(view, skeleton_edges)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertIs(type(result.cluster_count), int)
+        self.assertGreaterEqual(result.cluster_count, 0)
+
+    def test_bridging_component_reports_have_cluster_id(self):
+        view, _ = self._chain_view(8)
+        skeleton_edges = {(0, 1), (6, 7)}
+        probabilities = self._chain_probabilities(view, skeleton_edges)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertGreaterEqual(len(result.component_reports), 2)
+        self.assertTrue(all(isinstance(report['cluster_id'], int) for report in result.component_reports))
+
+
+def default_gap_probabilities(start: int, stop: int) -> dict[tuple[int, int], float]:
+    return {(left, left + 1): 0.20 for left in range(start, stop)}
+
+
 class PruningTests(unittest.TestCase):
     @staticmethod
     def _view_for_seam_edges(
@@ -1087,6 +1356,7 @@ class PruningTests(unittest.TestCase):
             tau_high=0.70,
             r_bridge=6,
             epsilon=1e-3,
+            cluster_count=0,
         )
 
     @staticmethod
@@ -1122,6 +1392,7 @@ class PruningTests(unittest.TestCase):
             tau_high=0.70,
             r_bridge=6,
             epsilon=1e-3,
+            cluster_count=0,
         )
         with self.assertRaises(ValueError):
             compute_spur_pruning(view, bad_shape, anchor_boundary=False)
@@ -1138,6 +1409,7 @@ class PruningTests(unittest.TestCase):
             tau_high=0.70,
             r_bridge=6,
             epsilon=1e-3,
+            cluster_count=0,
         )
         with self.assertRaises(ValueError):
             compute_spur_pruning(view, bad_dtype, anchor_boundary=False)
@@ -1294,6 +1566,7 @@ class PruningTests(unittest.TestCase):
             tau_high=0.70,
             r_bridge=6,
             epsilon=1e-3,
+            cluster_count=0,
         )
         anchors = frozenset(int(vertex) for vertex in rng.choice(view.vertex_count, size=3, replace=False))
 

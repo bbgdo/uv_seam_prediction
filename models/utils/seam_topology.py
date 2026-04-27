@@ -630,6 +630,7 @@ class BridgingResult:
     tau_high: float
     r_bridge: int
     epsilon: float
+    cluster_count: int
 
 
 @dataclass(frozen=True)
@@ -709,7 +710,7 @@ def _bounded_search_graph(
         vertex, depth = queue.popleft()
         if depth >= r_bridge:
             continue
-        for neighbor in view.vertex_graph.neighbors(vertex):
+        for neighbor in sorted(view.vertex_graph.neighbors(vertex)):
             neighbor_index = int(neighbor)
             if neighbor_index in visited:
                 continue
@@ -732,6 +733,69 @@ def _bounded_search_graph(
             weight=weight,
         )
     return graph
+
+
+def _build_bridging_clusters(
+    view: SeamGraphView,
+    components: list[set[int]],
+    r_bridge: int,
+) -> tuple[list[frozenset[int]], dict[int, int]]:
+    """
+    Group skeleton components into proximity clusters within r_bridge mesh hops.
+    """
+    if not components:
+        return [], {}
+    if len(components) == 1:
+        return [frozenset({0})], {0: 0}
+
+    component_count = len(components)
+    if r_bridge == 0:
+        clusters = [frozenset({component_id}) for component_id in range(component_count)]
+        return clusters, {component_id: component_id for component_id in range(component_count)}
+
+    nearest_component: dict[int, tuple[int, int]] = {}
+    queue: deque[tuple[int, int, int]] = deque()
+    for component_id, component in enumerate(components):
+        for vertex in sorted(component):
+            vertex_index = int(vertex)
+            nearest_component[vertex_index] = (component_id, 0)
+            queue.append((vertex_index, 0, component_id))
+
+    proximity_edges: set[frozenset[int]] = set()
+    while queue:
+        vertex, depth, source_component_id = queue.popleft()
+        if depth >= r_bridge:
+            continue
+        for neighbor in view.vertex_graph.neighbors(vertex):
+            neighbor_index = int(neighbor)
+            next_depth = depth + 1
+            if neighbor_index not in nearest_component:
+                nearest_component[neighbor_index] = (source_component_id, next_depth)
+                queue.append((neighbor_index, next_depth, source_component_id))
+                continue
+
+            other_component_id, other_depth = nearest_component[neighbor_index]
+            if other_component_id == source_component_id:
+                continue
+            if depth + other_depth + 1 <= r_bridge:
+                proximity_edges.add(frozenset({source_component_id, other_component_id}))
+
+    proximity_graph = nx.Graph()
+    proximity_graph.add_nodes_from(range(component_count))
+    for edge in sorted(proximity_edges, key=lambda pair: tuple(sorted(pair))):
+        left, right = sorted(edge)
+        proximity_graph.add_edge(left, right)
+
+    clusters = [
+        frozenset(int(component_id) for component_id in cluster)
+        for cluster in nx.connected_components(proximity_graph)
+    ]
+    clusters.sort(key=lambda cluster: min(cluster))
+    component_to_cluster: dict[int, int] = {}
+    for cluster_id, cluster in enumerate(clusters):
+        for component_id in cluster:
+            component_to_cluster[int(component_id)] = cluster_id
+    return clusters, component_to_cluster
 
 
 def compute_steiner_bridging(
@@ -781,7 +845,11 @@ def compute_steiner_bridging(
 
     vertex_scores = skel_result.vertex_scores
     G_skel = build_skeleton_subgraph(view, skel_result.skeleton_edge_mask)
-    components = [frozenset(int(vertex) for vertex in component) for component in nx.connected_components(G_skel)]
+    components = [
+        frozenset(int(vertex) for vertex in component)
+        for component in nx.connected_components(G_skel)
+    ]
+    components.sort(key=lambda component: min(component))
     component_id_of: dict[int, int] = {}
     for component_id, component in enumerate(components):
         for vertex in component:
@@ -803,139 +871,138 @@ def compute_steiner_bridging(
     T_global = frozenset(set(T_structural) | set(T_confidence))
     terminals_dropped_no_component = sum(1 for vertex in T_global if vertex not in component_id_of)
 
+    clusters, _ = _build_bridging_clusters(
+        view,
+        components,
+        r_bridge_value,
+    )
+
     bridged_mask = skel_result.skeleton_edge_mask.copy()
     steiner_added_edges_global: set[int] = set()
     component_reports: list[dict] = []
     steiner_calls = 0
     steiner_edges_added_total = 0
 
-    parent = list(range(len(components)))
+    for cluster_id, cluster_comp_ids in enumerate(clusters):
+        cluster_vertex_set: set[int] = set()
+        for component_id in cluster_comp_ids:
+            cluster_vertex_set.update(components[component_id])
+        cluster_vertex_frozenset = frozenset(cluster_vertex_set)
 
-    def find(component_id: int) -> int:
-        while parent[component_id] != component_id:
-            parent[component_id] = parent[parent[component_id]]
-            component_id = parent[component_id]
-        return component_id
+        T_cluster = T_global & cluster_vertex_frozenset
+        rep_comp_id = min(cluster_comp_ids)
 
-    def union(left: int, right: int) -> None:
-        left_root = find(left)
-        right_root = find(right)
-        if left_root != right_root:
-            parent[max(left_root, right_root)] = min(left_root, right_root)
+        if len(T_cluster) == 0:
+            cluster_skipped_reason = 'no_terminals'
+        elif len(T_cluster) == 1:
+            cluster_skipped_reason = 'too_few_terminals'
+        else:
+            cluster_skipped_reason = None
 
-    for component_id, component_vertices in enumerate(components):
-        if not T_global:
-            continue
-        G_reach = _bounded_search_graph(
-            view=view,
-            seed_vertices=component_vertices,
-            r_bridge=r_bridge_value,
-            probabilities=probs,
-            skeleton_edge_mask=skel_result.skeleton_edge_mask,
-            epsilon=epsilon_value,
-        )
-        reachable_terminals = T_global & set(int(vertex) for vertex in G_reach.nodes())
-        for terminal in reachable_terminals:
-            other_component_id = component_id_of.get(int(terminal))
-            if other_component_id is not None:
-                union(component_id, other_component_id)
+        edges_added_this_cluster = 0
+        sub_group_count_for_rep = 0
 
-    grouped_component_ids: dict[int, set[int]] = {}
-    for component_id in range(len(components)):
-        grouped_component_ids.setdefault(find(component_id), set()).add(component_id)
+        if cluster_skipped_reason is None:
+            G_search = _bounded_search_graph(
+                view=view,
+                seed_vertices=cluster_vertex_frozenset,
+                r_bridge=r_bridge_value,
+                probabilities=probs,
+                skeleton_edge_mask=skel_result.skeleton_edge_mask,
+                epsilon=epsilon_value,
+            )
 
-    for group_component_ids in sorted(grouped_component_ids.values(), key=lambda ids: min(ids)):
-        comp_id = min(group_component_ids)
-        comp_vertices = frozenset(
-            vertex
-            for component_id in sorted(group_component_ids)
-            for vertex in components[component_id]
-        )
-        T_k = frozenset(vertex for vertex in T_global if component_id_of.get(vertex) in group_component_ids)
-        T_k_structural = frozenset(vertex for vertex in T_structural if component_id_of.get(vertex) in group_component_ids)
-        T_k_confidence = frozenset(vertex for vertex in T_confidence if component_id_of.get(vertex) in group_component_ids)
-        skeleton_edge_count_k = int(G_skel.subgraph(comp_vertices).number_of_edges())
+            assert T_cluster <= set(G_search.nodes()), (
+                f"cluster {cluster_id}: terminals not in bounded search graph"
+            )
 
-        report = {
-            'component_id': int(comp_id),
-            'skeleton_edge_count': skeleton_edge_count_k,
-            'terminal_count': len(T_k),
-            'terminal_count_structural': len(T_k_structural),
-            'terminal_count_confidence': len(T_k_confidence),
-            'sub_group_count': 0,
-            'steiner_edges_added': 0,
-            'skipped_reason': None,
-        }
+            sub_components = [
+                frozenset(int(vertex) for vertex in sub)
+                for sub in nx.connected_components(G_search)
+            ]
+            sub_component_id_of: dict[int, int] = {}
+            for sub_id, sub_component in enumerate(sub_components):
+                for vertex in sub_component:
+                    sub_component_id_of[int(vertex)] = sub_id
+            terminal_groups: dict[int, set[int]] = {}
+            for terminal in sorted(T_cluster):
+                sub_id = sub_component_id_of[int(terminal)]
+                terminal_groups.setdefault(sub_id, set()).add(int(terminal))
 
-        if len(T_k) == 0:
-            report['skipped_reason'] = 'no_terminals'
-            component_reports.append(report)
-            continue
-        if len(T_k) == 1:
-            report['skipped_reason'] = 'too_few_terminals'
-            component_reports.append(report)
-            continue
+            nontrivial_groups = sorted(
+                (group for group in terminal_groups.values() if len(group) >= 2),
+                key=lambda group: min(group),
+            )
+            sub_group_count_for_rep = len(nontrivial_groups)
 
-        G_search = _bounded_search_graph(
-            view=view,
-            seed_vertices=comp_vertices,
-            r_bridge=r_bridge_value,
-            probabilities=probs,
-            skeleton_edge_mask=skel_result.skeleton_edge_mask,
-            epsilon=epsilon_value,
-        )
+            for group in nontrivial_groups:
+                any_terminal = min(group)
+                sub_id = sub_component_id_of[any_terminal]
+                sub_vertices = sub_components[sub_id]
+                G_sub = G_search.subgraph(sub_vertices).copy()
 
-        assert T_k <= set(G_search.nodes()), f"component {comp_id}: terminals not in bounded search graph"
+                try:
+                    T_steiner = nx.algorithms.approximation.steiner_tree(
+                        G_sub,
+                        terminal_nodes=sorted(group),
+                        weight='weight',
+                        method='mehlhorn',
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"steiner_tree failed for cluster {cluster_id}, "
+                        f"sub_id {sub_id}: {exc}"
+                    ) from exc
 
-        sub_components = [frozenset(int(vertex) for vertex in sub) for sub in nx.connected_components(G_search)]
-        sub_component_id_of: dict[int, int] = {}
-        for sub_id, sub_component in enumerate(sub_components):
-            for vertex in sub_component:
-                sub_component_id_of[int(vertex)] = sub_id
-        terminal_groups: dict[int, set[int]] = {}
-        for terminal in T_k:
-            sub_id = sub_component_id_of[int(terminal)]
-            terminal_groups.setdefault(sub_id, set()).add(int(terminal))
+                steiner_calls += 1
 
-        nontrivial_groups = [group for group in terminal_groups.values() if len(group) >= 2]
-        report['sub_group_count'] = len(nontrivial_groups)
+                added_this_call = 0
+                for u, v, data in T_steiner.edges(data=True):
+                    idx = data.get('edge_index')
+                    if idx is None:
+                        raise RuntimeError(f"Steiner output edge ({u},{v}) missing 'edge_index'")
+                    edge_index = int(idx)
+                    if not bridged_mask[edge_index]:
+                        bridged_mask[edge_index] = True
+                        steiner_added_edges_global.add(edge_index)
+                        added_this_call += 1
 
-        for group in nontrivial_groups:
-            any_terminal = next(iter(group))
-            sub_id = sub_component_id_of[any_terminal]
-            sub_vertices = sub_components[sub_id]
-            G_sub = G_search.subgraph(sub_vertices).copy()
+                edges_added_this_cluster += added_this_call
 
-            try:
-                T_steiner = nx.algorithms.approximation.steiner_tree(
-                    G_sub,
-                    terminal_nodes=list(group),
-                    weight='weight',
-                    method='mehlhorn',
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    f"steiner_tree failed for component {comp_id}, "
-                    f"sub_id {sub_id}: {exc}"
-                ) from exc
+            steiner_edges_added_total += edges_added_this_cluster
 
-            steiner_calls += 1
+        for component_id in sorted(cluster_comp_ids):
+            comp_vertex_frozenset = frozenset(components[component_id])
+            T_k = T_global & comp_vertex_frozenset
+            T_k_structural = T_structural & comp_vertex_frozenset
+            T_k_confidence = T_confidence & comp_vertex_frozenset
 
-            added_this_call = 0
-            for u, v, data in T_steiner.edges(data=True):
-                idx = data.get('edge_index')
-                if idx is None:
-                    raise RuntimeError(f"Steiner output edge ({u},{v}) missing 'edge_index'")
-                edge_index = int(idx)
-                if not bridged_mask[edge_index]:
-                    bridged_mask[edge_index] = True
-                    steiner_added_edges_global.add(edge_index)
-                    added_this_call += 1
+            skeleton_edge_count_k = int(
+                G_skel.subgraph(comp_vertex_frozenset).number_of_edges()
+            )
 
-            report['steiner_edges_added'] += added_this_call
-            steiner_edges_added_total += added_this_call
+            if component_id == rep_comp_id:
+                report_skipped_reason = cluster_skipped_reason
+                report_steiner_edges = edges_added_this_cluster
+                report_sub_group_count = sub_group_count_for_rep
+            else:
+                report_skipped_reason = 'cluster_member'
+                report_steiner_edges = 0
+                report_sub_group_count = 0
 
-        component_reports.append(report)
+            component_reports.append({
+                'component_id': int(component_id),
+                'cluster_id': int(cluster_id),
+                'skeleton_edge_count': skeleton_edge_count_k,
+                'terminal_count': len(T_k),
+                'terminal_count_structural': len(T_k_structural),
+                'terminal_count_confidence': len(T_k_confidence),
+                'sub_group_count': report_sub_group_count,
+                'steiner_edges_added': report_steiner_edges,
+                'skipped_reason': report_skipped_reason,
+            })
+
+    component_reports.sort(key=lambda report: report['component_id'])
 
     return BridgingResult(
         bridged_edge_mask=bridged_mask,
@@ -949,6 +1016,7 @@ def compute_steiner_bridging(
         tau_high=tau_high_value,
         r_bridge=r_bridge_value,
         epsilon=epsilon_value,
+        cluster_count=len(clusters),
     )
 
 
@@ -1247,6 +1315,7 @@ def topology_pipeline_result_to_json_dict(
     pruning = result.pruning_result
     payload = {
         'bridging': {
+            'cluster_count': int(bridging.cluster_count),
             'component_count': int(bridging.component_count),
             'component_reports': [dict(report) for report in bridging.component_reports],
             'epsilon': float(bridging.epsilon),
