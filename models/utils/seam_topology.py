@@ -646,6 +646,21 @@ class PruningResult:
     anchor_boundary: bool
 
 
+@dataclass(frozen=True)
+class TopologyPipelineResult:
+    final_edge_mask: np.ndarray
+    skeleton_result: SkeletonResult
+    bridging_result: BridgingResult
+    pruning_result: PruningResult
+    tau_low: float
+    tau_high: float
+    d_max: int
+    r_bridge: int
+    l_min: int
+    epsilon: float
+    anchor_boundary: bool
+
+
 def build_skeleton_subgraph(
     view: SeamGraphView,
     skeleton_edge_mask: np.ndarray,
@@ -1152,6 +1167,133 @@ def diagnose_pruning_application(
     after_probs = np.where(pruning.pruned_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     after = compute_seam_mask_diagnostics(view, after_probs, threshold=diagnostics_threshold)
     return pruning, before, after
+
+
+def apply_topology_pipeline(
+    view: SeamGraphView,
+    probabilities: np.ndarray,
+    *,
+    tau_low: float = 0.30,
+    tau_high: float = 0.70,
+    d_max: int = 3,
+    r_bridge: int = 6,
+    l_min: int = 4,
+    epsilon: float = 1e-3,
+    anchor_boundary: bool = True,
+    extra_anchor_vertices: frozenset[int] | None = None,
+    topology: Any = None,
+) -> TopologyPipelineResult:
+    """
+    Run the full Stage A -> Stage B -> Stage C topology pipeline and
+    return the final mask + per-stage telemetry.
+
+    Parameters mirror the per-stage functions exactly; the same anchor
+    configuration is forwarded to each stage.
+    """
+    if anchor_boundary and topology is None:
+        raise ValueError('anchor_boundary=True requires a non-None topology argument')
+
+    skel = compute_topology_preserving_skeleton(
+        view,
+        probabilities,
+        tau_low=tau_low,
+        d_max=d_max,
+        anchor_boundary=anchor_boundary,
+        extra_anchor_vertices=extra_anchor_vertices,
+        topology=topology,
+    )
+    bridge = compute_steiner_bridging(
+        view,
+        probabilities,
+        skel,
+        tau_high=tau_high,
+        r_bridge=r_bridge,
+        epsilon=epsilon,
+        anchor_boundary=anchor_boundary,
+        extra_anchor_vertices=extra_anchor_vertices,
+        topology=topology,
+    )
+    prune = compute_spur_pruning(
+        view,
+        bridge,
+        l_min=l_min,
+        anchor_boundary=anchor_boundary,
+        extra_anchor_vertices=extra_anchor_vertices,
+        topology=topology,
+    )
+    return TopologyPipelineResult(
+        final_edge_mask=prune.pruned_edge_mask,
+        skeleton_result=skel,
+        bridging_result=bridge,
+        pruning_result=prune,
+        tau_low=float(tau_low),
+        tau_high=float(tau_high),
+        d_max=int(d_max),
+        r_bridge=int(r_bridge),
+        l_min=int(l_min),
+        epsilon=float(epsilon),
+        anchor_boundary=bool(anchor_boundary),
+    )
+
+
+def topology_pipeline_result_to_json_dict(
+    result: TopologyPipelineResult,
+) -> dict:
+    """
+    Convert a TopologyPipelineResult to a JSON-serializable dict.
+    """
+    skeleton = result.skeleton_result
+    bridging = result.bridging_result
+    pruning = result.pruning_result
+    payload = {
+        'bridging': {
+            'component_count': int(bridging.component_count),
+            'component_reports': [dict(report) for report in bridging.component_reports],
+            'epsilon': float(bridging.epsilon),
+            'r_bridge': int(bridging.r_bridge),
+            'steiner_added_edges_count': int(len(bridging.steiner_added_edges)),
+            'steiner_calls': int(bridging.steiner_calls),
+            'steiner_edges_added_total': int(bridging.steiner_edges_added_total),
+            'tau_high': float(bridging.tau_high),
+            'terminals_dropped_no_component': int(bridging.terminals_dropped_no_component),
+            'terminals_total': int(bridging.terminals_total),
+        },
+        'final_edge_count': int(np.count_nonzero(result.final_edge_mask)),
+        'parameters': {
+            'anchor_boundary': bool(result.anchor_boundary),
+            'd_max': int(result.d_max),
+            'epsilon': float(result.epsilon),
+            'l_min': int(result.l_min),
+            'r_bridge': int(result.r_bridge),
+            'tau_high': float(result.tau_high),
+            'tau_low': float(result.tau_low),
+        },
+        'pruning': {
+            'anchor_boundary': bool(pruning.anchor_boundary),
+            'iteration_reports': [dict(report) for report in pruning.iteration_reports],
+            'l_min': int(pruning.l_min),
+            'protected_leaves_skipped': int(pruning.protected_leaves_skipped),
+            'removed_edges_count': int(len(pruning.removed_edges)),
+            'stale_entries_skipped': int(pruning.stale_entries_skipped),
+            'total_branches_pruned': int(pruning.total_branches_pruned),
+            'total_edges_removed': int(pruning.total_edges_removed),
+            'total_iterations': int(pruning.total_iterations),
+        },
+        'skeleton': {
+            'anchor_boundary': bool(skeleton.anchor_boundary),
+            'anchor_vertex_count': int(len(skeleton.anchor_vertices)),
+            'd_max': int(skeleton.d_max),
+            'initial_candidate_count': int(len(skeleton.initial_candidate_vertices)),
+            'iterations_performed': int(skeleton.iterations_performed),
+            'refused_by_anchor': int(skeleton.refused_by_anchor),
+            'refused_by_distance_test': int(skeleton.refused_by_distance_test),
+            'refused_by_simple_test': int(skeleton.refused_by_simple_test),
+            'removals_committed': int(skeleton.removals_committed),
+            'skeleton_vertex_count': int(len(skeleton.skeleton_vertices)),
+            'tau_low': float(skeleton.tau_low),
+        },
+    }
+    return {key: payload[key] for key in sorted(payload)}
 
 
 def _validated_probability_vector(view: SeamGraphView, probabilities: np.ndarray) -> np.ndarray:

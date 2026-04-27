@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from models.utils.seam_topology import (
     BridgingResult,
     SeamGraphView,
     SkeletonResult,
+    apply_topology_pipeline,
     build_seam_graph_view,
     build_skeleton_subgraph,
     boundary_vertices_from_topology,
@@ -20,6 +22,7 @@ from models.utils.seam_topology import (
     diagnose_skeleton_application,
     diagnostics_to_json_dict,
     lift_edge_probabilities_to_vertices,
+    topology_pipeline_result_to_json_dict,
 )
 from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
@@ -126,6 +129,27 @@ def _edge_index(view: SeamGraphView, edge: tuple[int, int]) -> int:
         if (int(candidate[0]), int(candidate[1])) == edge_key:
             return int(index)
     raise AssertionError(f'edge {edge_key} not found')
+
+
+def _grid_view(
+    row_count: int,
+    col_count: int,
+) -> tuple[SeamGraphView, CanonicalTopology]:
+    coords = [
+        (float(col), float(row_count - 1 - row), 0.0)
+        for row in range(row_count)
+        for col in range(col_count)
+    ]
+    faces: list[tuple[int, int, int]] = []
+    for row in range(row_count - 1):
+        for col in range(col_count - 1):
+            a = row * col_count + col
+            b = a + 1
+            c = a + col_count
+            d = c + 1
+            faces.append((a, c, b))
+            faces.append((b, c, d))
+    return _build_view_from_faces(faces, coords)
 
 
 def _manual_skeleton_result(
@@ -1326,6 +1350,164 @@ class PruningTests(unittest.TestCase):
         self.assertGreater(before.branch_count, after.branch_count)
         self.assertGreaterEqual(before.junction_count, after.junction_count)
         self.assertEqual(before.seam_edge_count - after.seam_edge_count, 4)
+
+
+class PipelineTests(unittest.TestCase):
+    @staticmethod
+    def _masked_graph(view: SeamGraphView, mask: np.ndarray) -> nx.Graph:
+        graph = nx.Graph()
+        for index in np.flatnonzero(mask):
+            u = int(view.unique_edges[index, 0])
+            v = int(view.unique_edges[index, 1])
+            graph.add_edge(u, v, edge_index=int(index))
+        return graph
+
+    @staticmethod
+    def _assert_json_scalar_tree(test_case: unittest.TestCase, value) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                test_case.assertIsInstance(key, str)
+                PipelineTests._assert_json_scalar_tree(test_case, item)
+            return
+        if isinstance(value, list):
+            for item in value:
+                PipelineTests._assert_json_scalar_tree(test_case, item)
+            return
+        test_case.assertIsInstance(value, (int, float, str, bool, type(None)))
+
+    def test_pipeline_validation_errors(self):
+        _, view = _strip_topology(length=2)
+        probabilities = np.zeros(view.edge_count, dtype=np.float64)
+
+        with self.assertRaisesRegex(ValueError, 'anchor_boundary=True requires'):
+            apply_topology_pipeline(view, probabilities, topology=None)
+
+    def test_pipeline_end_to_end_thick_band_with_micro_gaps(self):
+        view, topology = _grid_view(row_count=3, col_count=8)
+        middle_row = 8
+        probabilities = np.full(view.edge_count, 0.05, dtype=np.float64)
+        middle_edges = [
+            (middle_row + col, middle_row + col + 1)
+            for col in range(7)
+        ]
+        middle_vertices = set(range(middle_row, middle_row + 8))
+        for edge_index, edge in enumerate(view.unique_edges):
+            if int(edge[0]) in middle_vertices or int(edge[1]) in middle_vertices:
+                probabilities[edge_index] = 0.99
+        probabilities[_edge_index(view, middle_edges[3])] = 0.40
+        probabilities[_edge_index(view, middle_edges[4])] = 0.40
+
+        result = apply_topology_pipeline(
+            view,
+            probabilities,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({middle_row, middle_row + 7}),
+            topology=topology,
+        )
+
+        self.assertGreater(result.skeleton_result.removals_committed, 0)
+        self.assertGreaterEqual(result.bridging_result.steiner_edges_added_total, 0)
+        self.assertGreaterEqual(result.pruning_result.total_branches_pruned, 0)
+        graph = self._masked_graph(view, result.final_edge_mask)
+        self.assertTrue(nx.has_path(graph, middle_row, middle_row + 7))
+        final_probabilities = np.where(result.final_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
+        diagnostics = compute_seam_mask_diagnostics(view, final_probabilities, 0.5)
+        self.assertEqual(diagnostics.thick_band_edge_count, 0)
+
+    def test_pipeline_no_op_on_empty_probabilities(self):
+        view, topology = _grid_view(row_count=3, col_count=4)
+        probabilities = np.zeros(view.edge_count, dtype=np.float64)
+
+        result = apply_topology_pipeline(
+            view,
+            probabilities,
+            anchor_boundary=False,
+            topology=topology,
+        )
+
+        self.assertFalse(np.any(result.final_edge_mask))
+        self.assertEqual(result.skeleton_result.removals_committed, 0)
+        self.assertEqual(result.bridging_result.steiner_calls, 0)
+        self.assertEqual(result.pruning_result.total_branches_pruned, 0)
+
+    def test_pipeline_subset_of_initial_candidate(self):
+        view, topology = _grid_view(row_count=3, col_count=6)
+        probabilities = _edge_probability_vector(
+            view,
+            {
+                (6, 7): 0.95,
+                (7, 8): 0.95,
+                (10, 11): 0.95,
+                (8, 9): 0.35,
+                (9, 10): 0.35,
+            },
+            default=0.05,
+        )
+        r_bridge = 2
+
+        result = apply_topology_pipeline(
+            view,
+            probabilities,
+            r_bridge=r_bridge,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({6, 11}),
+            topology=topology,
+        )
+
+        allowed = set(result.skeleton_result.initial_candidate_vertices)
+        queue = [(int(vertex), 0) for vertex in result.skeleton_result.skeleton_vertices]
+        seen = {vertex for vertex, _ in queue}
+        while queue:
+            vertex, distance = queue.pop(0)
+            allowed.add(vertex)
+            if distance >= r_bridge:
+                continue
+            for neighbor in view.vertex_graph.neighbors(vertex):
+                neighbor_index = int(neighbor)
+                if neighbor_index in seen:
+                    continue
+                seen.add(neighbor_index)
+                queue.append((neighbor_index, distance + 1))
+
+        for edge_index in np.flatnonzero(result.final_edge_mask):
+            u = int(view.unique_edges[edge_index, 0])
+            v = int(view.unique_edges[edge_index, 1])
+            self.assertIn(u, allowed)
+            self.assertIn(v, allowed)
+
+    def test_pipeline_telemetry_serialization(self):
+        view, topology = _grid_view(row_count=3, col_count=4)
+        probabilities = _edge_probability_vector(
+            view,
+            {
+                (4, 5): 0.95,
+                (5, 6): 0.95,
+                (6, 7): 0.95,
+            },
+            default=0.05,
+        )
+        result = apply_topology_pipeline(
+            view,
+            probabilities,
+            anchor_boundary=False,
+            extra_anchor_vertices=frozenset({4, 7}),
+            topology=topology,
+        )
+
+        payload = topology_pipeline_result_to_json_dict(result)
+        encoded = json.dumps(payload, sort_keys=True)
+        decoded = json.loads(encoded)
+
+        self.assertEqual(set(payload), {'bridging', 'final_edge_count', 'parameters', 'pruning', 'skeleton'})
+        self.assertEqual(
+            set(payload['parameters']),
+            {'tau_low', 'tau_high', 'd_max', 'r_bridge', 'l_min', 'epsilon', 'anchor_boundary'},
+        )
+        self.assertIn('component_reports', payload['bridging'])
+        self.assertIn('iteration_reports', payload['pruning'])
+        self.assertEqual(payload['final_edge_count'], int(result.final_edge_mask.sum()))
+        self._assert_json_scalar_tree(self, payload)
+        self.assertEqual(decoded, payload)
 
 
 if __name__ == '__main__':

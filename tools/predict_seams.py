@@ -24,9 +24,11 @@ from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa
 from models.meshcnn_full.model import MeshCNNSegmenter  # noqa: E402
 from models.utils.postprocess import apply_seam_postprocessing  # noqa: E402
 from models.utils.seam_topology import (  # noqa: E402
+    apply_topology_pipeline,
     build_seam_graph_view,
     compute_seam_mask_diagnostics,
     diagnostics_to_json_dict,
+    topology_pipeline_result_to_json_dict,
 )
 from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
@@ -80,6 +82,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--postprocess-snap-max-edges', type=int, default=12)
     parser.add_argument('--postprocess-r-band', type=int, default=2)
     parser.add_argument('--postprocess-eta-main', type=float, default=0.35)
+    parser.add_argument(
+        '--postprocess-version',
+        choices=('v1', 'v2'),
+        default='v1',
+        help='Which postprocessing pipeline to apply. v1 = legacy '
+             'apply_seam_postprocessing (default). v2 = three-stage '
+             'topology pipeline (skeletonize -> bridge -> prune).'
+    )
+    parser.add_argument(
+        '--postprocess-v2-tau-low', type=float, default=0.30,
+        help='v2 only: candidate-set threshold for skeletonization.'
+    )
+    parser.add_argument(
+        '--postprocess-v2-tau-high', type=float, default=0.70,
+        help='v2 only: confidence-terminal threshold for Steiner bridging.'
+    )
+    parser.add_argument(
+        '--postprocess-v2-d-max', type=int, default=3,
+        help='v2 only: thickness-preservation distance for skeletonization.'
+    )
+    parser.add_argument(
+        '--postprocess-v2-r-bridge', type=int, default=6,
+        help='v2 only: bounded-search radius for Steiner bridging.'
+    )
+    parser.add_argument(
+        '--postprocess-v2-l-min', type=int, default=4,
+        help='v2 only: minimum branch length for spur pruning.'
+    )
+    parser.add_argument(
+        '--postprocess-v2-epsilon', type=float, default=1e-3,
+        help='v2 only: numerical floor for -log(p) edge weights.'
+    )
+    parser.add_argument(
+        '--postprocess-v2-anchor-boundary',
+        action=argparse.BooleanOptionalAction, default=True,
+        help='v2 only: whether to use mesh-boundary vertices as '
+             'structural anchors.'
+    )
     parser.add_argument('--postprocess-max-spur-edges', type=int, default=3)
     parser.add_argument('--postprocess-spur-mean-conf', type=float, default=0.35)
     parser.add_argument('--postprocess-spur-added-fraction-min', type=float, default=0.50)
@@ -148,6 +188,18 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
         'max_spur_edges': int(args.postprocess_max_spur_edges),
         'spur_mean_conf': float(args.postprocess_spur_mean_conf),
         'spur_added_fraction_min': float(args.postprocess_spur_added_fraction_min),
+    }
+
+
+def postprocess_v2_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        'tau_low': float(args.postprocess_v2_tau_low),
+        'tau_high': float(args.postprocess_v2_tau_high),
+        'd_max': int(args.postprocess_v2_d_max),
+        'r_bridge': int(args.postprocess_v2_r_bridge),
+        'l_min': int(args.postprocess_v2_l_min),
+        'epsilon': float(args.postprocess_v2_epsilon),
+        'anchor_boundary': bool(args.postprocess_v2_anchor_boundary),
     }
 
 
@@ -908,7 +960,11 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
         topology=topology,
         unique_edges=unique_edges,
     )
-    if bool(getattr(args, 'postprocess', True)):
+    v2_telemetry: dict[str, Any] | None = None
+    postprocess_version = getattr(args, 'postprocess_version', 'v1')
+    if not bool(getattr(args, 'postprocess', True)):
+        seam_mask = probabilities >= threshold
+    elif postprocess_version == 'v1':
         seam_mask = apply_seam_postprocessing(
             topology=topology,
             unique_edges=unique_edges,
@@ -916,8 +972,33 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
             threshold=threshold,
             **postprocess_kwargs_from_args(args),
         )
+    elif postprocess_version == 'v2':
+        try:
+            view = build_seam_graph_view(topology, unique_edges)
+            v2_kwargs = postprocess_v2_kwargs_from_args(args)
+            pipeline_result = apply_topology_pipeline(
+                view=view,
+                probabilities=probabilities,
+                topology=topology,
+                **v2_kwargs,
+            )
+        except Exception as exc:
+            raise PredictionError(
+                f'postprocess v2 pipeline failed: {exc}',
+                'PostprocessV2Failed',
+            ) from exc
+        seam_mask = pipeline_result.final_edge_mask
+        v2_telemetry = topology_pipeline_result_to_json_dict(pipeline_result)
     else:
-        seam_mask = probabilities >= threshold
+        raise PredictionError(
+            f'unknown postprocess version: {postprocess_version!r}',
+            'InvalidArgument',
+        )
+
+    if v2_telemetry is not None:
+        if diagnostics is None:
+            diagnostics = {}
+        diagnostics['postprocess_v2'] = v2_telemetry
 
     return build_output_payload(
         mesh_path=mesh_path,
