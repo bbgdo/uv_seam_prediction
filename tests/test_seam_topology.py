@@ -1,4 +1,7 @@
 import json
+import importlib.util
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 
@@ -9,6 +12,7 @@ from models.utils.seam_topology import (
     BridgingResult,
     SeamGraphView,
     SkeletonResult,
+    TopologyPipelineResult,
     apply_topology_pipeline,
     build_seam_graph_view,
     build_skeleton_subgraph,
@@ -1754,6 +1758,28 @@ def default_gap_probabilities(start: int, stop: int) -> dict[tuple[int, int], fl
     return {(left, left + 1): 0.20 for left in range(start, stop)}
 
 
+def _manual_pipeline_result(
+    *,
+    skel_result: SkeletonResult,
+    bridging_result: BridgingResult,
+    pruning_result,
+    final_edge_mask: np.ndarray,
+) -> TopologyPipelineResult:
+    return TopologyPipelineResult(
+        final_edge_mask=final_edge_mask,
+        skeleton_result=skel_result,
+        bridging_result=bridging_result,
+        pruning_result=pruning_result,
+        tau_low=0.30,
+        tau_high=0.70,
+        d_max=3,
+        r_bridge=6,
+        l_min=4,
+        epsilon=1e-3,
+        anchor_boundary=False,
+    )
+
+
 class EndpointBridgingTests(unittest.TestCase):
     @staticmethod
     def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
@@ -1992,6 +2018,229 @@ class EndpointBridgingTests(unittest.TestCase):
 
         self.assertEqual(result.bridges_accepted, 0)
         self.assertGreater(result.bridges_rejected_by_skeleton_intersection, 0)
+
+    def test_bridge_telemetry_reports_final_survival(self):
+        skeleton_edges = {(0, 1), (1, 2), (3, 4), (4, 5)}
+        view, probabilities, skel_result = self._chain_skeleton(6, skeleton_edges)
+        bridge = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+        )
+        prune = compute_spur_pruning(view, bridge, l_min=1, anchor_boundary=False)
+        pipeline = _manual_pipeline_result(
+            skel_result=skel_result,
+            bridging_result=bridge,
+            pruning_result=prune,
+            final_edge_mask=prune.pruned_edge_mask,
+        )
+
+        payload = topology_pipeline_result_to_json_dict(pipeline)
+        bridging = payload['bridging']
+
+        gap_index = _edge_index(view, (2, 3))
+        self.assertEqual(bridging['seam_edge_count_before_stage_b'], int(skel_result.skeleton_edge_mask.sum()))
+        self.assertEqual(bridging['seam_edge_count_after_stage_b'], int(bridge.bridged_edge_mask.sum()))
+        self.assertEqual(bridging['seam_edge_count_after_stage_c'], int(prune.pruned_edge_mask.sum()))
+        self.assertEqual(bridging['accepted_bridge_edge_indices'], [gap_index])
+        self.assertEqual(bridging['accepted_bridge_edge_keys'], [[2, 3]])
+        self.assertEqual(bridging['accepted_bridge_edges_survived_to_final'], 1)
+        self.assertEqual(bridging['accepted_bridge_edges_removed_by_stage_c'], 0)
+        self.assertTrue(bridging['final_output_contains_accepted_bridge_edges'])
+        self.assertEqual(
+            bridging['bridge_edge_ids_final_presence'],
+            [{
+                'edge_id': gap_index,
+                'vertex_ids_0based': [2, 3],
+                'in_after_stage_b': True,
+                'in_after_stage_c': True,
+                'in_output_seam_edge_indices': True,
+                'in_output_seam_edges': True,
+                'original_blender_edge_if_traceable': None,
+                'applied_by_blender_if_traceable': None,
+            }],
+        )
+
+    def test_bridge_telemetry_reports_stage_c_removal(self):
+        skeleton_edges = {(0, 1), (2, 3)}
+        view, _, skel_result = self._chain_skeleton(4, skeleton_edges)
+        bridge = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+        )
+        prune = compute_spur_pruning(view, bridge, l_min=4, anchor_boundary=False)
+        pipeline = _manual_pipeline_result(
+            skel_result=skel_result,
+            bridging_result=bridge,
+            pruning_result=prune,
+            final_edge_mask=prune.pruned_edge_mask,
+        )
+
+        bridging = topology_pipeline_result_to_json_dict(pipeline)['bridging']
+
+        self.assertEqual(bridging['accepted_bridge_edges_survived_to_final'], 0)
+        self.assertEqual(bridging['accepted_bridge_edges_removed_by_stage_c'], 1)
+        self.assertFalse(bridging['final_output_contains_accepted_bridge_edges'])
+        self.assertFalse(bridging['bridge_edge_ids_final_presence'][0]['in_after_stage_c'])
+
+    def test_build_output_payload_uses_final_mask_for_seam_lists(self):
+        from tools.predict_seams import build_output_payload
+
+        topology = SimpleNamespace(
+            canonical_vertices=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)),
+            canonical_faces=(),
+            edge_incidence={(0, 1): (object(), object()), (1, 2): (object(),)},
+        )
+        unique_edges = np.asarray([(0, 1), (1, 2)], dtype=np.int64)
+        diagnostics = {
+            'postprocess': {
+                'bridging': {
+                    'accepted_bridge_edge_indices': [1],
+                    'bridge_edge_ids_final_presence': [{
+                        'edge_id': 1,
+                        'vertex_ids_0based': [1, 2],
+                        'in_after_stage_b': True,
+                        'in_after_stage_c': True,
+                        'in_output_seam_edge_indices': False,
+                        'in_output_seam_edges': False,
+                        'original_blender_edge_if_traceable': None,
+                        'applied_by_blender_if_traceable': None,
+                    }],
+                },
+            },
+        }
+
+        payload = build_output_payload(
+            mesh_path=Path('mesh.obj'),
+            output_json=Path('prediction.json'),
+            weights_path=Path('weights.pt'),
+            config_path=Path('config.json'),
+            summary_path=Path('summary.json'),
+            model_type='graphsage',
+            feature_bundle='paper14_locked',
+            selection=SimpleNamespace(feature_group='paper14', feature_names=(), feature_count=0),
+            threshold=0.5,
+            device='cpu',
+            topology=topology,
+            unique_edges=unique_edges,
+            probabilities=np.asarray([0.9, 0.1], dtype=np.float64),
+            seam_mask=np.asarray([False, True], dtype=bool),
+            write_all_edges=True,
+            diagnostics=diagnostics,
+        )
+
+        self.assertEqual(payload['seam_edge_indices'], [1])
+        self.assertEqual([row['canonical_edge_index'] for row in payload['seam_edges']], [1])
+        bridging = payload['diagnostics']['postprocess']['bridging']
+        self.assertEqual(bridging['accepted_bridge_edges_survived_to_final'], 1)
+        self.assertEqual(bridging['accepted_bridge_edges_removed_by_stage_c'], 0)
+        self.assertTrue(bridging['bridge_edge_ids_final_presence'][0]['in_output_seam_edge_indices'])
+        self.assertTrue(bridging['bridge_edge_ids_final_presence'][0]['in_output_seam_edges'])
+
+    def test_same_component_candidate_telemetry_is_populated(self):
+        topology = _make_stub_topology(
+            vertices=[(float(index), 0.0, 0.0) for index in range(4)],
+            edges=[(0, 1), (1, 2), (2, 3), (0, 3)],
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skel_result = _manual_skeleton_result(view, probabilities, {(0, 1), (1, 2), (2, 3)})
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+            min_loop_size_to_allow=8,
+        )
+
+        self.assertEqual(result.same_component_candidates_considered, 1)
+        self.assertEqual(result.same_component_bridges_accepted, 0)
+        self.assertEqual(result.same_component_bridges_rejected_by_already_connected, 1)
+
+
+class BlenderSeamMappingDebugTests(unittest.TestCase):
+    class _FakeEdge:
+        def __init__(self, vertices):
+            self.vertices = vertices
+            self.use_seam = False
+
+    class _FakeMesh:
+        def __init__(self, edges):
+            self.edges = [BlenderSeamMappingDebugTests._FakeEdge(edge) for edge in edges]
+            self.update_count = 0
+
+        def update(self):
+            self.update_count += 1
+
+    @staticmethod
+    def _load_seam_mapping():
+        path = Path(__file__).resolve().parents[1] / 'blender_addon' / 'uv_seam_predictor' / 'seam_mapping.py'
+        spec = importlib.util.spec_from_file_location('uvsp_seam_mapping_debug', path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        return module
+
+    def test_seam_mapping_consumes_final_seam_edges(self):
+        seam_mapping = self._load_seam_mapping()
+        payload = {
+            'status': 'ok',
+            'seam_edge_indices': [99],
+            'seam_edges': [{'canonical_edge_index': 1, 'vertex_ids_0based': [1, 2]}],
+        }
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump(payload, handle)
+            json_path = handle.name
+        try:
+            keys = seam_mapping.load_predicted_edge_keys(json_path)
+        finally:
+            Path(json_path).unlink(missing_ok=True)
+
+        self.assertEqual(keys, [(1, 2)])
+
+    def test_seam_mapping_reports_ignored_bridge_edges(self):
+        seam_mapping = self._load_seam_mapping()
+        mesh = self._FakeMesh(edges=[(0, 1), (1, 2)])
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (2, 3)],
+            clear_existing=True,
+            accepted_bridge_keys=[(0, 1), (2, 3)],
+        )
+
+        self.assertEqual(result.applied, 1)
+        self.assertEqual(result.ignored_non_original, 1)
+        self.assertEqual(result.accepted_bridge_edges_present_in_json, 2)
+        self.assertEqual(result.accepted_bridge_edges_applied, 1)
+        self.assertEqual(result.accepted_bridge_edges_ignored_non_original, 1)
+
+    def test_load_accepted_bridge_edge_keys_from_prediction_json(self):
+        seam_mapping = self._load_seam_mapping()
+        payload = {
+            'status': 'ok',
+            'seam_edges': [],
+            'diagnostics': {
+                'postprocess': {
+                    'bridging': {
+                        'accepted_bridge_edge_keys': [[3, 2], [5, 6]],
+                    },
+                },
+            },
+        }
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump(payload, handle)
+            json_path = handle.name
+        try:
+            keys = seam_mapping.load_accepted_bridge_edge_keys(json_path)
+        finally:
+            Path(json_path).unlink(missing_ok=True)
+
+        self.assertEqual(keys, [(2, 3), (5, 6)])
 
 
 class PruningTests(unittest.TestCase):

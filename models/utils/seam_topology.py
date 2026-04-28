@@ -650,6 +650,12 @@ class BridgingResult:
     unmatched_endpoints: tuple[int, ...] = tuple()
     bridge_length_edges_histogram: dict[int, int] | None = None
     probability_tiebreak_used: bool = False
+    accepted_bridge_edge_indices: tuple[int, ...] = tuple()
+    accepted_bridge_edge_keys: tuple[tuple[int, int], ...] = tuple()
+    same_component_candidates_considered: int = 0
+    same_component_bridges_accepted: int = 0
+    same_component_bridges_rejected_by_loop: int = 0
+    same_component_bridges_rejected_by_already_connected: int = 0
     max_bridge_edges: int = 6
     max_bridge_euclidean_ratio: float = 0.03
     max_endpoint_candidates: int = 4
@@ -966,10 +972,16 @@ def compute_endpoint_bridging(
     endpoint_pairs_considered = 0
     candidate_paths_found = 0
     candidate_paths_valid = 0
+    same_component_candidates_considered = 0
+    same_component_bridges_rejected_by_loop = 0
+    same_component_bridges_rejected_by_already_connected = 0
 
     for left_index, left in enumerate(endpoints):
         for right in endpoints[left_index + 1:]:
             endpoint_pairs_considered += 1
+            same_component_pair = component_id_of.get(left) == component_id_of.get(right)
+            if same_component_pair:
+                same_component_candidates_considered += 1
             euclidean_distance = _vertex_distance(view, left, right)
             base_report = _bridge_report_base(left, right, component_id_of)
             if euclidean_distance > max_euclidean_distance:
@@ -1018,18 +1030,20 @@ def compute_endpoint_bridging(
                 rejected_reports.append({**path_report, 'rejection_reason': 'skeleton_intersection'})
                 continue
 
-            same_component = component_id_of.get(left) == component_id_of.get(right)
+            same_component = same_component_pair
             loop_size: int | None = None
             if same_component:
                 component_id = component_id_of[left]
                 if component_endpoint_counts.get(component_id, 0) != 2:
                     counters['bridges_rejected_by_loop'] += 1
+                    same_component_bridges_rejected_by_loop += 1
                     rejected_reports.append({**path_report, 'rejection_reason': 'loop'})
                     continue
                 skeleton_path_edges = nx.shortest_path_length(skeleton_graph, left, right)
                 loop_size = int(skeleton_path_edges) + edge_count
                 if loop_size < min_loop_size_value:
                     counters['bridges_rejected_by_already_connected'] += 1
+                    same_component_bridges_rejected_by_already_connected += 1
                     rejected_reports.append({
                         **path_report,
                         'rejection_reason': 'already_connected',
@@ -1100,6 +1114,7 @@ def compute_endpoint_bridging(
     added_bridge_edges: set[int] = set()
     accepted_lengths: list[int] = []
     histogram: dict[int, int] = {}
+    same_component_bridges_accepted = 0
 
     for report in sorted(eligible, key=lambda item: tuple(item['score_tuple'])):
         left, right = report['endpoint_vertex_ids']
@@ -1123,6 +1138,8 @@ def compute_endpoint_bridging(
         accepted_lengths.append(int(report['bridge_edge_count']))
         histogram[int(report['bridge_edge_count'])] = histogram.get(int(report['bridge_edge_count']), 0) + 1
         accepted_reports.append(dict(report))
+        if bool(report.get('same_component')):
+            same_component_bridges_accepted += 1
 
     after_graph = build_skeleton_subgraph(view, bridged_mask)
     endpoints_after = sum(1 for _, degree in after_graph.degree() if int(degree) == 1)
@@ -1157,6 +1174,17 @@ def compute_endpoint_bridging(
         unmatched_endpoints=unmatched,
         bridge_length_edges_histogram=dict(sorted(histogram.items())),
         probability_tiebreak_used=False,
+        accepted_bridge_edge_indices=tuple(sorted(int(edge_index) for edge_index in added_bridge_edges)),
+        accepted_bridge_edge_keys=tuple(
+            (int(view.unique_edges[edge_index, 0]), int(view.unique_edges[edge_index, 1]))
+            for edge_index in sorted(added_bridge_edges)
+        ),
+        same_component_candidates_considered=int(same_component_candidates_considered),
+        same_component_bridges_accepted=int(same_component_bridges_accepted),
+        same_component_bridges_rejected_by_loop=int(same_component_bridges_rejected_by_loop),
+        same_component_bridges_rejected_by_already_connected=int(
+            same_component_bridges_rejected_by_already_connected
+        ),
         max_bridge_edges=max_bridge_edges_value,
         max_bridge_euclidean_ratio=max_ratio_value,
         max_endpoint_candidates=max_endpoint_candidates_value,
@@ -1536,14 +1564,55 @@ def topology_pipeline_result_to_json_dict(
     skeleton = result.skeleton_result
     bridging = result.bridging_result
     pruning = result.pruning_result
+    accepted_bridge_edge_indices = tuple(sorted(int(index) for index in bridging.accepted_bridge_edge_indices))
+    survived_bridge_edges = tuple(
+        edge_index
+        for edge_index in accepted_bridge_edge_indices
+        if bool(result.final_edge_mask[edge_index])
+    )
+    removed_bridge_edges = tuple(
+        edge_index
+        for edge_index in accepted_bridge_edge_indices
+        if not bool(result.final_edge_mask[edge_index])
+    )
+    accepted_bridge_edge_keys = {
+        int(edge_index): [int(edge_key[0]), int(edge_key[1])]
+        for edge_index, edge_key in zip(
+            bridging.accepted_bridge_edge_indices,
+            bridging.accepted_bridge_edge_keys,
+        )
+    }
+    bridge_edge_ids_final_presence = [
+        {
+            'edge_id': int(edge_index),
+            'vertex_ids_0based': accepted_bridge_edge_keys[int(edge_index)],
+            'in_after_stage_b': bool(bridging.bridged_edge_mask[edge_index]),
+            'in_after_stage_c': bool(result.final_edge_mask[edge_index]),
+            'in_output_seam_edge_indices': bool(result.final_edge_mask[edge_index]),
+            'in_output_seam_edges': bool(result.final_edge_mask[edge_index]),
+            'original_blender_edge_if_traceable': None,
+            'applied_by_blender_if_traceable': None,
+        }
+        for edge_index in accepted_bridge_edge_indices
+    ]
     payload = {
         'bridging': {
             'accepted_bridge_reports': [dict(report) for report in bridging.accepted_bridge_reports],
+            'accepted_bridge_edge_indices': [int(index) for index in accepted_bridge_edge_indices],
+            'accepted_bridge_edge_keys': [
+                [int(edge_key[0]), int(edge_key[1])]
+                for edge_key in bridging.accepted_bridge_edge_keys
+            ],
+            'accepted_bridge_edges_ignored_by_blender_if_traceable': None,
+            'accepted_bridge_edges_non_original_if_traceable': None,
+            'accepted_bridge_edges_removed_by_stage_c': int(len(removed_bridge_edges)),
+            'accepted_bridge_edges_survived_to_final': int(len(survived_bridge_edges)),
             'added_bridge_edges': int(bridging.added_bridge_edges_count),
             'bridge_length_edges_histogram': {
                 str(key): int(value)
                 for key, value in sorted((bridging.bridge_length_edges_histogram or {}).items())
             },
+            'bridge_edge_ids_final_presence': bridge_edge_ids_final_presence,
             'bridges_accepted': int(bridging.bridges_accepted),
             'bridges_rejected_by_already_connected': int(bridging.bridges_rejected_by_already_connected),
             'bridges_rejected_by_conflict': int(bridging.bridges_rejected_by_conflict),
@@ -1564,6 +1633,7 @@ def topology_pipeline_result_to_json_dict(
             'endpoint_pairs_considered': int(bridging.endpoint_pairs_considered),
             'endpoints_after': int(bridging.endpoints_after),
             'endpoints_before': int(bridging.endpoints_before),
+            'final_output_contains_accepted_bridge_edges': bool(len(survived_bridge_edges) > 0),
             'legacy_probability_bridging': dict(bridging.legacy_probability_bridging or {}),
             'max_bridge_length_edges': int(bridging.max_bridge_length_edges),
             'mean_bridge_length_edges': float(bridging.mean_bridge_length_edges),
@@ -1578,6 +1648,15 @@ def topology_pipeline_result_to_json_dict(
             'path_weighting': str(bridging.path_weighting),
             'probability_tiebreak_used': bool(bridging.probability_tiebreak_used),
             'rejected_bridge_reports': [dict(report) for report in bridging.rejected_bridge_reports],
+            'same_component_bridges_accepted': int(bridging.same_component_bridges_accepted),
+            'same_component_bridges_rejected_by_already_connected': int(
+                bridging.same_component_bridges_rejected_by_already_connected
+            ),
+            'same_component_bridges_rejected_by_loop': int(bridging.same_component_bridges_rejected_by_loop),
+            'same_component_candidates_considered': int(bridging.same_component_candidates_considered),
+            'seam_edge_count_after_stage_b': int(np.count_nonzero(bridging.bridged_edge_mask)),
+            'seam_edge_count_after_stage_c': int(np.count_nonzero(result.final_edge_mask)),
+            'seam_edge_count_before_stage_b': int(np.count_nonzero(skeleton.skeleton_edge_mask)),
             'unmatched_endpoints': [int(vertex) for vertex in bridging.unmatched_endpoints],
         },
         'final_edge_count': int(np.count_nonzero(result.final_edge_mask)),

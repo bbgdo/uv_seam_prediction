@@ -138,12 +138,20 @@ class RealMeshBridgingTests(unittest.TestCase):
         fixture: _HonestProbabilityFixture,
         result,
     ) -> None:
+        survived_bridge_edges = 0
         for edge in fixture.gap_edges:
             edge_index = _edge_index(fixture.view, edge)
             self.assertLess(fixture.probabilities[edge_index], 0.30, edge)
             self.assertFalse(result.skeleton_result.skeleton_edge_mask[edge_index], edge)
             self.assertTrue(result.bridging_result.bridged_edge_mask[edge_index], edge)
             self.assertIn(edge_index, result.bridging_result.added_bridge_edges, edge)
+            if result.final_edge_mask[edge_index]:
+                survived_bridge_edges += 1
+        self.assertGreater(survived_bridge_edges, 0)
+        self.assertGreaterEqual(
+            len(result.bridging_result.accepted_bridge_edge_indices),
+            len(fixture.gap_edges),
+        )
 
     def test_fixture_actually_creates_a_gap(self):
         """
