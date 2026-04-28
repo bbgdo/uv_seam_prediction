@@ -107,6 +107,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='Soft tangent-alignment score weight for Stage B.'
     )
     parser.add_argument(
+        '--postprocess-max-debug-candidates', type=int, default=64,
+        help='Maximum diagnostic Stage B local gap candidates to include per list.'
+    )
+    parser.add_argument(
         '--postprocess-l-min', type=int, default=4,
         help='Minimum branch length for spur pruning (Stage C).'
     )
@@ -189,6 +193,8 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
         kwargs['min_loop_size_to_allow'] = int(args.postprocess_min_loop_size_to_allow)
     if hasattr(args, 'postprocess_tangent_alignment_weight'):
         kwargs['tangent_alignment_weight'] = float(args.postprocess_tangent_alignment_weight)
+    if hasattr(args, 'postprocess_max_debug_candidates'):
+        kwargs['max_debug_candidates'] = int(args.postprocess_max_debug_candidates)
     return kwargs
 
 

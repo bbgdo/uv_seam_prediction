@@ -2160,6 +2160,80 @@ class EndpointBridgingTests(unittest.TestCase):
         self.assertEqual(result.same_component_candidates_considered, 1)
         self.assertEqual(result.same_component_bridges_accepted, 0)
         self.assertEqual(result.same_component_bridges_rejected_by_already_connected, 1)
+        self.assertEqual(len(result.same_component_rejected_candidate_reports), 1)
+        report = result.same_component_rejected_candidate_reports[0]
+        self.assertEqual(report['endpoint_vertex_ids'], [0, 3])
+        self.assertEqual(report['rejection_reason'], 'already_connected')
+        self.assertEqual(report['path_edge_count'], 1)
+
+    def test_missing_edge_continuity_diagnostic_detects_skeleton_vertices(self):
+        topology = _make_stub_topology(
+            vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)],
+            edges=[(0, 1), (1, 2), (0, 2)],
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skel_result = _manual_skeleton_result(view, probabilities, {(0, 1), (1, 2)})
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        candidates = result.local_missing_edge_continuity_candidates
+        self.assertEqual(result.local_missing_edge_continuity_candidates_total, 1)
+        self.assertEqual(candidates[0]['vertex_ids_0based'], [0, 2])
+        self.assertEqual(candidates[0]['why_not_currently_accepted'], 'both_vertices_already_in_skeleton')
+
+    def test_endpoint_to_skeleton_diagnostic_detects_degree_two_target(self):
+        topology = _make_stub_topology(
+            vertices=[(float(index), 0.0, 0.0) for index in range(6)],
+            edges=[(0, 1), (1, 2), (4, 5), (1, 3), (3, 5)],
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skel_result = _manual_skeleton_result(view, probabilities, {(0, 1), (1, 2), (4, 5)})
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=2,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        candidates = [
+            report for report in result.endpoint_to_skeleton_candidates
+            if report['endpoint_vertex_id'] == 5 and report['target_skeleton_vertex_id'] == 1
+        ]
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0]['target_seam_degree'], 2)
+        self.assertEqual(candidates[0]['reason_not_covered'], 'target_is_not_degree_1_endpoint')
+
+    def test_near_junction_diagnostic_detects_local_gap(self):
+        topology = _make_stub_topology(
+            vertices=[(float(index), 0.0, 0.0) for index in range(8)],
+            edges=[(0, 1), (1, 2), (1, 3), (5, 6), (1, 4), (4, 5)],
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skel_result = _manual_skeleton_result(view, probabilities, {(0, 1), (1, 2), (1, 3), (5, 6)})
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=2,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        candidates = [
+            report for report in result.near_junction_gap_candidates
+            if report['source_vertex_id'] == 5 and report['junction_vertex_id'] == 1
+        ]
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0]['path_edge_count'], 2)
+        self.assertEqual(result.near_junction_gap_candidates_total, len(result.near_junction_gap_candidates))
 
 
 class BlenderSeamMappingDebugTests(unittest.TestCase):
@@ -2210,7 +2284,24 @@ class BlenderSeamMappingDebugTests(unittest.TestCase):
             mesh,
             [(0, 1), (2, 3)],
             clear_existing=True,
-            accepted_bridge_keys=[(0, 1), (2, 3)],
+            accepted_bridge_entries=[
+                {
+                    'canonical_edge_index': 10,
+                    'vertex_ids_0based': [0, 1],
+                    'bridge_path_id': 0,
+                    'path_edge_count': 1,
+                    'same_component': False,
+                    'present_in_final_json': True,
+                },
+                {
+                    'canonical_edge_index': 11,
+                    'vertex_ids_0based': [2, 3],
+                    'bridge_path_id': 1,
+                    'path_edge_count': 1,
+                    'same_component': False,
+                    'present_in_final_json': True,
+                },
+            ],
         )
 
         self.assertEqual(result.applied, 1)
@@ -2218,6 +2309,35 @@ class BlenderSeamMappingDebugTests(unittest.TestCase):
         self.assertEqual(result.accepted_bridge_edges_present_in_json, 2)
         self.assertEqual(result.accepted_bridge_edges_applied, 1)
         self.assertEqual(result.accepted_bridge_edges_ignored_non_original, 1)
+        self.assertEqual(
+            list(result.accepted_bridge_apply_trace),
+            [
+                {
+                    'canonical_edge_index': 10,
+                    'vertex_ids_0based': [0, 1],
+                    'bridge_path_id': 0,
+                    'path_edge_count': 1,
+                    'same_component': False,
+                    'present_in_final_json': True,
+                    'blender_edge_key_exists': True,
+                    'applied_to_blender': True,
+                    'ignored_reason': None,
+                    'duplicate_or_already_marked': False,
+                },
+                {
+                    'canonical_edge_index': 11,
+                    'vertex_ids_0based': [2, 3],
+                    'bridge_path_id': 1,
+                    'path_edge_count': 1,
+                    'same_component': False,
+                    'present_in_final_json': True,
+                    'blender_edge_key_exists': False,
+                    'applied_to_blender': False,
+                    'ignored_reason': 'non_original',
+                    'duplicate_or_already_marked': False,
+                },
+            ],
+        )
 
     def test_load_accepted_bridge_edge_keys_from_prediction_json(self):
         seam_mapping = self._load_seam_mapping()
@@ -2227,7 +2347,17 @@ class BlenderSeamMappingDebugTests(unittest.TestCase):
             'diagnostics': {
                 'postprocess': {
                     'bridging': {
+                        'accepted_bridge_edge_indices': [7, 8],
                         'accepted_bridge_edge_keys': [[3, 2], [5, 6]],
+                        'accepted_bridge_reports': [{
+                            'path_edge_ids': [7, 8],
+                            'path_edge_count': 2,
+                            'same_component': True,
+                        }],
+                        'bridge_edge_ids_final_presence': [
+                            {'edge_id': 7, 'in_output_seam_edges': True},
+                            {'edge_id': 8, 'in_output_seam_edges': False},
+                        ],
                     },
                 },
             },
@@ -2241,6 +2371,19 @@ class BlenderSeamMappingDebugTests(unittest.TestCase):
             Path(json_path).unlink(missing_ok=True)
 
         self.assertEqual(keys, [(2, 3), (5, 6)])
+
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump(payload, handle)
+            json_path = handle.name
+        try:
+            entries = seam_mapping.load_accepted_bridge_debug_entries(json_path)
+        finally:
+            Path(json_path).unlink(missing_ok=True)
+        self.assertEqual(entries[0]['canonical_edge_index'], 7)
+        self.assertEqual(entries[0]['bridge_path_id'], 0)
+        self.assertEqual(entries[0]['path_edge_count'], 2)
+        self.assertTrue(entries[0]['same_component'])
+        self.assertTrue(entries[0]['present_in_final_json'])
 
 
 class PruningTests(unittest.TestCase):
@@ -2728,6 +2871,7 @@ class PipelineTests(unittest.TestCase):
                 'anchor_boundary',
                 'max_bridge_edges',
                 'max_bridge_euclidean_ratio',
+                'max_debug_candidates',
                 'max_endpoint_candidates',
                 'min_loop_size_to_allow',
                 'require_mutual_pairing',

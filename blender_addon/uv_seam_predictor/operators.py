@@ -198,14 +198,16 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 raise ValueError('Active mesh was removed while prediction was running. No seams were applied.')
             validation.require_unchanged_topology(self._obj, self._topology_counts)
             predicted_keys = seam_mapping.load_predicted_edge_keys(self._job.json_path)
-            accepted_bridge_keys = seam_mapping.load_accepted_bridge_edge_keys(self._job.json_path)
+            accepted_bridge_entries = seam_mapping.load_accepted_bridge_debug_entries(self._job.json_path)
             result = seam_mapping.apply_seam_keys(
                 self._obj.data,
                 predicted_keys,
                 clear_existing=self._run_settings.clear_existing_seams,
-                accepted_bridge_keys=accepted_bridge_keys,
+                accepted_bridge_entries=accepted_bridge_entries,
             )
             summary = seam_mapping.format_apply_summary(result)
+            debug_path = seam_mapping.write_bridge_apply_debug(self._job.json_path, result)
+            summary = f'{summary} Bridge apply debug: {debug_path}'
         except Exception as exc:
             return self._finish(context, error=str(exc))
 
