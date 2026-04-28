@@ -24,6 +24,8 @@ from models.utils.seam_topology import (
     lift_edge_probabilities_to_vertices,
     topology_pipeline_result_to_json_dict,
     _build_bridging_clusters,
+    _bounded_search_graph,
+    _select_component_representatives,
 )
 from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
@@ -847,10 +849,11 @@ class BridgingTests(unittest.TestCase):
 
         result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
 
-        self.assertEqual(result.terminals_total, 0)
+        self.assertEqual(result.terminals_total, 1)
+        self.assertEqual(result.representative_count, 1)
         self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
         self.assertEqual(result.steiner_calls, 0)
-        self.assertTrue(all(report['skipped_reason'] == 'no_terminals' for report in result.component_reports))
+        self.assertTrue(all(report['skipped_reason'] == 'too_few_terminals' for report in result.component_reports))
 
     def test_bridging_single_terminal_component(self):
         _, view = _strip_topology(length=4)
@@ -1300,6 +1303,451 @@ class BridgingClusterTests(unittest.TestCase):
         self.assertTrue(all(isinstance(report['cluster_id'], int) for report in result.component_reports))
 
 
+class BridgingRepresentativeTests(unittest.TestCase):
+    @staticmethod
+    def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
+        return BridgingClusterTests._chain_view(vertex_count)
+
+    @staticmethod
+    def _chain_probabilities(
+        view: SeamGraphView,
+        edge_probabilities: dict[tuple[int, int], float],
+        *,
+        default: float = 0.001,
+    ) -> np.ndarray:
+        return _edge_probability_vector(view, edge_probabilities, default=default)
+
+    def test_select_reps_returns_empty_when_all_components_have_terminals(self):
+        reps = _select_component_representatives(
+            components=[{0, 1}, {2, 3}],
+            vertex_scores=np.asarray([0.9, 0.9, 0.9, 0.9], dtype=np.float64),
+            already_terminal=frozenset({0, 2}),
+        )
+
+        self.assertEqual(reps, {})
+
+    def test_select_reps_picks_highest_p_v(self):
+        reps = _select_component_representatives(
+            components=[{0, 1, 2, 3}],
+            vertex_scores=np.asarray([0.3, 0.7, 0.5, 0.6], dtype=np.float64),
+            already_terminal=frozenset(),
+        )
+
+        self.assertEqual(reps, {0: 1})
+
+    def test_select_reps_breaks_ties_by_lowest_index(self):
+        vertex_scores = np.zeros(8, dtype=np.float64)
+        vertex_scores[[3, 5, 7]] = 0.5
+
+        reps = _select_component_representatives(
+            components=[{3, 5, 7}],
+            vertex_scores=vertex_scores,
+            already_terminal=frozenset(),
+        )
+
+        self.assertEqual(reps, {0: 3})
+
+    def test_select_reps_only_for_terminal_less_components(self):
+        reps = _select_component_representatives(
+            components=[{0, 1}, {2, 3}],
+            vertex_scores=np.asarray([0.9, 0.9, 0.5, 0.5], dtype=np.float64),
+            already_terminal=frozenset({0}),
+        )
+
+        self.assertEqual(reps, {1: 2})
+
+    def test_select_reps_singleton_component(self):
+        vertex_scores = np.zeros(8, dtype=np.float64)
+        vertex_scores[7] = 0.4
+
+        reps = _select_component_representatives(
+            components=[{7}],
+            vertex_scores=vertex_scores,
+            already_terminal=frozenset(),
+        )
+
+        self.assertEqual(reps, {0: 7})
+
+    def test_select_reps_empty_components(self):
+        reps = _select_component_representatives(
+            components=[],
+            vertex_scores=np.asarray([], dtype=np.float64),
+            already_terminal=frozenset(),
+        )
+
+        self.assertEqual(reps, {})
+
+    def test_select_reps_is_deterministic(self):
+        components = [{5, 3, 7}, {9, 8}]
+        vertex_scores = np.zeros(10, dtype=np.float64)
+        vertex_scores[[3, 5, 7]] = 0.5
+        vertex_scores[8] = 0.2
+        vertex_scores[9] = 0.9
+
+        first = _select_component_representatives(components, vertex_scores, frozenset())
+        second = _select_component_representatives(components, vertex_scores, frozenset())
+
+        self.assertEqual(first, second)
+
+    def test_bridging_adds_rep_for_terminal_less_component(self):
+        view, _ = self._chain_view(8)
+        high_component = {(0, 1), (1, 2), (2, 3)}
+        poor_component = {(4, 5), (5, 6), (6, 7)}
+        skeleton_edges = high_component | poor_component
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                **{edge: 0.95 for edge in high_component},
+                **{edge: 0.55 for edge in poor_component},
+                (3, 4): 0.01,
+            },
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+        gap_index = _edge_index(view, (3, 4))
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.representative_count, 1)
+        self.assertTrue(result.bridged_edge_mask[gap_index])
+        self.assertIn(gap_index, result.steiner_added_edges)
+        self.assertEqual(result.cluster_count, 1)
+        self.assertEqual(
+            sum(1 for report in result.component_reports if report['is_representative_only']),
+            1,
+        )
+
+    def test_bridging_three_components_two_terminal_less(self):
+        view, _ = self._chain_view(9)
+        high_component = {(0, 1), (1, 2)}
+        poor_component_a = {(3, 4), (4, 5)}
+        poor_component_b = {(6, 7), (7, 8)}
+        skeleton_edges = high_component | poor_component_a | poor_component_b
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                **{edge: 0.95 for edge in high_component},
+                **{edge: 0.55 for edge in poor_component_a | poor_component_b},
+                (2, 3): 0.01,
+                (5, 6): 0.01,
+            },
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(9)),
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.representative_count, 2)
+        self.assertEqual(result.cluster_count, 1)
+        self.assertTrue(result.bridged_edge_mask[_edge_index(view, (2, 3))])
+        self.assertTrue(result.bridged_edge_mask[_edge_index(view, (5, 6))])
+        bridged_graph = build_skeleton_subgraph(view, result.bridged_edge_mask)
+        self.assertTrue(nx.has_path(bridged_graph, 0, 8))
+
+    def test_bridging_singleton_terminal_less_cluster_no_op(self):
+        view, _ = self._chain_view(4)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3)}
+        probabilities = self._chain_probabilities(
+            view,
+            {edge: 0.55 for edge in skeleton_edges},
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(4)),
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.representative_count, 1)
+        self.assertEqual(result.cluster_count, 1)
+        self.assertEqual(result.component_reports[0]['skipped_reason'], 'too_few_terminals')
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+
+    def test_bridging_far_terminal_less_components_stay_separate(self):
+        view, _ = self._chain_view(20)
+        skeleton_edges = {(0, 1), (1, 2), (17, 18), (18, 19)}
+        probabilities = self._chain_probabilities(
+            view,
+            {edge: 0.55 for edge in skeleton_edges},
+        )
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.representative_count, 2)
+        self.assertEqual(result.cluster_count, 2)
+        self.assertEqual(
+            [report['skipped_reason'] for report in result.component_reports],
+            ['too_few_terminals', 'too_few_terminals'],
+        )
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+
+    def test_bridging_terminals_total_includes_reps(self):
+        view, _ = self._chain_view(8)
+        high_component = {(0, 1), (1, 2), (2, 3)}
+        poor_component = {(4, 5), (5, 6), (6, 7)}
+        skeleton_edges = high_component | poor_component
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                **{edge: 0.95 for edge in high_component},
+                **{edge: 0.55 for edge in poor_component},
+                (3, 4): 0.01,
+            },
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.terminals_total, 5)
+        self.assertEqual(result.terminals_total - result.representative_count, 4)
+
+    def test_bridging_terminals_dropped_unaffected_by_reps(self):
+        view, _ = self._chain_view(8)
+        high_component = {(0, 1), (1, 2)}
+        poor_component = {(4, 5), (5, 6)}
+        skeleton_edges = high_component | poor_component
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                **{edge: 0.95 for edge in high_component},
+                **{edge: 0.55 for edge in poor_component},
+                (7, 14): 0.95,
+            },
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.terminals_dropped_no_component, 1)
+        self.assertEqual(result.representative_count, 1)
+
+
+class BridgingLengthWeightedTests(unittest.TestCase):
+    @staticmethod
+    def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
+        return BridgingClusterTests._chain_view(vertex_count)
+
+    @staticmethod
+    def _chain_probabilities(
+        view: SeamGraphView,
+        edge_probabilities: dict[tuple[int, int], float],
+        *,
+        default: float = 0.001,
+    ) -> np.ndarray:
+        return _edge_probability_vector(view, edge_probabilities, default=default)
+
+    def test_search_graph_uses_length_for_non_skeleton_edges(self):
+        vertices = [(0.5 * index, 0.0, 0.0) for index in range(4)]
+        edges = [(0, 1), (1, 2), (2, 3)]
+        topology = _make_stub_topology(vertices, edges)
+        _, view = _build_view_from_topology(topology)
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                (0, 1): 0.20,
+                (1, 2): 0.95,
+                (2, 3): 0.40,
+            },
+        )
+        skel_result = _manual_skeleton_result(view, probabilities, {(1, 2)})
+
+        search_graph = _bounded_search_graph(
+            view=view,
+            seed_vertices=frozenset(range(4)),
+            r_bridge=3,
+            probabilities=probabilities,
+            skeleton_edge_mask=skel_result.skeleton_edge_mask,
+            epsilon=1e-3,
+        )
+
+        for _, _, data in search_graph.edges(data=True):
+            edge_index = int(data['edge_index'])
+            weight = float(data['weight'])
+            if skel_result.skeleton_edge_mask[edge_index]:
+                self.assertEqual(weight, 0.0)
+                continue
+
+            self.assertAlmostEqual(weight, float(view.edge_lengths[edge_index]), places=9)
+            log_weight = -np.log(max(float(probabilities[edge_index]), 1e-3))
+            self.assertNotAlmostEqual(weight, float(log_weight), places=6)
+
+    def test_bridging_invariant_to_probability_scaling(self):
+        """
+        REGRESSION GUARD: Under length-weighted bridging, the output
+        bridged_edge_mask must depend ONLY on which edges are skeleton
+        and which are not. Multiplying all non-skeleton probabilities by
+        a positive scalar in [0.001, 0.5] must NOT change the output.
+
+        This test directly verifies the semantic shift from probability-
+        based to length-based bridging.
+        """
+        view, _ = self._chain_view(8)
+        high_component = {(0, 1), (1, 2), (2, 3)}
+        poor_component = {(4, 5), (5, 6), (6, 7)}
+        skeleton_edges = high_component | poor_component
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                **{edge: 0.95 for edge in high_component},
+                **{edge: 0.55 for edge in poor_component},
+                (3, 4): 0.20,
+            },
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+        baseline = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        perturbed = probabilities.copy()
+        for edge_index in range(view.edge_count):
+            if not skel_result.skeleton_edge_mask[edge_index]:
+                perturbed[edge_index] = float(np.clip(perturbed[edge_index] * 0.1, 0.001, 0.5))
+        perturbed_skel_result = _manual_skeleton_result(
+            view,
+            perturbed,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+        scaled = compute_steiner_bridging(view, perturbed, perturbed_skel_result, anchor_boundary=False)
+
+        self.assertTrue(np.array_equal(scaled.bridged_edge_mask, baseline.bridged_edge_mask))
+        self.assertEqual(scaled.steiner_added_edges, baseline.steiner_added_edges)
+
+    def test_bridging_picks_geometrically_shortest_path(self):
+        """
+        A triangulated square offers two routes from v0 to v3: the direct
+        diagonal and a two-edge side path. Length weighting must pick the
+        shorter diagonal.
+        """
+        coords = [
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (-1.0, 0.0, 0.0),
+            (2.0, 1.0, 0.0),
+        ]
+        faces = [
+            (0, 1, 3),
+            (0, 3, 2),
+            (4, 0, 2),
+            (1, 5, 3),
+        ]
+        view, _ = _build_view_from_faces(faces, coords)
+        skeleton_edges = {(0, 4), (3, 5)}
+        probabilities = _edge_probability_vector(
+            view,
+            {edge: 0.95 for edge in skeleton_edges},
+            default=0.001,
+        )
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        diagonal = _edge_index(view, (0, 3))
+        side_a = _edge_index(view, (0, 1))
+        side_b = _edge_index(view, (1, 3))
+        self.assertTrue(result.bridged_edge_mask[diagonal])
+        self.assertIn(diagonal, result.steiner_added_edges)
+        self.assertFalse(result.bridged_edge_mask[side_a])
+        self.assertFalse(result.bridged_edge_mask[side_b])
+
+    def test_bridging_skeleton_edges_remain_zero_weighted(self):
+        vertices = [
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.5, 0.0),
+            (0.25, 0.25, 0.0),
+        ]
+        edges = [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (0, 5),
+            (4, 5),
+        ]
+        topology = _make_stub_topology(vertices, edges)
+        _, view = _build_view_from_topology(topology)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (3, 4)}
+        probabilities = _edge_probability_vector(
+            view,
+            {edge: 0.95 for edge in skeleton_edges},
+            default=0.001,
+        )
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        self.assertEqual(result.steiner_edges_added_total, 0)
+        self.assertEqual(result.steiner_added_edges, frozenset())
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+
+    def test_bridging_uses_length_for_fade_terrain(self):
+        """
+        Realistic fade simulation: a unique three-edge geometric shortest
+        path through sub-tau_low tissue must bridge the two skeleton bodies.
+        """
+        view, _ = self._chain_view(8)
+        high_component = {(0, 1), (1, 2)}
+        poor_component = {(5, 6), (6, 7)}
+        fade_edges = {(2, 3), (3, 4), (4, 5)}
+        skeleton_edges = high_component | poor_component
+        probabilities = self._chain_probabilities(
+            view,
+            {
+                **{edge: 0.95 for edge in high_component},
+                **{edge: 0.55 for edge in poor_component},
+                (2, 3): 0.20,
+                (3, 4): 0.10,
+                (4, 5): 0.05,
+            },
+        )
+        skel_result = _manual_skeleton_result(
+            view,
+            probabilities,
+            skeleton_edges,
+            skeleton_vertices=frozenset(range(8)),
+        )
+
+        result = compute_steiner_bridging(view, probabilities, skel_result, anchor_boundary=False)
+
+        for edge in fade_edges:
+            self.assertTrue(result.bridged_edge_mask[_edge_index(view, edge)], edge)
+        self.assertEqual(result.cluster_count, 1)
+        self.assertGreaterEqual(result.steiner_edges_added_total, 3)
+        self.assertEqual(
+            {_edge_index(view, edge) for edge in fade_edges},
+            result.steiner_added_edges,
+        )
+
+
 def default_gap_probabilities(start: int, stop: int) -> dict[tuple[int, int], float]:
     return {(left, left + 1): 0.20 for left in range(start, stop)}
 
@@ -1357,6 +1805,7 @@ class PruningTests(unittest.TestCase):
             r_bridge=6,
             epsilon=1e-3,
             cluster_count=0,
+            representative_count=0,
         )
 
     @staticmethod
@@ -1393,6 +1842,7 @@ class PruningTests(unittest.TestCase):
             r_bridge=6,
             epsilon=1e-3,
             cluster_count=0,
+            representative_count=0,
         )
         with self.assertRaises(ValueError):
             compute_spur_pruning(view, bad_shape, anchor_boundary=False)
@@ -1410,6 +1860,7 @@ class PruningTests(unittest.TestCase):
             r_bridge=6,
             epsilon=1e-3,
             cluster_count=0,
+            representative_count=0,
         )
         with self.assertRaises(ValueError):
             compute_spur_pruning(view, bad_dtype, anchor_boundary=False)
@@ -1567,6 +2018,7 @@ class PruningTests(unittest.TestCase):
             r_bridge=6,
             epsilon=1e-3,
             cluster_count=0,
+            representative_count=0,
         )
         anchors = frozenset(int(vertex) for vertex in rng.choice(view.vertex_count, size=3, replace=False))
 

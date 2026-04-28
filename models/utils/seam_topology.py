@@ -629,8 +629,9 @@ class BridgingResult:
     steiner_edges_added_total: int
     tau_high: float
     r_bridge: int
-    epsilon: float
+    epsilon: float  # vestigial under length-weighted bridging; kept for API stability for one release
     cluster_count: int
+    representative_count: int
 
 
 @dataclass(frozen=True)
@@ -701,6 +702,11 @@ def _bounded_search_graph(
     """
     Build the mesh subgraph within r_bridge BFS hops of seed_vertices.
     """
+    # NOTE: `epsilon` is kept in the signature for API stability with
+    # callers (compute_steiner_bridging, diagnose_bridging_application).
+    # Under length-weighted bridging it is unused; retained here so
+    # one-release migration paths do not require simultaneous changes
+    # to all call sites. A future cleanup can remove the parameter.
     if not seed_vertices:
         return nx.Graph()
 
@@ -724,7 +730,7 @@ def _bounded_search_graph(
         if skeleton_edge_mask[idx]:
             weight = 0.0
         else:
-            weight = float(max(0.0, -np.log(max(float(probabilities[idx]), float(epsilon)))))
+            weight = float(view.edge_lengths[idx])
         graph.add_edge(
             int(u),
             int(v),
@@ -798,6 +804,36 @@ def _build_bridging_clusters(
     return clusters, component_to_cluster
 
 
+def _select_component_representatives(
+    components: list[set[int]],
+    vertex_scores: np.ndarray,
+    already_terminal: frozenset[int],
+) -> dict[int, int]:
+    """
+    For every skeleton component that contains no existing terminal, select
+    one vertex to serve as an implicit representative terminal.
+
+    The representative is the vertex with the highest vertex score, with ties
+    broken by the lowest vertex index.
+    """
+    reps: dict[int, int] = {}
+    for component_id, component in enumerate(components):
+        if component & already_terminal:
+            continue
+
+        best_score = -1.0
+        best_vertex: int | None = None
+        for vertex in sorted(component):
+            vertex_index = int(vertex)
+            score = float(vertex_scores[vertex_index])
+            if score > best_score:
+                best_score = score
+                best_vertex = vertex_index
+        if best_vertex is not None:
+            reps[int(component_id)] = best_vertex
+    return reps
+
+
 def compute_steiner_bridging(
     view: SeamGraphView,
     probabilities: np.ndarray,
@@ -810,6 +846,19 @@ def compute_steiner_bridging(
     extra_anchor_vertices: frozenset[int] | None = None,
     topology: Any = None,
 ) -> BridgingResult:
+    """
+    Connect nearby skeleton components with a bounded Steiner pass.
+
+    Edges in the bounded search graph are weighted by 3D Euclidean
+    length, with skeleton edges set to weight 0 to preserve existing
+    skeleton routes. This matches the standard Dijkstra-on-mesh
+    pattern used by Blender's Shortest Edge Paths node and Sheffer &
+    Hart's Seamster (IEEE Vis 2002).
+
+    Probabilities continue to determine *which* vertices become
+    Steiner terminals (via tau_high and the representative mechanism).
+    Mesh geometry determines *how* terminals are connected.
+    """
     probs = _validated_probability_vector(view, probabilities)
     tau_high_value = _validated_probability_threshold('tau_high', tau_high)
     if isinstance(r_bridge, bool) or not isinstance(r_bridge, (int, np.integer)) or int(r_bridge) < 0:
@@ -868,8 +917,26 @@ def compute_steiner_bridging(
         if float(vertex_scores[int(vertex)]) >= tau_high_value
     )
     T_structural = frozenset(T_structural_raw & skeleton_vertices)
-    T_global = frozenset(set(T_structural) | set(T_confidence))
-    terminals_dropped_no_component = sum(1 for vertex in T_global if vertex not in component_id_of)
+    pre_rep_T_global = T_structural | T_confidence
+    terminals_dropped_no_component = sum(
+        1 for vertex in pre_rep_T_global if vertex not in component_id_of
+    )
+
+    # Step 4.25 - Component representatives.
+    # For every skeleton component that has no structural or confidence terminal,
+    # add one implicit representative terminal so Steiner spans all components in
+    # a multi-component bridging cluster.
+    already_terminal = T_structural | T_confidence
+    component_reps = _select_component_representatives(
+        components=components,
+        vertex_scores=skel_result.vertex_scores,
+        already_terminal=already_terminal,
+    )
+    T_representative: frozenset[int] = frozenset(component_reps.values())
+    T_global = pre_rep_T_global | T_representative
+    # NOTE: terminals_total includes representative terminals (added in Step
+    # 4.25). To recover the structural+confidence count alone, subtract
+    # representative_count.
 
     clusters, _ = _build_bridging_clusters(
         view,
@@ -997,6 +1064,11 @@ def compute_steiner_bridging(
                 'terminal_count': len(T_k),
                 'terminal_count_structural': len(T_k_structural),
                 'terminal_count_confidence': len(T_k_confidence),
+                'representative_vertex': component_reps.get(component_id, None),
+                'is_representative_only': (
+                    component_id in component_reps
+                    and not (comp_vertex_frozenset & already_terminal)
+                ),
                 'sub_group_count': report_sub_group_count,
                 'steiner_edges_added': report_steiner_edges,
                 'skipped_reason': report_skipped_reason,
@@ -1017,6 +1089,7 @@ def compute_steiner_bridging(
         r_bridge=r_bridge_value,
         epsilon=epsilon_value,
         cluster_count=len(clusters),
+        representative_count=len(component_reps),
     )
 
 
@@ -1320,6 +1393,7 @@ def topology_pipeline_result_to_json_dict(
             'component_reports': [dict(report) for report in bridging.component_reports],
             'epsilon': float(bridging.epsilon),
             'r_bridge': int(bridging.r_bridge),
+            'representative_count': int(bridging.representative_count),
             'steiner_added_edges_count': int(len(bridging.steiner_added_edges)),
             'steiner_calls': int(bridging.steiner_calls),
             'steiner_edges_added_total': int(bridging.steiner_edges_added_total),
