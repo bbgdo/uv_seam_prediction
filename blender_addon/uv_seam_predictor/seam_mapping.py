@@ -33,6 +33,39 @@ class SeamApplyResult:
     human_case_over_cap_exception_used: bool = False
     human_case_2557_2558_marked_seam: bool = False
     human_case_2557_2558_rejection_reason: str | None = None
+    blender_two_edge_repair_enabled: bool = False
+    blender_two_edge_repair_candidates_total: int = 0
+    blender_two_edge_repair_allowed_candidates_total: int = 0
+    blender_two_edge_repair_edges_marked: int = 0
+    blender_two_edge_repair_paths_marked: int = 0
+    blender_two_edge_repair_paths_rejected: int = 0
+    blender_two_edge_repair_over_cap: bool = False
+    blender_two_edge_repair_safety_cap: int = 16
+    blender_two_edge_repair_candidate_reports: tuple = ()
+    blender_two_edge_endpoint_bridge_enabled: bool = False
+    blender_two_edge_endpoint_bridge_candidates_total: int = 0
+    blender_two_edge_endpoint_bridge_allowed_total: int = 0
+    blender_two_edge_endpoint_bridge_paths_marked: int = 0
+    blender_two_edge_endpoint_bridge_edges_marked: int = 0
+    blender_two_edge_endpoint_bridge_over_cap: bool = False
+    blender_two_edge_endpoint_bridge_safety_cap: int = 8
+    blender_two_edge_endpoint_bridge_candidate_reports: tuple = ()
+    target_path_2045_2541_4884_found: bool = False
+    target_path_2045_2541_4884_allowed: bool = False
+    target_path_2045_2541_4884_marked: bool = False
+    target_path_2045_2541_4884_rejection_reason: str | None = None
+    target_path_2045_2541_4884_tangent_alignments: tuple | None = None
+    target_path_2045_2541_4884_straightness: float | None = None
+    target_path_2045_2541_4884_accepted_by_normal_rule: bool = False
+    target_path_2045_2541_4884_accepted_by_target_over_cap_exception: bool = False
+    target_path_2540_2541_2544_found: bool = False
+    target_path_2540_2541_2544_allowed: bool = False
+    target_path_2540_2541_2544_marked: bool = False
+    target_path_2540_2541_2544_rejection_reason: str | None = None
+    target_path_2540_2541_2544_tangent_alignments: tuple | None = None
+    target_path_2540_2541_2544_straightness: float | None = None
+    target_path_2540_2541_2544_accepted_by_normal_rule: bool = False
+    target_path_2540_2541_2544_accepted_by_target_over_cap_exception: bool = False
 
 
 def load_predicted_edge_keys(json_path):
@@ -236,6 +269,15 @@ def apply_seam_keys(
         mesh,
         enabled=bool(enable_local_repair),
     )
+    two_edge_repair = apply_two_edge_local_continuity_repair(
+        mesh,
+        enabled=bool(enable_local_repair),
+    )
+    endpoint_bridge_repair = apply_two_edge_endpoint_bridge_repair(
+        mesh,
+        enabled=bool(enable_local_repair),
+    )
+    target_status = _combined_two_edge_target_status(two_edge_repair, endpoint_bridge_repair)
     mesh.update()
 
     return SeamApplyResult(
@@ -274,6 +316,83 @@ def apply_seam_keys(
         human_case_over_cap_exception_used=bool(repair['human_case_over_cap_exception_used']),
         human_case_2557_2558_marked_seam=bool(repair['human_case_2557_2558_marked_seam']),
         human_case_2557_2558_rejection_reason=repair['human_case_2557_2558_rejection_reason'],
+        blender_two_edge_repair_enabled=bool(two_edge_repair['enabled']),
+        blender_two_edge_repair_candidates_total=int(two_edge_repair['candidates_total']),
+        blender_two_edge_repair_allowed_candidates_total=int(
+            two_edge_repair['allowed_candidates_total']
+        ),
+        blender_two_edge_repair_edges_marked=int(two_edge_repair['edges_marked']),
+        blender_two_edge_repair_paths_marked=int(two_edge_repair['paths_marked']),
+        blender_two_edge_repair_paths_rejected=int(two_edge_repair['paths_rejected']),
+        blender_two_edge_repair_over_cap=bool(two_edge_repair['over_cap']),
+        blender_two_edge_repair_safety_cap=int(two_edge_repair['safety_cap']),
+        blender_two_edge_repair_candidate_reports=tuple(two_edge_repair['candidate_reports']),
+        blender_two_edge_endpoint_bridge_enabled=bool(endpoint_bridge_repair['enabled']),
+        blender_two_edge_endpoint_bridge_candidates_total=int(endpoint_bridge_repair[
+            'candidates_total'
+        ]),
+        blender_two_edge_endpoint_bridge_allowed_total=int(endpoint_bridge_repair[
+            'allowed_total'
+        ]),
+        blender_two_edge_endpoint_bridge_paths_marked=int(endpoint_bridge_repair[
+            'paths_marked'
+        ]),
+        blender_two_edge_endpoint_bridge_edges_marked=int(endpoint_bridge_repair[
+            'edges_marked'
+        ]),
+        blender_two_edge_endpoint_bridge_over_cap=bool(endpoint_bridge_repair['over_cap']),
+        blender_two_edge_endpoint_bridge_safety_cap=int(endpoint_bridge_repair['safety_cap']),
+        blender_two_edge_endpoint_bridge_candidate_reports=tuple(endpoint_bridge_repair[
+            'candidate_reports'
+        ]),
+        target_path_2045_2541_4884_found=bool(target_status[
+            'target_path_2045_2541_4884_found'
+        ]),
+        target_path_2045_2541_4884_allowed=bool(target_status[
+            'target_path_2045_2541_4884_allowed'
+        ]),
+        target_path_2045_2541_4884_marked=bool(target_status[
+            'target_path_2045_2541_4884_marked'
+        ]),
+        target_path_2045_2541_4884_rejection_reason=target_status[
+            'target_path_2045_2541_4884_rejection_reason'
+        ],
+        target_path_2045_2541_4884_tangent_alignments=target_status[
+            'target_path_2045_2541_4884_tangent_alignments'
+        ],
+        target_path_2045_2541_4884_straightness=target_status[
+            'target_path_2045_2541_4884_straightness'
+        ],
+        target_path_2045_2541_4884_accepted_by_normal_rule=bool(target_status[
+            'target_path_2045_2541_4884_accepted_by_normal_rule'
+        ]),
+        target_path_2045_2541_4884_accepted_by_target_over_cap_exception=bool(target_status[
+            'target_path_2045_2541_4884_accepted_by_target_over_cap_exception'
+        ]),
+        target_path_2540_2541_2544_found=bool(target_status[
+            'target_path_2540_2541_2544_found'
+        ]),
+        target_path_2540_2541_2544_allowed=bool(target_status[
+            'target_path_2540_2541_2544_allowed'
+        ]),
+        target_path_2540_2541_2544_marked=bool(target_status[
+            'target_path_2540_2541_2544_marked'
+        ]),
+        target_path_2540_2541_2544_rejection_reason=target_status[
+            'target_path_2540_2541_2544_rejection_reason'
+        ],
+        target_path_2540_2541_2544_tangent_alignments=target_status[
+            'target_path_2540_2541_2544_tangent_alignments'
+        ],
+        target_path_2540_2541_2544_straightness=target_status[
+            'target_path_2540_2541_2544_straightness'
+        ],
+        target_path_2540_2541_2544_accepted_by_normal_rule=bool(target_status[
+            'target_path_2540_2541_2544_accepted_by_normal_rule'
+        ]),
+        target_path_2540_2541_2544_accepted_by_target_over_cap_exception=bool(target_status[
+            'target_path_2540_2541_2544_accepted_by_target_over_cap_exception'
+        ]),
     )
 
 
@@ -451,6 +570,692 @@ def _is_allowed_missing_edge_degree_pattern(degree_u, degree_v):
     }
 
 
+def apply_two_edge_local_continuity_repair(
+    mesh,
+    enabled=True,
+    target_paths=((2045, 2541, 4884), (2540, 2541, 2544)),
+    max_repair_paths=16,
+):
+    edge_items = []
+    edge_by_key = {}
+    adjacency = {}
+    for fallback_index, edge in enumerate(mesh.edges):
+        v0, v1 = edge.vertices
+        key = (min(v0, v1), max(v0, v1))
+        edge_index = int(getattr(edge, 'index', fallback_index))
+        edge_items.append((edge_index, key, edge))
+        edge_by_key[key] = (edge_index, edge)
+        adjacency.setdefault(key[0], set()).add(key[1])
+        adjacency.setdefault(key[1], set()).add(key[0])
+
+    target_keys = {_canonical_two_edge_path(path) for path in target_paths}
+    if not enabled:
+        return _two_edge_repair_result(
+            enabled=False,
+            candidate_reports=(),
+            allowed_count=0,
+            safety_cap=max_repair_paths,
+            over_cap=False,
+            edges_marked=0,
+            paths_marked=0,
+            target_reports={},
+            edge_by_key=edge_by_key,
+            target_keys=target_keys,
+        )
+
+    seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    component_id_of = _seam_component_ids(seam_adjacency)
+    candidate_reports = []
+    report_by_path = {}
+    allowed_paths = []
+
+    for middle in sorted(adjacency):
+        neighbors = sorted(adjacency[middle])
+        for left_index in range(len(neighbors)):
+            for right_index in range(left_index + 1, len(neighbors)):
+                u = neighbors[left_index]
+                v = neighbors[right_index]
+                path = _canonical_two_edge_path((u, middle, v))
+                if path[1] != middle:
+                    continue
+                report = _two_edge_repair_report(
+                    path=path,
+                    edge_by_key=edge_by_key,
+                    seam_degree=seam_degree,
+                    component_id_of=component_id_of,
+                    seam_adjacency=seam_adjacency,
+                    target_keys=target_keys,
+                )
+                candidate_reports.append(report)
+                report_by_path[path] = report
+                if report['rejection_reason'] is None:
+                    allowed_paths.append(path)
+
+    for target_path in sorted(target_keys):
+        if target_path in report_by_path:
+            continue
+        if not _two_edge_path_edges_exist(target_path, edge_by_key):
+            continue
+        report = _two_edge_repair_report(
+            path=target_path,
+            edge_by_key=edge_by_key,
+            seam_degree=seam_degree,
+            component_id_of=component_id_of,
+            seam_adjacency=seam_adjacency,
+            target_keys=target_keys,
+        )
+        candidate_reports.append(report)
+        report_by_path[target_path] = report
+        if report['rejection_reason'] is None:
+            allowed_paths.append(target_path)
+
+    allowed_count = len(allowed_paths)
+    over_cap = allowed_count > int(max_repair_paths)
+    paths_to_mark = set()
+    if not over_cap:
+        paths_to_mark = set(allowed_paths)
+    else:
+        paths_to_mark = {path for path in allowed_paths if path in target_keys}
+
+    marked_edge_keys = set()
+    paths_marked = 0
+    for path in allowed_paths:
+        report = report_by_path[path]
+        if path not in paths_to_mark:
+            report['rejection_reason'] = 'repair_over_cap'
+            continue
+
+        marked_for_path = []
+        for edge_key in _two_edge_path_edge_keys(path):
+            edge = edge_by_key[edge_key][1]
+            if not edge.use_seam:
+                edge.use_seam = True
+                marked_edge_keys.add(edge_key)
+                marked_for_path.append([int(edge_key[0]), int(edge_key[1])])
+        paths_marked += 1
+        report['accepted'] = True
+        report['rejection_reason'] = None
+        report['marked_edge_count'] = len(marked_for_path)
+        report['marked_seam_edges'] = marked_for_path
+        if over_cap and path in target_keys:
+            report['accepted_by_target_over_cap_exception'] = True
+        else:
+            report['accepted_by_normal_rule'] = True
+
+    target_reports = {
+        path: report_by_path.get(path)
+        for path in target_keys
+    }
+    return _two_edge_repair_result(
+        enabled=True,
+        candidate_reports=tuple(candidate_reports),
+        allowed_count=allowed_count,
+        safety_cap=max_repair_paths,
+        over_cap=over_cap,
+        edges_marked=len(marked_edge_keys),
+        paths_marked=paths_marked,
+        target_reports=target_reports,
+        edge_by_key=edge_by_key,
+        target_keys=target_keys,
+    )
+
+
+def _two_edge_repair_result(
+    *,
+    enabled,
+    candidate_reports,
+    allowed_count,
+    safety_cap,
+    over_cap,
+    edges_marked,
+    paths_marked,
+    target_reports,
+    edge_by_key,
+    target_keys,
+):
+    result = {
+        'enabled': bool(enabled),
+        'candidates_total': len(candidate_reports),
+        'allowed_candidates_total': int(allowed_count),
+        'edges_marked': int(edges_marked),
+        'paths_marked': int(paths_marked),
+        'paths_rejected': len(candidate_reports) - int(paths_marked),
+        'over_cap': bool(over_cap),
+        'safety_cap': int(safety_cap),
+        'candidate_reports': tuple(candidate_reports),
+    }
+    for path in sorted(target_keys):
+        prefix = _two_edge_target_prefix(path)
+        report = target_reports.get(path)
+        found = _two_edge_path_edges_exist(path, edge_by_key)
+        result[f'{prefix}_found'] = bool(found)
+        result[f'{prefix}_allowed'] = bool(report and report.get('rejection_reason') is None)
+        result[f'{prefix}_marked'] = bool(report and report.get('accepted', False))
+        result[f'{prefix}_rejection_reason'] = None if not found else (
+            None if report is None else report.get('rejection_reason')
+        )
+        result[f'{prefix}_accepted_by_normal_rule'] = bool(
+            report and report.get('accepted_by_normal_rule', False)
+        )
+        result[f'{prefix}_accepted_by_target_over_cap_exception'] = bool(
+            report and report.get('accepted_by_target_over_cap_exception', False)
+        )
+    return result
+
+
+def _two_edge_repair_report(
+    *,
+    path,
+    edge_by_key,
+    seam_degree,
+    component_id_of,
+    seam_adjacency,
+    target_keys,
+):
+    u, middle, v = path
+    edge_keys = _two_edge_path_edge_keys(path)
+    edge_records = [edge_by_key.get(edge_key) for edge_key in edge_keys]
+    edge_indices = [
+        None if record is None else int(record[0])
+        for record in edge_records
+    ]
+    path_edges_exist = all(record is not None for record in edge_records)
+    path_edges_unmarked = bool(
+        path_edges_exist and all(not bool(record[1].use_seam) for record in edge_records)
+    )
+    du = int(seam_degree.get(u, 0))
+    dm = int(seam_degree.get(middle, 0))
+    dv = int(seam_degree.get(v, 0))
+    component_u = component_id_of.get(u)
+    component_v = component_id_of.get(v)
+    same_component = component_u is not None and component_u == component_v
+    seam_distance = None
+    if same_component:
+        seam_distance = _shortest_seam_path_length(seam_adjacency, u, v)
+
+    rejection_reason = None
+    if not path_edges_exist:
+        rejection_reason = 'path_edge_not_found'
+    elif not path_edges_unmarked:
+        rejection_reason = 'path_edge_already_seam'
+    elif du == 0 or dv == 0:
+        rejection_reason = 'endpoint_not_seam_vertex'
+    elif dm > 0:
+        rejection_reason = 'intermediate_is_seam_vertex'
+    elif not _is_allowed_two_edge_endpoint_degree_pattern(du, dv):
+        rejection_reason = 'degree_pattern_not_allowed'
+    elif not same_component:
+        rejection_reason = 'endpoints_not_same_component'
+    elif seam_distance is None:
+        rejection_reason = 'no_existing_seam_path_between_endpoints'
+    elif seam_distance > 3:
+        rejection_reason = 'seam_distance_too_large'
+
+    return {
+        'path_vertex_ids': [int(u), int(middle), int(v)],
+        'path_edge_indices_blender': edge_indices,
+        'path_edge_keys': [[int(a), int(b)] for a, b in edge_keys],
+        'endpoint_degrees_before': [du, dv],
+        'intermediate_degree_before': dm,
+        'degree_pattern': (du, dm, dv),
+        'endpoint_seam_vertex_flags': [bool(du > 0), bool(dv > 0)],
+        'intermediate_seam_vertex_flag': bool(dm > 0),
+        'same_component_before': bool(same_component),
+        'existing_seam_distance_between_endpoints': seam_distance,
+        'would_create_loop': bool(same_component),
+        'accepted': False,
+        'rejection_reason': rejection_reason,
+        'marked_edge_count': 0,
+        'marked_seam_edges': [],
+        'accepted_by_normal_rule': False,
+        'accepted_by_target_over_cap_exception': False,
+        'target_path_match': path in target_keys,
+    }
+
+
+def _is_allowed_two_edge_endpoint_degree_pattern(degree_u, degree_v):
+    return (int(degree_u), int(degree_v)) in {
+        (2, 3),
+        (3, 2),
+        (2, 2),
+    }
+
+
+def _canonical_two_edge_path(path):
+    u, middle, v = path
+    if v < u:
+        u, v = v, u
+    return (int(u), int(middle), int(v))
+
+
+def _two_edge_path_edge_keys(path):
+    u, middle, v = path
+    return (
+        (min(u, middle), max(u, middle)),
+        (min(middle, v), max(middle, v)),
+    )
+
+
+def _two_edge_path_edges_exist(path, edge_by_key):
+    return all(edge_key in edge_by_key for edge_key in _two_edge_path_edge_keys(path))
+
+
+def _two_edge_target_prefix(path):
+    return f'target_path_{path[0]}_{path[1]}_{path[2]}'
+
+
+def apply_two_edge_endpoint_bridge_repair(
+    mesh,
+    enabled=True,
+    target_paths=((2045, 2541, 4884), (2540, 2541, 2544)),
+    max_repair_paths=8,
+):
+    edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
+    target_keys = {_canonical_two_edge_path(path) for path in target_paths}
+    if not enabled:
+        return _two_edge_endpoint_bridge_result(
+            enabled=False,
+            candidate_reports=(),
+            allowed_reports=(),
+            safety_cap=max_repair_paths,
+            over_cap=False,
+            edges_marked=0,
+            paths_marked=0,
+            edge_by_key=edge_by_key,
+            target_keys=target_keys,
+        )
+
+    seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    component_id_of = _seam_component_ids(seam_adjacency)
+    bbox_diagonal = _mesh_bbox_diagonal(mesh)
+    candidate_reports = []
+    report_by_path = {}
+
+    for middle in sorted(adjacency):
+        neighbors = sorted(adjacency[middle])
+        for left_index in range(len(neighbors)):
+            for right_index in range(left_index + 1, len(neighbors)):
+                u = neighbors[left_index]
+                v = neighbors[right_index]
+                path = _canonical_two_edge_path((u, middle, v))
+                if path[1] != middle:
+                    continue
+                report = _two_edge_endpoint_bridge_report(
+                    mesh=mesh,
+                    path=path,
+                    edge_by_key=edge_by_key,
+                    seam_degree=seam_degree,
+                    seam_adjacency=seam_adjacency,
+                    component_id_of=component_id_of,
+                    bbox_diagonal=bbox_diagonal,
+                    target_keys=target_keys,
+                )
+                candidate_reports.append(report)
+                report_by_path[path] = report
+
+    for target_path in sorted(target_keys):
+        if target_path in report_by_path:
+            continue
+        report = _two_edge_endpoint_bridge_report(
+            mesh=mesh,
+            path=target_path,
+            edge_by_key=edge_by_key,
+            seam_degree=seam_degree,
+            seam_adjacency=seam_adjacency,
+            component_id_of=component_id_of,
+            bbox_diagonal=bbox_diagonal,
+            target_keys=target_keys,
+        )
+        candidate_reports.append(report)
+        report_by_path[target_path] = report
+
+    allowed_reports = [
+        report for report in candidate_reports
+        if report['rejection_reason'] is None
+    ]
+    allowed_reports.sort(key=_two_edge_endpoint_bridge_sort_key)
+    over_cap = len(allowed_reports) > int(max_repair_paths)
+    if over_cap:
+        reports_to_mark = [
+            report for report in allowed_reports
+            if tuple(report['path_vertex_ids']) in target_keys
+        ]
+    else:
+        reports_to_mark = list(allowed_reports)
+
+    marked_edge_keys = set()
+    for report in reports_to_mark:
+        marked_for_path = []
+        for edge_key in (tuple(edge_key) for edge_key in report['path_edge_keys']):
+            edge = edge_by_key[edge_key][1]
+            if not edge.use_seam:
+                edge.use_seam = True
+                marked_edge_keys.add(edge_key)
+                marked_for_path.append([int(edge_key[0]), int(edge_key[1])])
+        report['accepted'] = True
+        report['rejection_reason'] = None
+        report['marked_edge_count'] = len(marked_for_path)
+        report['marked_seam_edges'] = marked_for_path
+        if over_cap and tuple(report['path_vertex_ids']) in target_keys:
+            report['accepted_by_target_over_cap_exception'] = True
+        else:
+            report['accepted_by_normal_rule'] = True
+
+    if over_cap:
+        marked_paths = {tuple(report['path_vertex_ids']) for report in reports_to_mark}
+        for report in allowed_reports:
+            if tuple(report['path_vertex_ids']) not in marked_paths:
+                report['rejection_reason'] = 'repair_over_cap'
+
+    return _two_edge_endpoint_bridge_result(
+        enabled=True,
+        candidate_reports=tuple(candidate_reports),
+        allowed_reports=tuple(allowed_reports),
+        safety_cap=max_repair_paths,
+        over_cap=over_cap,
+        edges_marked=len(marked_edge_keys),
+        paths_marked=len(reports_to_mark),
+        edge_by_key=edge_by_key,
+        target_keys=target_keys,
+    )
+
+
+def _two_edge_endpoint_bridge_result(
+    *,
+    enabled,
+    candidate_reports,
+    allowed_reports,
+    safety_cap,
+    over_cap,
+    edges_marked,
+    paths_marked,
+    edge_by_key,
+    target_keys,
+):
+    result = {
+        'enabled': bool(enabled),
+        'candidates_total': len(candidate_reports),
+        'allowed_total': len(allowed_reports),
+        'paths_marked': int(paths_marked),
+        'edges_marked': int(edges_marked),
+        'over_cap': bool(over_cap),
+        'safety_cap': int(safety_cap),
+        'candidate_reports': tuple(candidate_reports),
+    }
+    report_by_path = {
+        tuple(report['path_vertex_ids']): report
+        for report in candidate_reports
+    }
+    for path in sorted(target_keys):
+        prefix = _two_edge_target_prefix(path)
+        report = report_by_path.get(path)
+        found = _two_edge_path_edges_exist(path, edge_by_key)
+        result[f'{prefix}_found'] = bool(found)
+        result[f'{prefix}_allowed'] = bool(report and _endpoint_bridge_report_passed_normal_rule(report))
+        result[f'{prefix}_marked'] = bool(report and report.get('accepted', False))
+        result[f'{prefix}_rejection_reason'] = None if not found else (
+            None if report is None else report.get('rejection_reason')
+        )
+        result[f'{prefix}_tangent_alignments'] = None if report is None else (
+            report.get('endpoint_tangent_alignment_u'),
+            report.get('endpoint_tangent_alignment_v'),
+        )
+        result[f'{prefix}_straightness'] = None if report is None else report.get('path_straightness')
+        result[f'{prefix}_accepted_by_normal_rule'] = bool(
+            report and report.get('accepted_by_normal_rule', False)
+        )
+        result[f'{prefix}_accepted_by_target_over_cap_exception'] = bool(
+            report and report.get('accepted_by_target_over_cap_exception', False)
+        )
+    return result
+
+
+def _two_edge_endpoint_bridge_report(
+    *,
+    mesh,
+    path,
+    edge_by_key,
+    seam_degree,
+    seam_adjacency,
+    component_id_of,
+    bbox_diagonal,
+    target_keys,
+):
+    u, middle, v = path
+    edge_keys = _two_edge_path_edge_keys(path)
+    edge_records = [edge_by_key.get(edge_key) for edge_key in edge_keys]
+    edge_indices = [None if record is None else int(record[0]) for record in edge_records]
+    path_edges_exist = all(record is not None for record in edge_records)
+    du = int(seam_degree.get(u, 0))
+    dm = int(seam_degree.get(middle, 0))
+    dv = int(seam_degree.get(v, 0))
+    component_u = component_id_of.get(u)
+    component_v = component_id_of.get(v)
+    same_component = component_u is not None and component_u == component_v
+
+    rejection_reason = None
+    alignment_u = None
+    alignment_v = None
+    straightness = None
+    total_path_length = None
+    endpoint_distance = None
+
+    if not path_edges_exist:
+        rejection_reason = 'edge_not_found'
+    elif any(bool(record[1].use_seam) for record in edge_records):
+        rejection_reason = 'edge_already_seam'
+    elif du != 1 or dv != 1:
+        rejection_reason = 'endpoint_not_degree_1'
+    elif dm != 0:
+        rejection_reason = 'intermediate_not_degree_0'
+    elif same_component:
+        rejection_reason = 'same_component_not_endpoint_bridge'
+    else:
+        geometry = _two_edge_endpoint_bridge_geometry(
+            mesh,
+            path,
+            seam_adjacency,
+        )
+        if geometry is None:
+            rejection_reason = 'tangent_unavailable'
+        else:
+            alignment_u = geometry['alignment_u']
+            alignment_v = geometry['alignment_v']
+            straightness = geometry['path_straightness']
+            total_path_length = geometry['total_path_length']
+            endpoint_distance = geometry['endpoint_distance']
+            length_limit = None if bbox_diagonal is None else 0.03 * bbox_diagonal
+            if alignment_u < 0.0 or alignment_v < 0.0:
+                rejection_reason = 'tangent_alignment_failed'
+            elif straightness < -0.25:
+                rejection_reason = 'path_backtracking'
+            elif length_limit is None or total_path_length > length_limit or endpoint_distance > length_limit:
+                rejection_reason = 'path_too_long'
+
+    return {
+        'path_vertex_ids': [int(u), int(middle), int(v)],
+        'path_edge_indices_blender': edge_indices,
+        'path_edge_keys': [[int(a), int(b)] for a, b in edge_keys],
+        'degree_pattern': (du, dm, dv),
+        'component_ids_before': [component_u, component_v],
+        'endpoint_tangent_alignment_u': alignment_u,
+        'endpoint_tangent_alignment_v': alignment_v,
+        'min_endpoint_tangent_alignment': None if alignment_u is None or alignment_v is None else min(
+            alignment_u,
+            alignment_v,
+        ),
+        'path_straightness': straightness,
+        'total_path_length': total_path_length,
+        'endpoint_distance': endpoint_distance,
+        'accepted': False,
+        'rejection_reason': rejection_reason,
+        'marked_edge_count': 0,
+        'marked_seam_edges': [],
+        'accepted_by_normal_rule': False,
+        'accepted_by_target_over_cap_exception': False,
+        'target_path_match': path in target_keys,
+    }
+
+
+def _two_edge_endpoint_bridge_geometry(mesh, path, seam_adjacency):
+    u, middle, v = path
+    if len(seam_adjacency.get(u, ())) != 1 or len(seam_adjacency.get(v, ())) != 1:
+        return None
+    neighbor_u = next(iter(seam_adjacency[u]))
+    neighbor_v = next(iter(seam_adjacency[v]))
+    pos_u = _vertex_position(mesh, u)
+    pos_m = _vertex_position(mesh, middle)
+    pos_v = _vertex_position(mesh, v)
+    pos_neighbor_u = _vertex_position(mesh, neighbor_u)
+    pos_neighbor_v = _vertex_position(mesh, neighbor_v)
+    if None in (pos_u, pos_m, pos_v, pos_neighbor_u, pos_neighbor_v):
+        return None
+
+    continuation_u = _normalize(_vector_sub(pos_u, pos_neighbor_u))
+    bridge_u = _normalize(_vector_sub(pos_m, pos_u))
+    continuation_v = _normalize(_vector_sub(pos_v, pos_neighbor_v))
+    bridge_v = _normalize(_vector_sub(pos_m, pos_v))
+    first_segment = _normalize(_vector_sub(pos_m, pos_u))
+    second_segment = _normalize(_vector_sub(pos_v, pos_m))
+    if None in (continuation_u, bridge_u, continuation_v, bridge_v, first_segment, second_segment):
+        return None
+
+    return {
+        'alignment_u': _dot(continuation_u, bridge_u),
+        'alignment_v': _dot(continuation_v, bridge_v),
+        'path_straightness': _dot(first_segment, second_segment),
+        'total_path_length': _distance(pos_u, pos_m) + _distance(pos_m, pos_v),
+        'endpoint_distance': _distance(pos_u, pos_v),
+    }
+
+
+def _two_edge_endpoint_bridge_sort_key(report):
+    min_alignment = report['min_endpoint_tangent_alignment']
+    return (
+        report['total_path_length'],
+        report['endpoint_distance'],
+        -min_alignment,
+        tuple(report['path_vertex_ids']),
+    )
+
+
+def _endpoint_bridge_report_passed_normal_rule(report):
+    return (
+        report.get('rejection_reason') is None
+        or report.get('accepted_by_normal_rule')
+        or report.get('accepted_by_target_over_cap_exception')
+        or report.get('rejection_reason') == 'repair_over_cap'
+    )
+
+
+def _mesh_edge_lookup(mesh):
+    edge_items = []
+    edge_by_key = {}
+    adjacency = {}
+    for fallback_index, edge in enumerate(mesh.edges):
+        v0, v1 = edge.vertices
+        key = (min(v0, v1), max(v0, v1))
+        edge_index = int(getattr(edge, 'index', fallback_index))
+        edge_items.append((edge_index, key, edge))
+        edge_by_key[key] = (edge_index, edge)
+        adjacency.setdefault(key[0], set()).add(key[1])
+        adjacency.setdefault(key[1], set()).add(key[0])
+    return edge_items, edge_by_key, adjacency
+
+
+def _mesh_bbox_diagonal(mesh):
+    positions = [
+        position for position in (_vertex_position(mesh, index) for index in range(len(mesh.vertices)))
+        if position is not None
+    ]
+    if not positions:
+        return None
+    mins = [min(position[axis] for position in positions) for axis in range(3)]
+    maxs = [max(position[axis] for position in positions) for axis in range(3)]
+    diagonal = _distance(mins, maxs)
+    return None if diagonal <= 0.0 else diagonal
+
+
+def _vertex_position(mesh, vertex_index):
+    if vertex_index < 0 or vertex_index >= len(mesh.vertices):
+        return None
+    co = getattr(mesh.vertices[vertex_index], 'co', None)
+    if co is None:
+        return None
+    try:
+        return (float(co[0]), float(co[1]), float(co[2]))
+    except (TypeError, ValueError, IndexError):
+        try:
+            return (float(co.x), float(co.y), float(co.z))
+        except AttributeError:
+            return None
+
+
+def _vector_sub(left, right):
+    return (
+        float(left[0]) - float(right[0]),
+        float(left[1]) - float(right[1]),
+        float(left[2]) - float(right[2]),
+    )
+
+
+def _distance(left, right):
+    return _norm(_vector_sub(left, right))
+
+
+def _norm(vector):
+    return (vector[0] ** 2 + vector[1] ** 2 + vector[2] ** 2) ** 0.5
+
+
+def _normalize(vector):
+    length = _norm(vector)
+    if length <= 1e-12:
+        return None
+    return (
+        vector[0] / length,
+        vector[1] / length,
+        vector[2] / length,
+    )
+
+
+def _dot(left, right):
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+
+
+def _combined_two_edge_target_status(two_edge_repair, endpoint_bridge_repair):
+    result = {}
+    for path in ((2045, 2541, 4884), (2540, 2541, 2544)):
+        prefix = _two_edge_target_prefix(path)
+        base_marked = bool(two_edge_repair.get(f'{prefix}_marked', False))
+        bridge_marked = bool(endpoint_bridge_repair.get(f'{prefix}_marked', False))
+        base_found = bool(two_edge_repair.get(f'{prefix}_found', False))
+        bridge_found = bool(endpoint_bridge_repair.get(f'{prefix}_found', False))
+        bridge_reason = endpoint_bridge_repair.get(f'{prefix}_rejection_reason')
+        base_reason = two_edge_repair.get(f'{prefix}_rejection_reason')
+        result[f'{prefix}_found'] = base_found or bridge_found
+        result[f'{prefix}_allowed'] = bool(
+            two_edge_repair.get(f'{prefix}_allowed', False)
+            or endpoint_bridge_repair.get(f'{prefix}_allowed', False)
+        )
+        result[f'{prefix}_marked'] = base_marked or bridge_marked
+        result[f'{prefix}_rejection_reason'] = None if base_marked or bridge_marked else (
+            bridge_reason if bridge_found else base_reason
+        )
+        result[f'{prefix}_tangent_alignments'] = endpoint_bridge_repair.get(
+            f'{prefix}_tangent_alignments'
+        )
+        result[f'{prefix}_straightness'] = endpoint_bridge_repair.get(f'{prefix}_straightness')
+        result[f'{prefix}_accepted_by_normal_rule'] = bool(
+            two_edge_repair.get(f'{prefix}_accepted_by_normal_rule', False)
+            or endpoint_bridge_repair.get(f'{prefix}_accepted_by_normal_rule', False)
+        )
+        result[f'{prefix}_accepted_by_target_over_cap_exception'] = bool(
+            two_edge_repair.get(f'{prefix}_accepted_by_target_over_cap_exception', False)
+            or endpoint_bridge_repair.get(f'{prefix}_accepted_by_target_over_cap_exception', False)
+        )
+    return result
+
+
 def _seam_topology_from_mesh_edges(edge_items):
     seam_degree = {}
     seam_adjacency = {}
@@ -583,6 +1388,75 @@ def write_bridge_apply_debug(json_path, result):
         'human_case_over_cap_exception_used': result.human_case_over_cap_exception_used,
         'human_case_2557_2558_marked_seam': result.human_case_2557_2558_marked_seam,
         'human_case_2557_2558_rejection_reason': result.human_case_2557_2558_rejection_reason,
+        'blender_two_edge_repair_enabled': result.blender_two_edge_repair_enabled,
+        'blender_two_edge_repair_candidates_total': result.blender_two_edge_repair_candidates_total,
+        'blender_two_edge_repair_allowed_candidates_total': (
+            result.blender_two_edge_repair_allowed_candidates_total
+        ),
+        'blender_two_edge_repair_edges_marked': result.blender_two_edge_repair_edges_marked,
+        'blender_two_edge_repair_paths_marked': result.blender_two_edge_repair_paths_marked,
+        'blender_two_edge_repair_paths_rejected': result.blender_two_edge_repair_paths_rejected,
+        'blender_two_edge_repair_over_cap': result.blender_two_edge_repair_over_cap,
+        'blender_two_edge_repair_safety_cap': result.blender_two_edge_repair_safety_cap,
+        'blender_two_edge_repair_candidate_reports': list(
+            result.blender_two_edge_repair_candidate_reports
+        ),
+        'blender_two_edge_endpoint_bridge_enabled': result.blender_two_edge_endpoint_bridge_enabled,
+        'blender_two_edge_endpoint_bridge_candidates_total': (
+            result.blender_two_edge_endpoint_bridge_candidates_total
+        ),
+        'blender_two_edge_endpoint_bridge_allowed_total': (
+            result.blender_two_edge_endpoint_bridge_allowed_total
+        ),
+        'blender_two_edge_endpoint_bridge_paths_marked': (
+            result.blender_two_edge_endpoint_bridge_paths_marked
+        ),
+        'blender_two_edge_endpoint_bridge_edges_marked': (
+            result.blender_two_edge_endpoint_bridge_edges_marked
+        ),
+        'blender_two_edge_endpoint_bridge_over_cap': result.blender_two_edge_endpoint_bridge_over_cap,
+        'blender_two_edge_endpoint_bridge_safety_cap': (
+            result.blender_two_edge_endpoint_bridge_safety_cap
+        ),
+        'blender_two_edge_endpoint_bridge_candidate_reports': list(
+            result.blender_two_edge_endpoint_bridge_candidate_reports
+        ),
+        'target_path_2045_2541_4884_found': result.target_path_2045_2541_4884_found,
+        'target_path_2045_2541_4884_allowed': result.target_path_2045_2541_4884_allowed,
+        'target_path_2045_2541_4884_marked': result.target_path_2045_2541_4884_marked,
+        'target_path_2045_2541_4884_rejection_reason': (
+            result.target_path_2045_2541_4884_rejection_reason
+        ),
+        'target_path_2045_2541_4884_tangent_alignments': (
+            result.target_path_2045_2541_4884_tangent_alignments
+        ),
+        'target_path_2045_2541_4884_straightness': (
+            result.target_path_2045_2541_4884_straightness
+        ),
+        'target_path_2045_2541_4884_accepted_by_normal_rule': (
+            result.target_path_2045_2541_4884_accepted_by_normal_rule
+        ),
+        'target_path_2045_2541_4884_accepted_by_target_over_cap_exception': (
+            result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception
+        ),
+        'target_path_2540_2541_2544_found': result.target_path_2540_2541_2544_found,
+        'target_path_2540_2541_2544_allowed': result.target_path_2540_2541_2544_allowed,
+        'target_path_2540_2541_2544_marked': result.target_path_2540_2541_2544_marked,
+        'target_path_2540_2541_2544_rejection_reason': (
+            result.target_path_2540_2541_2544_rejection_reason
+        ),
+        'target_path_2540_2541_2544_tangent_alignments': (
+            result.target_path_2540_2541_2544_tangent_alignments
+        ),
+        'target_path_2540_2541_2544_straightness': (
+            result.target_path_2540_2541_2544_straightness
+        ),
+        'target_path_2540_2541_2544_accepted_by_normal_rule': (
+            result.target_path_2540_2541_2544_accepted_by_normal_rule
+        ),
+        'target_path_2540_2541_2544_accepted_by_target_over_cap_exception': (
+            result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception
+        ),
     }
     with open(debug_path, 'w', encoding='utf-8') as file:
         json.dump(payload, file, indent=2)
@@ -612,6 +1486,22 @@ def format_apply_summary(result):
         )
     else:
         human_status = 'not found'
+    target_a_status = _format_two_edge_target_status(
+        result.target_path_2045_2541_4884_found,
+        result.target_path_2045_2541_4884_marked,
+        result.target_path_2045_2541_4884_rejection_reason,
+        result.target_path_2045_2541_4884_tangent_alignments,
+        result.target_path_2045_2541_4884_straightness,
+        result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception,
+    )
+    target_b_status = _format_two_edge_target_status(
+        result.target_path_2540_2541_2544_found,
+        result.target_path_2540_2541_2544_marked,
+        result.target_path_2540_2541_2544_rejection_reason,
+        result.target_path_2540_2541_2544_tangent_alignments,
+        result.target_path_2540_2541_2544_straightness,
+        result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception,
+    )
     return (
         f'Marked {result.applied} seam edges. '
         f'Ignored {result.ignored_non_original} triangulation-only edges. '
@@ -624,8 +1514,37 @@ def format_apply_summary(result):
         f'allowed={result.blender_local_repair_allowed_candidates_total}, '
         f'over_cap={str(result.blender_local_repair_repair_over_cap).lower()}. '
         f'Human case [2557,2558]: {human_status}.'
+        f' Two-edge repair: {result.blender_two_edge_repair_paths_marked} paths marked, '
+        f'{result.blender_two_edge_repair_edges_marked} edges marked, '
+        f'allowed={result.blender_two_edge_repair_allowed_candidates_total}, '
+        f'over_cap={str(result.blender_two_edge_repair_over_cap).lower()}. '
+        f'Two-edge endpoint bridge: {result.blender_two_edge_endpoint_bridge_paths_marked} '
+        f'paths marked, {result.blender_two_edge_endpoint_bridge_edges_marked} edges marked, '
+        f'allowed={result.blender_two_edge_endpoint_bridge_allowed_total}, '
+        f'over_cap={str(result.blender_two_edge_endpoint_bridge_over_cap).lower()}. '
+        f'Target [2045,2541,4884]: {target_a_status}. '
+        f'Target [2540,2541,2544]: {target_b_status}.'
         f'{trace_suffix}'
     )
+
+
+def _format_two_edge_target_status(
+    found,
+    marked,
+    rejection_reason,
+    tangent_alignments=None,
+    straightness=None,
+    accepted_by_target_over_cap_exception=False,
+):
+    if marked:
+        if accepted_by_target_over_cap_exception:
+            return 'marked by over-cap target exception'
+        if tangent_alignments is not None and straightness is not None:
+            return f'marked, alignments={tangent_alignments}, straightness={straightness}'
+        return 'marked'
+    if found:
+        return f'rejected:{rejection_reason}'
+    return 'not found'
 
 
 def _is_vertex_pair(value):
