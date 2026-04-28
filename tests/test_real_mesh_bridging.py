@@ -143,6 +143,7 @@ class RealMeshBridgingTests(unittest.TestCase):
             self.assertLess(fixture.probabilities[edge_index], 0.30, edge)
             self.assertFalse(result.skeleton_result.skeleton_edge_mask[edge_index], edge)
             self.assertTrue(result.bridging_result.bridged_edge_mask[edge_index], edge)
+            self.assertIn(edge_index, result.bridging_result.added_bridge_edges, edge)
 
     def test_fixture_actually_creates_a_gap(self):
         """
@@ -236,7 +237,9 @@ class RealMeshBridgingTests(unittest.TestCase):
             self.assertTrue(result.final_edge_mask[_edge_index(fixture.view, edge)], edge)
         for edge in must_prune:
             self.assertFalse(result.final_edge_mask[_edge_index(fixture.view, edge)], edge)
-        self.assertGreater(result.bridging_result.steiner_edges_added_total, 0)
+        self.assertGreater(result.bridging_result.bridges_accepted, 0)
+        self.assertGreater(result.bridging_result.added_bridge_edges_count, 0)
+        self.assertGreater(len(result.bridging_result.accepted_bridge_reports), 0)
 
     def test_honest_bridges_man_edges(self):
         must_bridge = [
@@ -298,4 +301,6 @@ class RealMeshBridgingTests(unittest.TestCase):
             self.assertTrue(result.final_edge_mask[_edge_index(fixture.view, edge)], edge)
         for edge in must_prune:
             self.assertFalse(result.final_edge_mask[_edge_index(fixture.view, edge)], edge)
-        self.assertGreater(result.bridging_result.steiner_edges_added_total, 0)
+        self.assertGreater(result.bridging_result.bridges_accepted, 0)
+        self.assertGreater(result.bridging_result.added_bridge_edges_count, 0)
+        self.assertGreater(len(result.bridging_result.accepted_bridge_reports), 0)

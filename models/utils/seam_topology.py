@@ -48,6 +48,7 @@ class SeamGraphView:
     edge_count: int
     unique_edges: np.ndarray
     edge_lengths: np.ndarray
+    canonical_vertices: np.ndarray
     vertex_to_edges: tuple[tuple[int, ...], ...]
     vertex_graph: nx.Graph
 
@@ -101,6 +102,7 @@ def build_seam_graph_view(
         edge_count=edge_count,
         unique_edges=expected_edges.copy(),
         edge_lengths=edge_lengths,
+        canonical_vertices=canonical_vertices.copy(),
         vertex_to_edges=vertex_to_edges,
         vertex_graph=vertex_graph,
     )
@@ -620,18 +622,56 @@ def diagnose_skeleton_application(
 @dataclass(frozen=True)
 class BridgingResult:
     bridged_edge_mask: np.ndarray
-    steiner_added_edges: frozenset[int]
-    component_reports: tuple[dict, ...]
-    component_count: int
-    terminals_total: int
-    terminals_dropped_no_component: int
-    steiner_calls: int
-    steiner_edges_added_total: int
-    tau_high: float
-    r_bridge: int
-    epsilon: float  # vestigial under length-weighted bridging; kept for API stability for one release
-    cluster_count: int
-    representative_count: int
+    added_bridge_edges: frozenset[int] = frozenset()
+    endpoints_before: int = 0
+    endpoints_after: int = 0
+    components_before: int = 0
+    components_after: int = 0
+    endpoint_pairs_considered: int = 0
+    candidate_paths_found: int = 0
+    candidate_paths_valid: int = 0
+    bridges_accepted: int = 0
+    added_bridge_edges_count: int = 0
+    max_bridge_length_edges: int = 0
+    mean_bridge_length_edges: float = 0.0
+    bridges_rejected_by_no_path: int = 0
+    bridges_rejected_by_graph_length: int = 0
+    bridges_rejected_by_euclidean_distance: int = 0
+    bridges_rejected_by_existing_seam_edge: int = 0
+    bridges_rejected_by_skeleton_intersection: int = 0
+    bridges_rejected_by_already_connected: int = 0
+    bridges_rejected_by_loop: int = 0
+    bridges_rejected_by_conflict: int = 0
+    bridges_rejected_by_non_mutual: int = 0
+    bridges_rejected_by_tangent: int = 0
+    bridges_rejected_by_endpoint_consumed: int = 0
+    accepted_bridge_reports: tuple[dict, ...] = tuple()
+    rejected_bridge_reports: tuple[dict, ...] = tuple()
+    unmatched_endpoints: tuple[int, ...] = tuple()
+    bridge_length_edges_histogram: dict[int, int] | None = None
+    probability_tiebreak_used: bool = False
+    max_bridge_edges: int = 6
+    max_bridge_euclidean_ratio: float = 0.03
+    max_endpoint_candidates: int = 4
+    require_mutual_pairing: bool = True
+    min_loop_size_to_allow: int = 8
+    tangent_alignment_weight: float = 0.25
+    path_weighting: str = 'edge_length'
+    legacy_probability_bridging: dict[str, Any] | None = None
+
+    # Deprecated compatibility fields. They are not active Stage B telemetry.
+    steiner_added_edges: frozenset[int] = frozenset()
+    component_reports: tuple[dict, ...] = tuple()
+    component_count: int = 0
+    terminals_total: int = 0
+    terminals_dropped_no_component: int = 0
+    steiner_calls: int = 0
+    steiner_edges_added_total: int = 0
+    tau_high: float = 0.70
+    r_bridge: int = 6
+    epsilon: float = 1e-3
+    cluster_count: int = 0
+    representative_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -661,6 +701,12 @@ class TopologyPipelineResult:
     l_min: int
     epsilon: float
     anchor_boundary: bool
+    max_bridge_edges: int = 6
+    max_bridge_euclidean_ratio: float = 0.03
+    max_endpoint_candidates: int = 4
+    require_mutual_pairing: bool = True
+    min_loop_size_to_allow: int = 8
+    tangent_alignment_weight: float = 0.25
 
 
 def build_skeleton_subgraph(
@@ -691,147 +737,443 @@ def build_skeleton_subgraph(
     return graph
 
 
-def _bounded_search_graph(
-    view: SeamGraphView,
-    seed_vertices: frozenset[int],
-    r_bridge: int,
-    probabilities: np.ndarray,
-    skeleton_edge_mask: np.ndarray,
-    epsilon: float,
-) -> nx.Graph:
-    """
-    Build the mesh subgraph within r_bridge BFS hops of seed_vertices.
-    """
-    # NOTE: `epsilon` is kept in the signature for API stability with
-    # callers (compute_steiner_bridging, diagnose_bridging_application).
-    # Under length-weighted bridging it is unused; retained here so
-    # one-release migration paths do not require simultaneous changes
-    # to all call sites. A future cleanup can remove the parameter.
-    if not seed_vertices:
-        return nx.Graph()
+def _validated_nonnegative_int(name: str, value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or int(value) < 0:
+        raise ValueError(f'{name} must be a non-negative integer')
+    return int(value)
 
-    visited: set[int] = {int(vertex) for vertex in seed_vertices}
-    queue: deque[tuple[int, int]] = deque((int(vertex), 0) for vertex in sorted(seed_vertices))
-    while queue:
-        vertex, depth = queue.popleft()
-        if depth >= r_bridge:
+
+def _validated_positive_int(name: str, value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or int(value) < 1:
+        raise ValueError(f'{name} must be an integer greater than or equal to 1')
+    return int(value)
+
+
+def _validate_extra_anchor_vertices(view: SeamGraphView, extra_anchor_vertices: frozenset[int] | None) -> None:
+    if extra_anchor_vertices is None:
+        return
+    for vertex in extra_anchor_vertices:
+        if isinstance(vertex, bool) or not isinstance(vertex, (int, np.integer)):
+            raise ValueError('extra_anchor_vertices must contain integer vertex indices')
+        vertex_index = int(vertex)
+        if vertex_index < 0 or vertex_index >= view.vertex_count:
+            raise ValueError(
+                f'extra_anchor_vertices contains out-of-range vertex index {vertex_index} '
+                f'for vertex_count={view.vertex_count}'
+            )
+
+
+def _sorted_components(graph: nx.Graph) -> list[frozenset[int]]:
+    components = [
+        frozenset(int(vertex) for vertex in component)
+        for component in nx.connected_components(graph)
+    ]
+    components.sort(key=lambda component: min(component))
+    return components
+
+
+def _component_id_map(components: list[frozenset[int]]) -> dict[int, int]:
+    component_id_of: dict[int, int] = {}
+    for component_id, component in enumerate(components):
+        for vertex in component:
+            component_id_of[int(vertex)] = component_id
+    return component_id_of
+
+
+def _mesh_bbox_diagonal(view: SeamGraphView) -> float:
+    if view.vertex_count == 0:
+        return 0.0
+    coords = np.asarray(view.canonical_vertices, dtype=np.float64).reshape((-1, 3))
+    if coords.size == 0:
+        return 0.0
+    return float(np.linalg.norm(coords.max(axis=0) - coords.min(axis=0)))
+
+
+def _vertex_distance(view: SeamGraphView, left: int, right: int) -> float:
+    coords = np.asarray(view.canonical_vertices, dtype=np.float64)
+    return float(np.linalg.norm(coords[int(left)] - coords[int(right)]))
+
+
+def _bridge_report_base(left: int, right: int, component_id_of: dict[int, int]) -> dict:
+    endpoints = [int(min(left, right)), int(max(left, right))]
+    return {
+        'endpoint_vertex_ids': endpoints,
+        'component_ids_before': [
+            component_id_of.get(endpoints[0], None),
+            component_id_of.get(endpoints[1], None),
+        ],
+    }
+
+
+def _shortest_mesh_edge_path(
+    view: SeamGraphView,
+    source: int,
+    target: int,
+    *,
+    max_bridge_edges: int,
+) -> tuple[tuple[int, ...], tuple[int, ...], float] | None:
+    heap: list[tuple[float, int, int, tuple[int, ...], tuple[int, ...]]] = [
+        (0.0, 0, int(source), (int(source),), tuple())
+    ]
+    best: dict[tuple[int, int], float] = {(int(source), 0): 0.0}
+    while heap:
+        length, edge_count, vertex, path_vertices, path_edges = heapq.heappop(heap)
+        if vertex == target and edge_count > 0:
+            return path_vertices, path_edges, float(length)
+        if edge_count >= max_bridge_edges:
             continue
         for neighbor in sorted(view.vertex_graph.neighbors(vertex)):
             neighbor_index = int(neighbor)
-            if neighbor_index in visited:
+            if neighbor_index in path_vertices:
                 continue
-            visited.add(neighbor_index)
-            queue.append((neighbor_index, depth + 1))
+            data = view.vertex_graph[vertex][neighbor_index]
+            edge_index = int(data['edge_index'])
+            next_edge_count = edge_count + 1
+            next_length = length + float(data.get('length', view.edge_lengths[edge_index]))
+            state = (neighbor_index, next_edge_count)
+            if next_length >= best.get(state, float('inf')):
+                continue
+            best[state] = next_length
+            heapq.heappush(
+                heap,
+                (
+                    next_length,
+                    next_edge_count,
+                    neighbor_index,
+                    (*path_vertices, neighbor_index),
+                    (*path_edges, edge_index),
+                ),
+            )
+    return None
 
-    graph = nx.Graph()
-    graph.add_nodes_from(sorted(visited))
-    for u, v, data in view.vertex_graph.subgraph(visited).edges(data=True):
-        idx = int(data['edge_index'])
-        if skeleton_edge_mask[idx]:
-            weight = 0.0
-        else:
-            weight = float(view.edge_lengths[idx])
-        graph.add_edge(
-            int(u),
-            int(v),
-            edge_index=idx,
-            length=float(data.get('length', view.edge_lengths[idx])),
-            weight=weight,
-        )
-    return graph
+
+def _missing_path_reason(view: SeamGraphView, source: int, target: int, max_bridge_edges: int) -> str:
+    try:
+        hop_count = int(nx.shortest_path_length(view.vertex_graph, source, target))
+    except nx.NetworkXNoPath:
+        return 'no_path'
+    return 'graph_length' if hop_count > max_bridge_edges else 'no_path'
 
 
-def _build_bridging_clusters(
+def _endpoint_tangents(
     view: SeamGraphView,
-    components: list[set[int]],
-    r_bridge: int,
-) -> tuple[list[frozenset[int]], dict[int, int]]:
-    """
-    Group skeleton components into proximity clusters within r_bridge mesh hops.
-    """
-    if not components:
-        return [], {}
-    if len(components) == 1:
-        return [frozenset({0})], {0: 0}
-
-    component_count = len(components)
-    if r_bridge == 0:
-        clusters = [frozenset({component_id}) for component_id in range(component_count)]
-        return clusters, {component_id: component_id for component_id in range(component_count)}
-
-    nearest_component: dict[int, tuple[int, int]] = {}
-    queue: deque[tuple[int, int, int]] = deque()
-    for component_id, component in enumerate(components):
-        for vertex in sorted(component):
-            vertex_index = int(vertex)
-            nearest_component[vertex_index] = (component_id, 0)
-            queue.append((vertex_index, 0, component_id))
-
-    proximity_edges: set[frozenset[int]] = set()
-    while queue:
-        vertex, depth, source_component_id = queue.popleft()
-        if depth >= r_bridge:
+    skeleton_graph: nx.Graph,
+    endpoints: list[int],
+) -> dict[int, np.ndarray]:
+    tangents: dict[int, np.ndarray] = {}
+    for endpoint in endpoints:
+        neighbors = [int(neighbor) for neighbor in skeleton_graph.neighbors(endpoint)]
+        if len(neighbors) != 1:
             continue
-        for neighbor in view.vertex_graph.neighbors(vertex):
-            neighbor_index = int(neighbor)
-            next_depth = depth + 1
-            if neighbor_index not in nearest_component:
-                nearest_component[neighbor_index] = (source_component_id, next_depth)
-                queue.append((neighbor_index, next_depth, source_component_id))
+        neighbor = neighbors[0]
+        vector = _approx_vertex_vector(view, neighbor, endpoint)
+        norm = float(np.linalg.norm(vector))
+        if norm > 0.0:
+            tangents[int(endpoint)] = vector / norm
+    return tangents
+
+
+def _approx_vertex_vector(view: SeamGraphView, source: int, target: int) -> np.ndarray:
+    coords = np.asarray(view.canonical_vertices, dtype=np.float64)
+    return coords[int(target)] - coords[int(source)]
+
+
+def _tangent_penalty(
+    view: SeamGraphView,
+    path_vertices: tuple[int, ...],
+    endpoint_tangents: dict[int, np.ndarray],
+) -> float:
+    if len(path_vertices) < 2:
+        return 0.0
+    left = int(path_vertices[0])
+    right = int(path_vertices[-1])
+    penalties: list[float] = []
+    if left in endpoint_tangents:
+        vector = _approx_vertex_vector(view, left, int(path_vertices[1]))
+        norm = float(np.linalg.norm(vector))
+        if norm > 0.0:
+            penalties.append(1.0 - float(np.dot(endpoint_tangents[left], vector / norm)))
+    if right in endpoint_tangents:
+        vector = _approx_vertex_vector(view, right, int(path_vertices[-2]))
+        norm = float(np.linalg.norm(vector))
+        if norm > 0.0:
+            penalties.append(1.0 - float(np.dot(endpoint_tangents[right], vector / norm)))
+    return float(sum(penalties))
+
+
+def compute_endpoint_bridging(
+    view: SeamGraphView,
+    skel_result: SkeletonResult,
+    *,
+    max_bridge_edges: int = 6,
+    max_bridge_euclidean_ratio: float = 0.03,
+    max_endpoint_candidates: int = 4,
+    require_mutual_pairing: bool = True,
+    min_loop_size_to_allow: int = 8,
+    tangent_alignment_weight: float = 0.25,
+) -> BridgingResult:
+    """
+    Deterministically bridge degree-1 skeleton endpoints over the original mesh graph.
+    """
+    max_bridge_edges_value = _validated_nonnegative_int('max_bridge_edges', max_bridge_edges)
+    max_endpoint_candidates_value = _validated_positive_int('max_endpoint_candidates', max_endpoint_candidates)
+    min_loop_size_value = _validated_positive_int('min_loop_size_to_allow', min_loop_size_to_allow)
+    max_ratio_value = float(max_bridge_euclidean_ratio)
+    if not np.isfinite(max_ratio_value) or max_ratio_value < 0.0:
+        raise ValueError('max_bridge_euclidean_ratio must be finite and non-negative')
+    tangent_weight_value = float(tangent_alignment_weight)
+    if not np.isfinite(tangent_weight_value) or tangent_weight_value < 0.0:
+        raise ValueError('tangent_alignment_weight must be finite and non-negative')
+    if skel_result.skeleton_edge_mask.shape != (view.edge_count,):
+        raise ValueError(
+            f'skeleton_edge_mask must have shape ({view.edge_count}), '
+            f'got {skel_result.skeleton_edge_mask.shape}'
+        )
+    if skel_result.skeleton_edge_mask.dtype != bool:
+        raise ValueError('skeleton_edge_mask must have dtype bool')
+
+    skeleton_mask = skel_result.skeleton_edge_mask
+    bridged_mask = skeleton_mask.copy()
+    skeleton_graph = build_skeleton_subgraph(view, skeleton_mask)
+    components = _sorted_components(skeleton_graph)
+    component_id_of = _component_id_map(components)
+    component_endpoint_counts: dict[int, int] = {index: 0 for index in range(len(components))}
+    endpoints = sorted(int(vertex) for vertex, degree in skeleton_graph.degree() if int(degree) == 1)
+    for endpoint in endpoints:
+        component_endpoint_counts[component_id_of[endpoint]] += 1
+
+    bbox_diagonal = _mesh_bbox_diagonal(view)
+    max_euclidean_distance = max_ratio_value * bbox_diagonal
+    skeleton_vertices = set(int(vertex) for vertex in skeleton_graph.nodes())
+    seam_edge_indices = set(int(index) for index in np.flatnonzero(skeleton_mask))
+    endpoint_tangents = _endpoint_tangents(view, skeleton_graph, endpoints)
+
+    counters = {
+        'bridges_rejected_by_no_path': 0,
+        'bridges_rejected_by_graph_length': 0,
+        'bridges_rejected_by_euclidean_distance': 0,
+        'bridges_rejected_by_existing_seam_edge': 0,
+        'bridges_rejected_by_skeleton_intersection': 0,
+        'bridges_rejected_by_already_connected': 0,
+        'bridges_rejected_by_loop': 0,
+        'bridges_rejected_by_conflict': 0,
+        'bridges_rejected_by_non_mutual': 0,
+        'bridges_rejected_by_tangent': 0,
+        'bridges_rejected_by_endpoint_consumed': 0,
+    }
+    rejected_reports: list[dict] = []
+    candidate_reports_by_endpoint: dict[int, list[dict]] = {endpoint: [] for endpoint in endpoints}
+    endpoint_pairs_considered = 0
+    candidate_paths_found = 0
+    candidate_paths_valid = 0
+
+    for left_index, left in enumerate(endpoints):
+        for right in endpoints[left_index + 1:]:
+            endpoint_pairs_considered += 1
+            euclidean_distance = _vertex_distance(view, left, right)
+            base_report = _bridge_report_base(left, right, component_id_of)
+            if euclidean_distance > max_euclidean_distance:
+                counters['bridges_rejected_by_euclidean_distance'] += 1
+                rejected_reports.append({
+                    **base_report,
+                    'rejection_reason': 'euclidean_distance',
+                    'euclidean_distance': euclidean_distance,
+                    'max_euclidean_distance': max_euclidean_distance,
+                })
                 continue
 
-            other_component_id, other_depth = nearest_component[neighbor_index]
-            if other_component_id == source_component_id:
+            path = _shortest_mesh_edge_path(view, left, right, max_bridge_edges=max_bridge_edges_value)
+            if path is None:
+                reason = _missing_path_reason(view, left, right, max_bridge_edges_value)
+                counter_key = (
+                    'bridges_rejected_by_graph_length'
+                    if reason == 'graph_length'
+                    else 'bridges_rejected_by_no_path'
+                )
+                counters[counter_key] += 1
+                rejected_reports.append({**base_report, 'rejection_reason': reason})
                 continue
-            if depth + other_depth + 1 <= r_bridge:
-                proximity_edges.add(frozenset({source_component_id, other_component_id}))
 
-    proximity_graph = nx.Graph()
-    proximity_graph.add_nodes_from(range(component_count))
-    for edge in sorted(proximity_edges, key=lambda pair: tuple(sorted(pair))):
-        left, right = sorted(edge)
-        proximity_graph.add_edge(left, right)
+            candidate_paths_found += 1
+            path_vertices, path_edges, path_length = path
+            edge_count = len(path_edges)
+            path_report = {
+                **base_report,
+                'path_vertex_ids': list(path_vertices),
+                'path_edge_ids': list(path_edges),
+                'path_edge_count': edge_count,
+                'path_length': path_length,
+            }
+            if edge_count > max_bridge_edges_value:
+                counters['bridges_rejected_by_graph_length'] += 1
+                rejected_reports.append({**path_report, 'rejection_reason': 'graph_length'})
+                continue
+            if any(edge_index in seam_edge_indices for edge_index in path_edges):
+                counters['bridges_rejected_by_existing_seam_edge'] += 1
+                rejected_reports.append({**path_report, 'rejection_reason': 'existing_seam_edge'})
+                continue
+            interior_vertices = tuple(int(vertex) for vertex in path_vertices[1:-1])
+            if any(vertex in skeleton_vertices for vertex in interior_vertices):
+                counters['bridges_rejected_by_skeleton_intersection'] += 1
+                rejected_reports.append({**path_report, 'rejection_reason': 'skeleton_intersection'})
+                continue
 
-    clusters = [
-        frozenset(int(component_id) for component_id in cluster)
-        for cluster in nx.connected_components(proximity_graph)
-    ]
-    clusters.sort(key=lambda cluster: min(cluster))
-    component_to_cluster: dict[int, int] = {}
-    for cluster_id, cluster in enumerate(clusters):
-        for component_id in cluster:
-            component_to_cluster[int(component_id)] = cluster_id
-    return clusters, component_to_cluster
+            same_component = component_id_of.get(left) == component_id_of.get(right)
+            loop_size: int | None = None
+            if same_component:
+                component_id = component_id_of[left]
+                if component_endpoint_counts.get(component_id, 0) != 2:
+                    counters['bridges_rejected_by_loop'] += 1
+                    rejected_reports.append({**path_report, 'rejection_reason': 'loop'})
+                    continue
+                skeleton_path_edges = nx.shortest_path_length(skeleton_graph, left, right)
+                loop_size = int(skeleton_path_edges) + edge_count
+                if loop_size < min_loop_size_value:
+                    counters['bridges_rejected_by_already_connected'] += 1
+                    rejected_reports.append({
+                        **path_report,
+                        'rejection_reason': 'already_connected',
+                        'loop_size': loop_size,
+                    })
+                    continue
 
+            tangent_penalty = _tangent_penalty(
+                view,
+                path_vertices,
+                endpoint_tangents,
+            )
+            weighted_tangent_penalty = tangent_weight_value * tangent_penalty
+            score = (
+                edge_count,
+                path_length,
+                weighted_tangent_penalty,
+                euclidean_distance,
+                min(left, right),
+                max(left, right),
+            )
+            report = {
+                **path_report,
+                'bridge_edge_count': edge_count,
+                'bridge_length': path_length,
+                'score_tuple': list(score),
+                'same_component': bool(same_component),
+                'loop_size': loop_size,
+                'euclidean_distance': euclidean_distance,
+                'interior_vertex_ids': list(interior_vertices),
+            }
+            candidate_paths_valid += 1
+            candidate_reports_by_endpoint[left].append(report)
+            candidate_reports_by_endpoint[right].append(report)
 
-def _select_component_representatives(
-    components: list[set[int]],
-    vertex_scores: np.ndarray,
-    already_terminal: frozenset[int],
-) -> dict[int, int]:
-    """
-    For every skeleton component that contains no existing terminal, select
-    one vertex to serve as an implicit representative terminal.
+    best_by_endpoint: dict[int, dict] = {}
+    candidate_pool: dict[tuple[int, int], dict] = {}
+    for endpoint in endpoints:
+        ranked = sorted(
+            candidate_reports_by_endpoint[endpoint],
+            key=lambda report: tuple(report['score_tuple']),
+        )[:max_endpoint_candidates_value]
+        if ranked:
+            best_by_endpoint[endpoint] = ranked[0]
+        for report in ranked:
+            key = tuple(sorted(report['endpoint_vertex_ids']))
+            current = candidate_pool.get(key)
+            if current is None or tuple(report['score_tuple']) < tuple(current['score_tuple']):
+                candidate_pool[key] = report
 
-    The representative is the vertex with the highest vertex score, with ties
-    broken by the lowest vertex index.
-    """
-    reps: dict[int, int] = {}
-    for component_id, component in enumerate(components):
-        if component & already_terminal:
+    eligible: list[dict] = []
+    for key, report in sorted(candidate_pool.items(), key=lambda item: tuple(item[1]['score_tuple'])):
+        left, right = key
+        is_mutual = (
+            best_by_endpoint.get(left, {}).get('endpoint_vertex_ids') == [left, right]
+            and best_by_endpoint.get(right, {}).get('endpoint_vertex_ids') == [left, right]
+        )
+        if require_mutual_pairing and not is_mutual:
+            counters['bridges_rejected_by_non_mutual'] += 1
+            rejected_reports.append({**report, 'rejection_reason': 'non_mutual'})
+            continue
+        eligible.append(report)
+
+    accepted_reports: list[dict] = []
+    consumed_endpoints: set[int] = set()
+    reserved_edges: set[int] = set()
+    reserved_interior_vertices: set[int] = set()
+    added_bridge_edges: set[int] = set()
+    accepted_lengths: list[int] = []
+    histogram: dict[int, int] = {}
+
+    for report in sorted(eligible, key=lambda item: tuple(item['score_tuple'])):
+        left, right = report['endpoint_vertex_ids']
+        if left in consumed_endpoints or right in consumed_endpoints:
+            counters['bridges_rejected_by_endpoint_consumed'] += 1
+            rejected_reports.append({**report, 'rejection_reason': 'endpoint_consumed'})
+            continue
+        path_edges = set(int(edge_index) for edge_index in report['path_edge_ids'])
+        interior_vertices = set(int(vertex) for vertex in report['interior_vertex_ids'])
+        if path_edges & reserved_edges or interior_vertices & reserved_interior_vertices:
+            counters['bridges_rejected_by_conflict'] += 1
+            rejected_reports.append({**report, 'rejection_reason': 'conflict'})
             continue
 
-        best_score = -1.0
-        best_vertex: int | None = None
-        for vertex in sorted(component):
-            vertex_index = int(vertex)
-            score = float(vertex_scores[vertex_index])
-            if score > best_score:
-                best_score = score
-                best_vertex = vertex_index
-        if best_vertex is not None:
-            reps[int(component_id)] = best_vertex
-    return reps
+        for edge_index in path_edges:
+            bridged_mask[edge_index] = True
+        consumed_endpoints.update((left, right))
+        reserved_edges.update(path_edges)
+        reserved_interior_vertices.update(interior_vertices)
+        added_bridge_edges.update(path_edges)
+        accepted_lengths.append(int(report['bridge_edge_count']))
+        histogram[int(report['bridge_edge_count'])] = histogram.get(int(report['bridge_edge_count']), 0) + 1
+        accepted_reports.append(dict(report))
+
+    after_graph = build_skeleton_subgraph(view, bridged_mask)
+    endpoints_after = sum(1 for _, degree in after_graph.degree() if int(degree) == 1)
+    components_after = sum(1 for _ in nx.connected_components(after_graph)) if after_graph.number_of_edges() else 0
+    unmatched = tuple(endpoint for endpoint in endpoints if endpoint not in consumed_endpoints)
+    component_reports = tuple(
+        {
+            'component_id': int(index),
+            'skeleton_vertex_count': int(len(component)),
+            'skeleton_edge_count': int(skeleton_graph.subgraph(component).number_of_edges()),
+            'endpoint_count': int(component_endpoint_counts.get(index, 0)),
+        }
+        for index, component in enumerate(components)
+    )
+
+    return BridgingResult(
+        bridged_edge_mask=bridged_mask,
+        added_bridge_edges=frozenset(added_bridge_edges),
+        endpoints_before=len(endpoints),
+        endpoints_after=int(endpoints_after),
+        components_before=len(components),
+        components_after=int(components_after),
+        endpoint_pairs_considered=int(endpoint_pairs_considered),
+        candidate_paths_found=int(candidate_paths_found),
+        candidate_paths_valid=int(candidate_paths_valid),
+        bridges_accepted=len(accepted_reports),
+        added_bridge_edges_count=len(added_bridge_edges),
+        max_bridge_length_edges=max(accepted_lengths, default=0),
+        mean_bridge_length_edges=float(np.mean(accepted_lengths)) if accepted_lengths else 0.0,
+        accepted_bridge_reports=tuple(accepted_reports),
+        rejected_bridge_reports=tuple(rejected_reports),
+        unmatched_endpoints=unmatched,
+        bridge_length_edges_histogram=dict(sorted(histogram.items())),
+        probability_tiebreak_used=False,
+        max_bridge_edges=max_bridge_edges_value,
+        max_bridge_euclidean_ratio=max_ratio_value,
+        max_endpoint_candidates=max_endpoint_candidates_value,
+        require_mutual_pairing=bool(require_mutual_pairing),
+        min_loop_size_to_allow=min_loop_size_value,
+        tangent_alignment_weight=tangent_weight_value,
+        path_weighting='edge_length',
+        component_reports=component_reports,
+        component_count=len(components),
+        cluster_count=len(components),
+        legacy_probability_bridging={
+            'disabled': True,
+            'ignored_parameters': ['tau_high', 'epsilon'],
+            'steiner_tree_used': False,
+        },
+        **counters,
+    )
 
 
 def compute_steiner_bridging(
@@ -847,249 +1189,40 @@ def compute_steiner_bridging(
     topology: Any = None,
 ) -> BridgingResult:
     """
-    Connect nearby skeleton components with a bounded Steiner pass.
+    Deprecated compatibility wrapper.
 
-    Edges in the bounded search graph are weighted by 3D Euclidean
-    length, with skeleton edges set to weight 0 to preserve existing
-    skeleton routes. This matches the standard Dijkstra-on-mesh
-    pattern used by Blender's Shortest Edge Paths node and Sheffer &
-    Hart's Seamster (IEEE Vis 2002).
-
-    Probabilities continue to determine *which* vertices become
-    Steiner terminals (via tau_high and the representative mechanism).
-    Mesh geometry determines *how* terminals are connected.
+    This no longer performs Steiner-tree or probability-driven bridging.
+    ``probabilities``, ``tau_high``, and ``epsilon`` are validated/recorded
+    for legacy callers only; Stage B delegates to deterministic endpoint
+    shortest-path bridging and uses ``r_bridge`` as ``max_bridge_edges``.
     """
-    probs = _validated_probability_vector(view, probabilities)
+    _validated_probability_vector(view, probabilities)
     tau_high_value = _validated_probability_threshold('tau_high', tau_high)
-    if isinstance(r_bridge, bool) or not isinstance(r_bridge, (int, np.integer)) or int(r_bridge) < 0:
-        raise ValueError('r_bridge must be a non-negative integer')
-    r_bridge_value = int(r_bridge)
     epsilon_value = float(epsilon)
     if not np.isfinite(epsilon_value) or epsilon_value <= 0.0 or epsilon_value > 1.0:
         raise ValueError('epsilon must be finite and lie in (0.0, 1.0]')
+    max_bridge_edges_value = _validated_nonnegative_int('r_bridge', r_bridge)
     if anchor_boundary and topology is None:
         raise ValueError('anchor_boundary=True requires a non-None topology argument')
-    if skel_result.skeleton_edge_mask.shape != (view.edge_count,):
-        raise ValueError(
-            f'skeleton_edge_mask must have shape ({view.edge_count},), '
-            f'got {skel_result.skeleton_edge_mask.shape}'
-        )
-    if skel_result.skeleton_edge_mask.dtype != bool:
-        raise ValueError('skeleton_edge_mask must have dtype bool')
+    _validate_extra_anchor_vertices(view, extra_anchor_vertices)
 
-    normalized_extra_anchors: frozenset[int] | None = None
-    if extra_anchor_vertices is not None:
-        anchors: set[int] = set()
-        for vertex in extra_anchor_vertices:
-            if isinstance(vertex, bool) or not isinstance(vertex, (int, np.integer)):
-                raise ValueError('extra_anchor_vertices must contain integer vertex indices')
-            vertex_index = int(vertex)
-            if vertex_index < 0 or vertex_index >= view.vertex_count:
-                raise ValueError(
-                    f'extra_anchor_vertices contains out-of-range vertex index {vertex_index} '
-                    f'for vertex_count={view.vertex_count}'
-                )
-            anchors.add(vertex_index)
-        normalized_extra_anchors = frozenset(anchors)
-
-    vertex_scores = skel_result.vertex_scores
-    G_skel = build_skeleton_subgraph(view, skel_result.skeleton_edge_mask)
-    components = [
-        frozenset(int(vertex) for vertex in component)
-        for component in nx.connected_components(G_skel)
-    ]
-    components.sort(key=lambda component: min(component))
-    component_id_of: dict[int, int] = {}
-    for component_id, component in enumerate(components):
-        for vertex in component:
-            component_id_of[int(vertex)] = component_id
-
-    T_structural_raw: set[int] = set()
-    if anchor_boundary:
-        T_structural_raw.update(boundary_vertices_from_topology(topology))
-    if normalized_extra_anchors is not None:
-        T_structural_raw.update(int(vertex) for vertex in normalized_extra_anchors)
-
-    skeleton_vertices = frozenset(int(vertex) for vertex in skel_result.skeleton_vertices)
-    T_confidence = frozenset(
-        int(vertex)
-        for vertex in skeleton_vertices
-        if float(vertex_scores[int(vertex)]) >= tau_high_value
-    )
-    T_structural = frozenset(T_structural_raw & skeleton_vertices)
-    pre_rep_T_global = T_structural | T_confidence
-    terminals_dropped_no_component = sum(
-        1 for vertex in pre_rep_T_global if vertex not in component_id_of
-    )
-
-    # Step 4.25 - Component representatives.
-    # For every skeleton component that has no structural or confidence terminal,
-    # add one implicit representative terminal so Steiner spans all components in
-    # a multi-component bridging cluster.
-    already_terminal = T_structural | T_confidence
-    component_reps = _select_component_representatives(
-        components=components,
-        vertex_scores=skel_result.vertex_scores,
-        already_terminal=already_terminal,
-    )
-    T_representative: frozenset[int] = frozenset(component_reps.values())
-    T_global = pre_rep_T_global | T_representative
-    # NOTE: terminals_total includes representative terminals (added in Step
-    # 4.25). To recover the structural+confidence count alone, subtract
-    # representative_count.
-
-    clusters, _ = _build_bridging_clusters(
+    result = compute_endpoint_bridging(
         view,
-        components,
-        r_bridge_value,
+        skel_result,
+        max_bridge_edges=max_bridge_edges_value,
     )
-
-    bridged_mask = skel_result.skeleton_edge_mask.copy()
-    steiner_added_edges_global: set[int] = set()
-    component_reports: list[dict] = []
-    steiner_calls = 0
-    steiner_edges_added_total = 0
-
-    for cluster_id, cluster_comp_ids in enumerate(clusters):
-        cluster_vertex_set: set[int] = set()
-        for component_id in cluster_comp_ids:
-            cluster_vertex_set.update(components[component_id])
-        cluster_vertex_frozenset = frozenset(cluster_vertex_set)
-
-        T_cluster = T_global & cluster_vertex_frozenset
-        rep_comp_id = min(cluster_comp_ids)
-
-        if len(T_cluster) == 0:
-            cluster_skipped_reason = 'no_terminals'
-        elif len(T_cluster) == 1:
-            cluster_skipped_reason = 'too_few_terminals'
-        else:
-            cluster_skipped_reason = None
-
-        edges_added_this_cluster = 0
-        sub_group_count_for_rep = 0
-
-        if cluster_skipped_reason is None:
-            G_search = _bounded_search_graph(
-                view=view,
-                seed_vertices=cluster_vertex_frozenset,
-                r_bridge=r_bridge_value,
-                probabilities=probs,
-                skeleton_edge_mask=skel_result.skeleton_edge_mask,
-                epsilon=epsilon_value,
-            )
-
-            assert T_cluster <= set(G_search.nodes()), (
-                f"cluster {cluster_id}: terminals not in bounded search graph"
-            )
-
-            sub_components = [
-                frozenset(int(vertex) for vertex in sub)
-                for sub in nx.connected_components(G_search)
-            ]
-            sub_component_id_of: dict[int, int] = {}
-            for sub_id, sub_component in enumerate(sub_components):
-                for vertex in sub_component:
-                    sub_component_id_of[int(vertex)] = sub_id
-            terminal_groups: dict[int, set[int]] = {}
-            for terminal in sorted(T_cluster):
-                sub_id = sub_component_id_of[int(terminal)]
-                terminal_groups.setdefault(sub_id, set()).add(int(terminal))
-
-            nontrivial_groups = sorted(
-                (group for group in terminal_groups.values() if len(group) >= 2),
-                key=lambda group: min(group),
-            )
-            sub_group_count_for_rep = len(nontrivial_groups)
-
-            for group in nontrivial_groups:
-                any_terminal = min(group)
-                sub_id = sub_component_id_of[any_terminal]
-                sub_vertices = sub_components[sub_id]
-                G_sub = G_search.subgraph(sub_vertices).copy()
-
-                try:
-                    T_steiner = nx.algorithms.approximation.steiner_tree(
-                        G_sub,
-                        terminal_nodes=sorted(group),
-                        weight='weight',
-                        method='mehlhorn',
-                    )
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"steiner_tree failed for cluster {cluster_id}, "
-                        f"sub_id {sub_id}: {exc}"
-                    ) from exc
-
-                steiner_calls += 1
-
-                added_this_call = 0
-                for u, v, data in T_steiner.edges(data=True):
-                    idx = data.get('edge_index')
-                    if idx is None:
-                        raise RuntimeError(f"Steiner output edge ({u},{v}) missing 'edge_index'")
-                    edge_index = int(idx)
-                    if not bridged_mask[edge_index]:
-                        bridged_mask[edge_index] = True
-                        steiner_added_edges_global.add(edge_index)
-                        added_this_call += 1
-
-                edges_added_this_cluster += added_this_call
-
-            steiner_edges_added_total += edges_added_this_cluster
-
-        for component_id in sorted(cluster_comp_ids):
-            comp_vertex_frozenset = frozenset(components[component_id])
-            T_k = T_global & comp_vertex_frozenset
-            T_k_structural = T_structural & comp_vertex_frozenset
-            T_k_confidence = T_confidence & comp_vertex_frozenset
-
-            skeleton_edge_count_k = int(
-                G_skel.subgraph(comp_vertex_frozenset).number_of_edges()
-            )
-
-            if component_id == rep_comp_id:
-                report_skipped_reason = cluster_skipped_reason
-                report_steiner_edges = edges_added_this_cluster
-                report_sub_group_count = sub_group_count_for_rep
-            else:
-                report_skipped_reason = 'cluster_member'
-                report_steiner_edges = 0
-                report_sub_group_count = 0
-
-            component_reports.append({
-                'component_id': int(component_id),
-                'cluster_id': int(cluster_id),
-                'skeleton_edge_count': skeleton_edge_count_k,
-                'terminal_count': len(T_k),
-                'terminal_count_structural': len(T_k_structural),
-                'terminal_count_confidence': len(T_k_confidence),
-                'representative_vertex': component_reps.get(component_id, None),
-                'is_representative_only': (
-                    component_id in component_reps
-                    and not (comp_vertex_frozenset & already_terminal)
-                ),
-                'sub_group_count': report_sub_group_count,
-                'steiner_edges_added': report_steiner_edges,
-                'skipped_reason': report_skipped_reason,
-            })
-
-    component_reports.sort(key=lambda report: report['component_id'])
-
     return BridgingResult(
-        bridged_edge_mask=bridged_mask,
-        steiner_added_edges=frozenset(steiner_added_edges_global),
-        component_reports=tuple(component_reports),
-        component_count=len(components),
-        terminals_total=len(T_global),
-        terminals_dropped_no_component=terminals_dropped_no_component,
-        steiner_calls=steiner_calls,
-        steiner_edges_added_total=steiner_edges_added_total,
-        tau_high=tau_high_value,
-        r_bridge=r_bridge_value,
-        epsilon=epsilon_value,
-        cluster_count=len(clusters),
-        representative_count=len(component_reps),
+        **{
+            **result.__dict__,
+            'tau_high': tau_high_value,
+            'r_bridge': max_bridge_edges_value,
+            'epsilon': epsilon_value,
+            'legacy_probability_bridging': {
+                'disabled': True,
+                'ignored_parameters': ['tau_high', 'epsilon'],
+                'steiner_tree_used': False,
+            },
+        }
     )
 
 
@@ -1101,6 +1234,12 @@ def diagnose_bridging_application(
     tau_high: float = 0.70,
     r_bridge: int = 6,
     epsilon: float = 1e-3,
+    max_bridge_edges: int | None = None,
+    max_bridge_euclidean_ratio: float = 0.03,
+    max_endpoint_candidates: int = 4,
+    require_mutual_pairing: bool = True,
+    min_loop_size_to_allow: int = 8,
+    tangent_alignment_weight: float = 0.25,
     anchor_boundary: bool = True,
     extra_anchor_vertices: frozenset[int] | None = None,
     topology: Any = None,
@@ -1111,16 +1250,16 @@ def diagnose_bridging_application(
     """
     before_probs = np.where(skel_result.skeleton_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
-    bridging = compute_steiner_bridging(
+    del probabilities, tau_high, epsilon, anchor_boundary, extra_anchor_vertices, topology
+    bridging = compute_endpoint_bridging(
         view,
-        probabilities,
         skel_result,
-        tau_high=tau_high,
-        r_bridge=r_bridge,
-        epsilon=epsilon,
-        anchor_boundary=anchor_boundary,
-        extra_anchor_vertices=extra_anchor_vertices,
-        topology=topology,
+        max_bridge_edges=r_bridge if max_bridge_edges is None else max_bridge_edges,
+        max_bridge_euclidean_ratio=max_bridge_euclidean_ratio,
+        max_endpoint_candidates=max_endpoint_candidates,
+        require_mutual_pairing=require_mutual_pairing,
+        min_loop_size_to_allow=min_loop_size_to_allow,
+        tangent_alignment_weight=tangent_alignment_weight,
     )
     after_probs = np.where(bridging.bridged_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     after = compute_seam_mask_diagnostics(view, after_probs, threshold=diagnostics_threshold)
@@ -1320,6 +1459,12 @@ def apply_topology_pipeline(
     r_bridge: int = 6,
     l_min: int = 4,
     epsilon: float = 1e-3,
+    max_bridge_edges: int | None = None,
+    max_bridge_euclidean_ratio: float = 0.03,
+    max_endpoint_candidates: int = 4,
+    require_mutual_pairing: bool = True,
+    min_loop_size_to_allow: int = 8,
+    tangent_alignment_weight: float = 0.25,
     anchor_boundary: bool = True,
     extra_anchor_vertices: frozenset[int] | None = None,
     topology: Any = None,
@@ -1343,16 +1488,15 @@ def apply_topology_pipeline(
         extra_anchor_vertices=extra_anchor_vertices,
         topology=topology,
     )
-    bridge = compute_steiner_bridging(
+    bridge = compute_endpoint_bridging(
         view,
-        probabilities,
         skel,
-        tau_high=tau_high,
-        r_bridge=r_bridge,
-        epsilon=epsilon,
-        anchor_boundary=anchor_boundary,
-        extra_anchor_vertices=extra_anchor_vertices,
-        topology=topology,
+        max_bridge_edges=r_bridge if max_bridge_edges is None else max_bridge_edges,
+        max_bridge_euclidean_ratio=max_bridge_euclidean_ratio,
+        max_endpoint_candidates=max_endpoint_candidates,
+        require_mutual_pairing=require_mutual_pairing,
+        min_loop_size_to_allow=min_loop_size_to_allow,
+        tangent_alignment_weight=tangent_alignment_weight,
     )
     prune = compute_spur_pruning(
         view,
@@ -1374,6 +1518,12 @@ def apply_topology_pipeline(
         l_min=int(l_min),
         epsilon=float(epsilon),
         anchor_boundary=bool(anchor_boundary),
+        max_bridge_edges=int(r_bridge if max_bridge_edges is None else max_bridge_edges),
+        max_bridge_euclidean_ratio=float(max_bridge_euclidean_ratio),
+        max_endpoint_candidates=int(max_endpoint_candidates),
+        require_mutual_pairing=bool(require_mutual_pairing),
+        min_loop_size_to_allow=int(min_loop_size_to_allow),
+        tangent_alignment_weight=float(tangent_alignment_weight),
     )
 
 
@@ -1388,18 +1538,47 @@ def topology_pipeline_result_to_json_dict(
     pruning = result.pruning_result
     payload = {
         'bridging': {
-            'cluster_count': int(bridging.cluster_count),
-            'component_count': int(bridging.component_count),
+            'accepted_bridge_reports': [dict(report) for report in bridging.accepted_bridge_reports],
+            'added_bridge_edges': int(bridging.added_bridge_edges_count),
+            'bridge_length_edges_histogram': {
+                str(key): int(value)
+                for key, value in sorted((bridging.bridge_length_edges_histogram or {}).items())
+            },
+            'bridges_accepted': int(bridging.bridges_accepted),
+            'bridges_rejected_by_already_connected': int(bridging.bridges_rejected_by_already_connected),
+            'bridges_rejected_by_conflict': int(bridging.bridges_rejected_by_conflict),
+            'bridges_rejected_by_endpoint_consumed': int(bridging.bridges_rejected_by_endpoint_consumed),
+            'bridges_rejected_by_euclidean_distance': int(bridging.bridges_rejected_by_euclidean_distance),
+            'bridges_rejected_by_existing_seam_edge': int(bridging.bridges_rejected_by_existing_seam_edge),
+            'bridges_rejected_by_graph_length': int(bridging.bridges_rejected_by_graph_length),
+            'bridges_rejected_by_loop': int(bridging.bridges_rejected_by_loop),
+            'bridges_rejected_by_no_path': int(bridging.bridges_rejected_by_no_path),
+            'bridges_rejected_by_non_mutual': int(bridging.bridges_rejected_by_non_mutual),
+            'bridges_rejected_by_skeleton_intersection': int(bridging.bridges_rejected_by_skeleton_intersection),
+            'bridges_rejected_by_tangent': int(bridging.bridges_rejected_by_tangent),
+            'candidate_paths_found': int(bridging.candidate_paths_found),
+            'candidate_paths_valid': int(bridging.candidate_paths_valid),
             'component_reports': [dict(report) for report in bridging.component_reports],
-            'epsilon': float(bridging.epsilon),
-            'r_bridge': int(bridging.r_bridge),
-            'representative_count': int(bridging.representative_count),
-            'steiner_added_edges_count': int(len(bridging.steiner_added_edges)),
-            'steiner_calls': int(bridging.steiner_calls),
-            'steiner_edges_added_total': int(bridging.steiner_edges_added_total),
-            'tau_high': float(bridging.tau_high),
-            'terminals_dropped_no_component': int(bridging.terminals_dropped_no_component),
-            'terminals_total': int(bridging.terminals_total),
+            'components_after': int(bridging.components_after),
+            'components_before': int(bridging.components_before),
+            'endpoint_pairs_considered': int(bridging.endpoint_pairs_considered),
+            'endpoints_after': int(bridging.endpoints_after),
+            'endpoints_before': int(bridging.endpoints_before),
+            'legacy_probability_bridging': dict(bridging.legacy_probability_bridging or {}),
+            'max_bridge_length_edges': int(bridging.max_bridge_length_edges),
+            'mean_bridge_length_edges': float(bridging.mean_bridge_length_edges),
+            'parameters': {
+                'max_bridge_edges': int(bridging.max_bridge_edges),
+                'max_bridge_euclidean_ratio': float(bridging.max_bridge_euclidean_ratio),
+                'max_endpoint_candidates': int(bridging.max_endpoint_candidates),
+                'min_loop_size_to_allow': int(bridging.min_loop_size_to_allow),
+                'require_mutual_pairing': bool(bridging.require_mutual_pairing),
+                'tangent_alignment_weight': float(bridging.tangent_alignment_weight),
+            },
+            'path_weighting': str(bridging.path_weighting),
+            'probability_tiebreak_used': bool(bridging.probability_tiebreak_used),
+            'rejected_bridge_reports': [dict(report) for report in bridging.rejected_bridge_reports],
+            'unmatched_endpoints': [int(vertex) for vertex in bridging.unmatched_endpoints],
         },
         'final_edge_count': int(np.count_nonzero(result.final_edge_mask)),
         'parameters': {
@@ -1407,7 +1586,13 @@ def topology_pipeline_result_to_json_dict(
             'd_max': int(result.d_max),
             'epsilon': float(result.epsilon),
             'l_min': int(result.l_min),
+            'max_bridge_edges': int(result.max_bridge_edges),
+            'max_bridge_euclidean_ratio': float(result.max_bridge_euclidean_ratio),
+            'max_endpoint_candidates': int(result.max_endpoint_candidates),
+            'min_loop_size_to_allow': int(result.min_loop_size_to_allow),
+            'require_mutual_pairing': bool(result.require_mutual_pairing),
             'r_bridge': int(result.r_bridge),
+            'tangent_alignment_weight': float(result.tangent_alignment_weight),
             'tau_high': float(result.tau_high),
             'tau_low': float(result.tau_low),
         },

@@ -13,6 +13,7 @@ from models.utils.seam_topology import (
     build_seam_graph_view,
     build_skeleton_subgraph,
     boundary_vertices_from_topology,
+    compute_endpoint_bridging,
     compute_spur_pruning,
     compute_steiner_bridging,
     compute_topology_preserving_skeleton,
@@ -23,9 +24,6 @@ from models.utils.seam_topology import (
     diagnostics_to_json_dict,
     lift_edge_probabilities_to_vertices,
     topology_pipeline_result_to_json_dict,
-    _build_bridging_clusters,
-    _bounded_search_graph,
-    _select_component_representatives,
 )
 from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
@@ -769,6 +767,7 @@ class SkeletonTests(unittest.TestCase):
         self.assertEqual(boundary_vertices_from_topology(None), frozenset())
 
 
+@unittest.skip('obsolete Steiner/probability Stage B tests replaced by endpoint bridging tests')
 class BridgingTests(unittest.TestCase):
     @staticmethod
     def _one_edge_gap_fixture() -> tuple[SeamGraphView, CanonicalTopology, np.ndarray, SkeletonResult, int]:
@@ -1045,6 +1044,7 @@ class BridgingTests(unittest.TestCase):
         self.assertTrue(np.array_equal(skel_result.skeleton_edge_mask, skeleton_mask_before))
 
 
+@unittest.skip('obsolete Steiner/probability Stage B tests replaced by endpoint bridging tests')
 class BridgingClusterTests(unittest.TestCase):
     @staticmethod
     def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
@@ -1303,6 +1303,7 @@ class BridgingClusterTests(unittest.TestCase):
         self.assertTrue(all(isinstance(report['cluster_id'], int) for report in result.component_reports))
 
 
+@unittest.skip('obsolete Steiner/probability Stage B tests replaced by endpoint bridging tests')
 class BridgingRepresentativeTests(unittest.TestCase):
     @staticmethod
     def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
@@ -1543,6 +1544,7 @@ class BridgingRepresentativeTests(unittest.TestCase):
         self.assertEqual(result.representative_count, 1)
 
 
+@unittest.skip('obsolete Steiner/probability Stage B tests replaced by endpoint bridging tests')
 class BridgingLengthWeightedTests(unittest.TestCase):
     @staticmethod
     def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
@@ -1750,6 +1752,246 @@ class BridgingLengthWeightedTests(unittest.TestCase):
 
 def default_gap_probabilities(start: int, stop: int) -> dict[tuple[int, int], float]:
     return {(left, left + 1): 0.20 for left in range(start, stop)}
+
+
+class EndpointBridgingTests(unittest.TestCase):
+    @staticmethod
+    def _chain_view(vertex_count: int) -> tuple[SeamGraphView, CanonicalTopology]:
+        return BridgingClusterTests._chain_view(vertex_count)
+
+    @staticmethod
+    def _chain_skeleton(
+        vertex_count: int,
+        skeleton_edges: set[tuple[int, int]],
+    ) -> tuple[SeamGraphView, np.ndarray, SkeletonResult]:
+        view, _ = EndpointBridgingTests._chain_view(vertex_count)
+        probabilities = _edge_probability_vector(
+            view,
+            {edge: 0.95 for edge in skeleton_edges},
+            default=0.01,
+        )
+        return view, probabilities, _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+    @staticmethod
+    def _mask_edges(view: SeamGraphView, mask: np.ndarray) -> set[tuple[int, int]]:
+        return {
+            (int(view.unique_edges[index, 0]), int(view.unique_edges[index, 1]))
+            for index in np.flatnonzero(mask)
+        }
+
+    def test_endpoint_bridging_closes_one_edge_gap(self):
+        skeleton_edges = {(0, 1), (1, 2), (3, 4), (4, 5)}
+        view, _, skel_result = self._chain_skeleton(6, skeleton_edges)
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        gap_index = _edge_index(view, (2, 3))
+        self.assertTrue(result.bridged_edge_mask[gap_index])
+        self.assertEqual(result.added_bridge_edges, frozenset({gap_index}))
+        self.assertEqual(result.bridges_accepted, 1)
+        self.assertEqual(result.added_bridge_edges_count, 1)
+        self.assertEqual(result.endpoints_before, 4)
+        self.assertEqual(result.components_after, 1)
+        self.assertEqual(result.accepted_bridge_reports[0]['bridge_edge_count'], 1)
+
+    def test_endpoint_bridging_closes_two_edge_gap(self):
+        skeleton_edges = {(0, 1), (1, 2), (4, 5), (5, 6)}
+        view, _, skel_result = self._chain_skeleton(7, skeleton_edges)
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=2,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        expected = {_edge_index(view, (2, 3)), _edge_index(view, (3, 4))}
+        self.assertTrue(all(result.bridged_edge_mask[index] for index in expected))
+        self.assertEqual(result.added_bridge_edges, frozenset(expected))
+        self.assertEqual(result.max_bridge_length_edges, 2)
+        self.assertEqual(result.mean_bridge_length_edges, 2.0)
+        self.assertEqual(result.bridge_length_edges_histogram, {2: 1})
+
+    def test_endpoint_bridging_rejects_distant_endpoints(self):
+        skeleton_edges = {(0, 1), (1, 2), (9, 10), (10, 11)}
+        view, _, skel_result = self._chain_skeleton(12, skeleton_edges)
+
+        by_graph = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=3,
+            max_bridge_euclidean_ratio=1.0,
+        )
+        by_euclidean = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=8,
+            max_bridge_euclidean_ratio=0.01,
+        )
+
+        self.assertEqual(by_graph.bridges_accepted, 0)
+        self.assertGreater(by_graph.bridges_rejected_by_graph_length, 0)
+        self.assertEqual(by_euclidean.bridges_accepted, 0)
+        self.assertGreater(by_euclidean.bridges_rejected_by_euclidean_distance, 0)
+
+    def test_endpoint_bridging_cross_case_chooses_local_mutual_pairs(self):
+        skeleton_edges = {(0, 1), (3, 4), (10, 11), (13, 14)}
+        view, _, skel_result = self._chain_skeleton(15, skeleton_edges)
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=2,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        expected_added = {
+            _edge_index(view, (1, 2)),
+            _edge_index(view, (2, 3)),
+            _edge_index(view, (11, 12)),
+            _edge_index(view, (12, 13)),
+        }
+        self.assertEqual(result.added_bridge_edges, frozenset(expected_added))
+        self.assertEqual(result.bridges_accepted, 2)
+        accepted_pairs = {
+            tuple(report['endpoint_vertex_ids'])
+            for report in result.accepted_bridge_reports
+        }
+        self.assertEqual(accepted_pairs, {(1, 3), (11, 13)})
+
+    def test_endpoint_bridging_closed_loop_no_ops(self):
+        topology = _make_stub_topology(
+            vertices=[
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (1.0, 1.0, 0.0),
+                (0.0, 1.0, 0.0),
+            ],
+            edges=[(0, 1), (1, 2), (2, 3), (0, 3)],
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (0, 3)}
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_endpoint_bridging(view, skel_result)
+
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+        self.assertEqual(result.endpoints_before, 0)
+        self.assertEqual(result.bridges_accepted, 0)
+
+    def test_endpoint_bridging_same_component_loop_size_rules(self):
+        large_edges = {(index, index + 1) for index in range(8)}
+        large_topology = _make_stub_topology(
+            vertices=[(float(index), 0.0, 0.0) for index in range(9)],
+            edges=sorted(large_edges | {(0, 8)}),
+        )
+        _, large_view = _build_view_from_topology(large_topology)
+        probabilities = np.full(large_view.edge_count, 0.95, dtype=np.float64)
+        large_skel = _manual_skeleton_result(large_view, probabilities, large_edges)
+
+        large = compute_endpoint_bridging(
+            large_view,
+            large_skel,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+            min_loop_size_to_allow=8,
+        )
+
+        tiny_topology = _make_stub_topology(
+            vertices=[(float(index), 0.0, 0.0) for index in range(4)],
+            edges=[(0, 1), (1, 2), (2, 3), (0, 3)],
+        )
+        _, tiny_view = _build_view_from_topology(tiny_topology)
+        tiny_probs = np.full(tiny_view.edge_count, 0.95, dtype=np.float64)
+        tiny_skel = _manual_skeleton_result(tiny_view, tiny_probs, {(0, 1), (1, 2), (2, 3)})
+        tiny = compute_endpoint_bridging(
+            tiny_view,
+            tiny_skel,
+            max_bridge_edges=1,
+            max_bridge_euclidean_ratio=1.0,
+            min_loop_size_to_allow=8,
+        )
+
+        self.assertTrue(large.bridged_edge_mask[_edge_index(large_view, (0, 8))])
+        self.assertEqual(large.bridges_accepted, 1)
+        self.assertEqual(tiny.bridges_accepted, 0)
+        self.assertGreater(tiny.bridges_rejected_by_already_connected, 0)
+
+    def test_endpoint_bridging_tiny_spur_is_stage_c_responsibility(self):
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (1, 4)}
+        topology = _make_stub_topology(
+            vertices=[
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (2.0, 0.0, 0.0),
+                (3.0, 0.0, 0.0),
+                (1.0, 1.0, 0.0),
+            ],
+            edges=sorted(skeleton_edges),
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=2,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        self.assertEqual(result.bridges_accepted, 0)
+        self.assertTrue(np.array_equal(result.bridged_edge_mask, skel_result.skeleton_edge_mask))
+
+    def test_endpoint_bridging_rejects_path_reusing_skeleton_edges(self):
+        skeleton_edges = {(0, 1), (1, 2), (2, 3), (3, 4)}
+        view, _, skel_result = self._chain_skeleton(5, skeleton_edges)
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=4,
+            max_bridge_euclidean_ratio=1.0,
+            min_loop_size_to_allow=4,
+        )
+
+        self.assertEqual(result.bridges_accepted, 0)
+        self.assertGreater(result.bridges_rejected_by_existing_seam_edge, 0)
+
+    def test_endpoint_bridging_rejects_path_through_skeleton_vertex(self):
+        topology = _make_stub_topology(
+            vertices=[
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (2.0, 0.0, 0.0),
+                (3.0, 0.0, 0.0),
+                (4.0, 0.0, 0.0),
+                (5.0, 0.0, 0.0),
+                (2.0, 1.0, 0.0),
+                (2.0, -1.0, 0.0),
+            ],
+            edges=[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (2, 6), (6, 7), (2, 7)],
+        )
+        _, view = _build_view_from_topology(topology)
+        probabilities = np.full(view.edge_count, 0.95, dtype=np.float64)
+        skeleton_edges = {(0, 1), (4, 5), (2, 6), (6, 7), (2, 7)}
+        skel_result = _manual_skeleton_result(view, probabilities, skeleton_edges)
+
+        result = compute_endpoint_bridging(
+            view,
+            skel_result,
+            max_bridge_edges=3,
+            max_bridge_euclidean_ratio=1.0,
+        )
+
+        self.assertEqual(result.bridges_accepted, 0)
+        self.assertGreater(result.bridges_rejected_by_skeleton_intersection, 0)
 
 
 class PruningTests(unittest.TestCase):
@@ -2128,10 +2370,11 @@ class PipelineTests(unittest.TestCase):
             anchor_boundary=False,
             extra_anchor_vertices=frozenset({middle_row, middle_row + 7}),
             topology=topology,
+            max_bridge_euclidean_ratio=1.0,
         )
 
         self.assertGreater(result.skeleton_result.removals_committed, 0)
-        self.assertGreaterEqual(result.bridging_result.steiner_edges_added_total, 0)
+        self.assertGreaterEqual(result.bridging_result.bridges_accepted, 0)
         self.assertGreaterEqual(result.pruning_result.total_branches_pruned, 0)
         graph = self._masked_graph(view, result.final_edge_mask)
         self.assertTrue(nx.has_path(graph, middle_row, middle_row + 7))
@@ -2152,7 +2395,7 @@ class PipelineTests(unittest.TestCase):
 
         self.assertFalse(np.any(result.final_edge_mask))
         self.assertEqual(result.skeleton_result.removals_committed, 0)
-        self.assertEqual(result.bridging_result.steiner_calls, 0)
+        self.assertEqual(result.bridging_result.bridges_accepted, 0)
         self.assertEqual(result.pruning_result.total_branches_pruned, 0)
 
     def test_pipeline_subset_of_initial_candidate(self):
@@ -2226,9 +2469,24 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(set(payload), {'bridging', 'final_edge_count', 'parameters', 'pruning', 'skeleton'})
         self.assertEqual(
             set(payload['parameters']),
-            {'tau_low', 'tau_high', 'd_max', 'r_bridge', 'l_min', 'epsilon', 'anchor_boundary'},
+            {
+                'tau_low',
+                'tau_high',
+                'd_max',
+                'r_bridge',
+                'l_min',
+                'epsilon',
+                'anchor_boundary',
+                'max_bridge_edges',
+                'max_bridge_euclidean_ratio',
+                'max_endpoint_candidates',
+                'min_loop_size_to_allow',
+                'require_mutual_pairing',
+                'tangent_alignment_weight',
+            },
         )
         self.assertIn('component_reports', payload['bridging'])
+        self.assertIn('accepted_bridge_reports', payload['bridging'])
         self.assertIn('iteration_reports', payload['pruning'])
         self.assertEqual(payload['final_edge_count'], int(result.final_edge_mask.sum()))
         self._assert_json_scalar_tree(self, payload)

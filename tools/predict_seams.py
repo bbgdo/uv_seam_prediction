@@ -71,7 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         '--postprocess-tau-high', type=float, default=0.70,
-        help='Confidence-terminal threshold for Steiner bridging (Stage B).'
+        help='Deprecated Stage B probability threshold; ignored by endpoint bridging.'
     )
     parser.add_argument(
         '--postprocess-d-max', type=int, default=3,
@@ -79,7 +79,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         '--postprocess-r-bridge', type=int, default=6,
-        help='Bounded-search radius for Steiner bridging (Stage B).'
+        help='Deprecated alias for --postprocess-max-bridge-edges.'
+    )
+    parser.add_argument(
+        '--postprocess-max-bridge-edges', type=int, default=None,
+        help='Maximum mesh-edge length for endpoint bridging (Stage B).'
+    )
+    parser.add_argument(
+        '--postprocess-max-bridge-euclidean-ratio', type=float, default=0.03,
+        help='Maximum endpoint Euclidean distance as a mesh bbox diagonal ratio for Stage B.'
+    )
+    parser.add_argument(
+        '--postprocess-max-endpoint-candidates', type=int, default=4,
+        help='Maximum retained endpoint candidates per endpoint for Stage B.'
+    )
+    parser.add_argument(
+        '--postprocess-require-mutual-pairing',
+        action=argparse.BooleanOptionalAction, default=True,
+        help='Require reciprocal best endpoint pairs in Stage B.'
+    )
+    parser.add_argument(
+        '--postprocess-min-loop-size-to-allow', type=int, default=8,
+        help='Minimum same-component loop size allowed by Stage B.'
+    )
+    parser.add_argument(
+        '--postprocess-tangent-alignment-weight', type=float, default=0.25,
+        help='Soft tangent-alignment score weight for Stage B.'
     )
     parser.add_argument(
         '--postprocess-l-min', type=int, default=4,
@@ -87,7 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         '--postprocess-epsilon', type=float, default=1e-3,
-        help='Numerical floor for -log(p) edge weights.'
+        help='Deprecated Stage B probability weight floor; ignored by endpoint bridging.'
     )
     parser.add_argument(
         '--postprocess-anchor-boundary',
@@ -139,7 +164,7 @@ def _validate_threshold(value: Any) -> float:
 
 
 def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
-    return {
+    kwargs = {
         'tau_low': float(args.postprocess_tau_low),
         'tau_high': float(args.postprocess_tau_high),
         'd_max': int(args.postprocess_d_max),
@@ -148,6 +173,23 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
         'epsilon': float(args.postprocess_epsilon),
         'anchor_boundary': bool(args.postprocess_anchor_boundary),
     }
+    if hasattr(args, 'postprocess_max_bridge_edges'):
+        kwargs['max_bridge_edges'] = (
+            None
+            if args.postprocess_max_bridge_edges is None
+            else int(args.postprocess_max_bridge_edges)
+        )
+    if hasattr(args, 'postprocess_max_bridge_euclidean_ratio'):
+        kwargs['max_bridge_euclidean_ratio'] = float(args.postprocess_max_bridge_euclidean_ratio)
+    if hasattr(args, 'postprocess_max_endpoint_candidates'):
+        kwargs['max_endpoint_candidates'] = int(args.postprocess_max_endpoint_candidates)
+    if hasattr(args, 'postprocess_require_mutual_pairing'):
+        kwargs['require_mutual_pairing'] = bool(args.postprocess_require_mutual_pairing)
+    if hasattr(args, 'postprocess_min_loop_size_to_allow'):
+        kwargs['min_loop_size_to_allow'] = int(args.postprocess_min_loop_size_to_allow)
+    if hasattr(args, 'postprocess_tangent_alignment_weight'):
+        kwargs['tangent_alignment_weight'] = float(args.postprocess_tangent_alignment_weight)
+    return kwargs
 
 
 def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Path) -> str:
