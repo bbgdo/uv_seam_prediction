@@ -22,14 +22,15 @@ def read_addon_file(name):
 
 
 class FakeEdge:
-    def __init__(self, vertices):
+    def __init__(self, vertices, index=0):
         self.vertices = vertices
+        self.index = index
         self.use_seam = False
 
 
 class FakeMesh:
     def __init__(self, edges, vertex_count=None):
-        self.edges = [FakeEdge(edge) for edge in edges]
+        self.edges = [FakeEdge(edge, index) for index, edge in enumerate(edges)]
         if vertex_count is None:
             vertex_count = max((vertex for edge in edges for vertex in edge), default=-1) + 1
         self.vertices = [object() for _ in range(vertex_count)]
@@ -194,6 +195,129 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(result.unique, 2)
         self.assertEqual(result.applied, 2)
         self.assertEqual(result.duplicates_skipped, 1)
+
+    def test_local_repair_marks_one_edge_missing_continuity_gap(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_gap_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (0, 3), (2, 4), (0, 2)], vertex_count=5)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (1, 2), (0, 3), (2, 4)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertIs(mesh.edges[4].use_seam, True)
+        self.assertEqual(result.blender_local_repair_edges_marked, 1)
+        self.assertEqual(result.blender_local_repair_candidate_reports[-1]['vertex_ids_0based'], [0, 2])
+        self.assertTrue(result.blender_local_repair_candidate_reports[-1]['accepted'])
+
+    def test_local_repair_marks_human_2557_2558_style_case(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_human_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (2557, 10),
+                (10, 2558),
+                (2557, 11),
+                (2558, 12),
+                (2557, 2558),
+            ],
+            vertex_count=2559,
+        )
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(2557, 10), (10, 2558), (2557, 11), (2558, 12)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertIs(mesh.edges[4].use_seam, True)
+        self.assertTrue(result.human_case_2557_2558_found)
+        self.assertTrue(result.human_case_2557_2558_accepted)
+        self.assertTrue(result.human_case_2557_2558_marked_seam)
+        self.assertIsNone(result.human_case_2557_2558_rejection_reason)
+        human_reports = [
+            report for report in result.blender_local_repair_candidate_reports
+            if report['human_case_match']
+        ]
+        self.assertEqual(len(human_reports), 1)
+        self.assertEqual(human_reports[0]['seam_degree_u_before'], 2)
+        self.assertEqual(human_reports[0]['seam_degree_v_before'], 2)
+        self.assertEqual(human_reports[0]['estimated_loop_size_if_available'], 3)
+
+    def test_local_repair_does_not_create_geometry_or_mark_missing_edges(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_no_geometry_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (0, 3), (2, 4)], vertex_count=5)
+        before_edge_count = len(mesh.edges)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (1, 2), (0, 3), (2, 4)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertEqual(len(mesh.edges), before_edge_count)
+        self.assertEqual(result.blender_local_repair_edges_marked, 0)
+
+    def test_local_repair_rejects_non_seam_vertices(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_non_seam_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (2, 3)], vertex_count=4)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertIs(mesh.edges[1].use_seam, False)
+        reports = [
+            report for report in result.blender_local_repair_candidate_reports
+            if report['vertex_ids_0based'] == [2, 3]
+        ]
+        self.assertEqual(reports[0]['rejection_reason'], 'endpoint_not_seam_vertex')
+
+    def test_local_repair_rejects_non_phase_2a_degree_pattern(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_degree_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (2, 3)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertIs(mesh.edges[2].use_seam, False)
+        report = [
+            item for item in result.blender_local_repair_candidate_reports
+            if item['vertex_ids_0based'] == [1, 2]
+        ][0]
+        self.assertEqual(report['seam_degree_u_before'], 1)
+        self.assertEqual(report['seam_degree_v_before'], 1)
+        self.assertEqual(report['rejection_reason'], 'degree_pattern_not_phase_2a')
+
+    def test_local_repair_summary_reports_telemetry(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
+        result = seam_mapping.SeamApplyResult(
+            requested=1,
+            unique=1,
+            applied=1,
+            ignored_non_original=0,
+            duplicates_skipped=0,
+            blender_local_repair_enabled=True,
+            blender_local_repair_edges_marked=1,
+            blender_local_repair_edges_rejected=2,
+            human_case_2557_2558_found=True,
+            human_case_2557_2558_marked_seam=True,
+        )
+
+        summary = seam_mapping.format_apply_summary(result)
+
+        self.assertIn('Local repair: 1 marked, 2 rejected.', summary)
+        self.assertIn('Human case [2557,2558]: marked.', summary)
 
     def test_topology_change_guard_blocks_stale_application(self):
         validation = load_module('uvsp_validation_smoke', ADDON_DIR / 'validation.py')

@@ -204,6 +204,7 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 predicted_keys,
                 clear_existing=self._run_settings.clear_existing_seams,
                 accepted_bridge_entries=accepted_bridge_entries,
+                enable_local_repair=self._run_settings.use_post_processing,
             )
             summary = seam_mapping.format_apply_summary(result)
             debug_path = seam_mapping.write_bridge_apply_debug(self._job.json_path, result)
