@@ -45,6 +45,57 @@ class FakeObject:
         self.data = mesh
 
 
+def build_degree_pattern_mesh(degree_u, degree_v, key=(100, 200)):
+    u, v = key
+    edges = []
+    predicted_keys = []
+    for offset in range(degree_u):
+        edge = (u, 1000 + offset)
+        edges.append(edge)
+        predicted_keys.append(edge)
+    for offset in range(degree_v):
+        edge = (v, 2000 + offset)
+        edges.append(edge)
+        predicted_keys.append(edge)
+    candidate_index = len(edges)
+    edges.append(key)
+    vertex_count = max((vertex for edge in edges for vertex in edge), default=-1) + 1
+    return FakeMesh(edges=edges, vertex_count=vertex_count), predicted_keys, candidate_index
+
+
+def build_many_allowed_repair_candidates(count, include_human=False):
+    edges = []
+    predicted_keys = []
+    candidate_indices = []
+    if include_human:
+        human_seams = [
+            (2557, 10),
+            (10, 2558),
+            (2557, 11),
+            (2558, 12),
+        ]
+        edges.extend(human_seams)
+        predicted_keys.extend(human_seams)
+        candidate_indices.append(len(edges))
+        edges.append((2557, 2558))
+
+    for index in range(count):
+        base = 3000 + index * 10
+        seams = [
+            (base, base + 2),
+            (base, base + 3),
+            (base + 1, base + 4),
+            (base + 1, base + 5),
+        ]
+        edges.extend(seams)
+        predicted_keys.extend(seams)
+        candidate_indices.append(len(edges))
+        edges.append((base, base + 1))
+
+    vertex_count = max((vertex for edge in edges for vertex in edge), default=-1) + 1
+    return FakeMesh(edges=edges, vertex_count=vertex_count), predicted_keys, candidate_indices
+
+
 class UVSeamPredictorSmokeTests(unittest.TestCase):
     def test_feature_bundle_is_no_longer_part_of_cli_args(self):
         inference = load_module('uvsp_inference_smoke', ADDON_DIR / 'inference.py')
@@ -220,6 +271,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
                 (10, 2558),
                 (2557, 11),
                 (2558, 12),
+                (2558, 13),
                 (2557, 2558),
             ],
             vertex_count=2559,
@@ -227,14 +279,17 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
 
         result = seam_mapping.apply_seam_keys(
             mesh,
-            [(2557, 10), (10, 2558), (2557, 11), (2558, 12)],
+            [(2557, 10), (10, 2558), (2557, 11), (2558, 12), (2558, 13)],
             clear_existing=True,
             enable_local_repair=True,
         )
 
-        self.assertIs(mesh.edges[4].use_seam, True)
+        self.assertIs(mesh.edges[5].use_seam, True)
         self.assertTrue(result.human_case_2557_2558_found)
+        self.assertTrue(result.human_case_2557_2558_edge_exists)
         self.assertTrue(result.human_case_2557_2558_accepted)
+        self.assertEqual(result.human_case_2557_2558_degree_pattern, (2, 3))
+        self.assertTrue(result.human_case_2557_2558_allowed_by_degree_rule)
         self.assertTrue(result.human_case_2557_2558_marked_seam)
         self.assertIsNone(result.human_case_2557_2558_rejection_reason)
         human_reports = [
@@ -243,7 +298,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         ]
         self.assertEqual(len(human_reports), 1)
         self.assertEqual(human_reports[0]['seam_degree_u_before'], 2)
-        self.assertEqual(human_reports[0]['seam_degree_v_before'], 2)
+        self.assertEqual(human_reports[0]['seam_degree_v_before'], 3)
         self.assertEqual(human_reports[0]['estimated_loop_size_if_available'], 3)
 
     def test_local_repair_does_not_create_geometry_or_mark_missing_edges(self):
@@ -279,6 +334,60 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         ]
         self.assertEqual(reports[0]['rejection_reason'], 'endpoint_not_seam_vertex')
 
+    def test_local_repair_degree_allowlist_marks_supported_patterns(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_allowlist_smoke', ADDON_DIR / 'seam_mapping.py')
+        for degree_u, degree_v in ((2, 2), (1, 2), (2, 1), (2, 3), (3, 2)):
+            with self.subTest(pattern=(degree_u, degree_v)):
+                mesh, predicted_keys, candidate_index = build_degree_pattern_mesh(degree_u, degree_v)
+
+                result = seam_mapping.apply_seam_keys(
+                    mesh,
+                    predicted_keys,
+                    clear_existing=True,
+                    enable_local_repair=True,
+                )
+
+                self.assertIs(mesh.edges[candidate_index].use_seam, True)
+                report = [
+                    item for item in result.blender_local_repair_candidate_reports
+                    if item['vertex_ids_0based'] == [100, 200]
+                ][0]
+                self.assertEqual(report['degree_pattern'], (degree_u, degree_v))
+                self.assertTrue(report['allowed_by_degree_rule'])
+                self.assertTrue(report['accepted'])
+
+    def test_local_repair_degree_allowlist_rejects_unsupported_patterns(self):
+        seam_mapping = load_module(
+            'uvsp_seam_mapping_repair_reject_patterns_smoke',
+            ADDON_DIR / 'seam_mapping.py',
+        )
+        cases = (
+            ((1, 1), 'degree_pattern_not_allowed:1,1'),
+            ((3, 3), 'degree_pattern_not_allowed:3,3'),
+            ((4, 2), 'degree_pattern_not_allowed:4,2'),
+            ((2, 4), 'degree_pattern_not_allowed:2,4'),
+            ((0, 2), 'endpoint_not_seam_vertex'),
+            ((2, 0), 'endpoint_not_seam_vertex'),
+        )
+        for (degree_u, degree_v), reason in cases:
+            with self.subTest(pattern=(degree_u, degree_v)):
+                mesh, predicted_keys, candidate_index = build_degree_pattern_mesh(degree_u, degree_v)
+
+                result = seam_mapping.apply_seam_keys(
+                    mesh,
+                    predicted_keys,
+                    clear_existing=True,
+                    enable_local_repair=True,
+                )
+
+                self.assertIs(mesh.edges[candidate_index].use_seam, False)
+                report = [
+                    item for item in result.blender_local_repair_candidate_reports
+                    if item['vertex_ids_0based'] == [100, 200]
+                ][0]
+                self.assertEqual(report['degree_pattern'], (degree_u, degree_v))
+                self.assertEqual(report['rejection_reason'], reason)
+
     def test_local_repair_rejects_non_phase_2a_degree_pattern(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_degree_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
@@ -297,7 +406,53 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         ][0]
         self.assertEqual(report['seam_degree_u_before'], 1)
         self.assertEqual(report['seam_degree_v_before'], 1)
-        self.assertEqual(report['rejection_reason'], 'degree_pattern_not_phase_2a')
+        self.assertEqual(report['rejection_reason'], 'degree_pattern_not_allowed:1,1')
+
+    def test_local_repair_safety_cap_prevents_mass_marking(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_cap_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, candidate_indices = build_many_allowed_repair_candidates(33)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertEqual(result.blender_local_repair_allowed_candidates_total, 33)
+        self.assertEqual(result.blender_local_repair_safety_cap, 32)
+        self.assertTrue(result.blender_local_repair_repair_over_cap)
+        self.assertEqual(result.blender_local_repair_edges_marked, 0)
+        self.assertTrue(all(not mesh.edges[index].use_seam for index in candidate_indices))
+
+    def test_local_repair_over_cap_marks_only_allowed_human_case(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_cap_human_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, candidate_indices = build_many_allowed_repair_candidates(
+            32,
+            include_human=True,
+        )
+        human_candidate_index = candidate_indices[0]
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertEqual(result.blender_local_repair_allowed_candidates_total, 33)
+        self.assertTrue(result.blender_local_repair_repair_over_cap)
+        self.assertTrue(result.human_case_over_cap_exception_used)
+        self.assertTrue(result.human_case_2557_2558_marked_seam)
+        self.assertIs(mesh.edges[human_candidate_index].use_seam, True)
+        self.assertTrue(all(not mesh.edges[index].use_seam for index in candidate_indices[1:]))
+        self.assertEqual(result.blender_local_repair_edges_marked, 1)
+        human_reports = [
+            report for report in result.blender_local_repair_candidate_reports
+            if report['human_case_match']
+        ]
+        self.assertEqual(human_reports[0]['degree_pattern'], (2, 2))
+        self.assertTrue(human_reports[0]['over_cap_human_case_exception_used'])
 
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -310,14 +465,17 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             blender_local_repair_enabled=True,
             blender_local_repair_edges_marked=1,
             blender_local_repair_edges_rejected=2,
+            blender_local_repair_allowed_candidates_total=1,
+            blender_local_repair_repair_over_cap=False,
             human_case_2557_2558_found=True,
             human_case_2557_2558_marked_seam=True,
+            human_case_2557_2558_degree_pattern=(2, 3),
         )
 
         summary = seam_mapping.format_apply_summary(result)
 
-        self.assertIn('Local repair: 1 marked, 2 rejected.', summary)
-        self.assertIn('Human case [2557,2558]: marked.', summary)
+        self.assertIn('Local repair: 1 marked, 2 rejected, allowed=1, over_cap=false.', summary)
+        self.assertIn('Human case [2557,2558]: marked, degree=(2, 3).', summary)
 
     def test_topology_change_guard_blocks_stale_application(self):
         validation = load_module('uvsp_validation_smoke', ADDON_DIR / 'validation.py')

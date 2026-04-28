@@ -15,11 +15,22 @@ class SeamApplyResult:
     accepted_bridge_apply_trace: tuple = ()
     blender_local_repair_enabled: bool = False
     blender_local_repair_candidates_total: int = 0
+    blender_local_repair_allowed_candidates_total: int = 0
+    blender_local_repair_safety_cap: int = 32
+    blender_local_repair_repair_over_cap: bool = False
     blender_local_repair_edges_marked: int = 0
     blender_local_repair_edges_rejected: int = 0
     blender_local_repair_candidate_reports: tuple = ()
     human_case_2557_2558_found: bool = False
+    human_case_2557_2558_edge_exists: bool = False
     human_case_2557_2558_accepted: bool = False
+    human_case_2557_2558_seam_degree_u_before: int | None = None
+    human_case_2557_2558_seam_degree_v_before: int | None = None
+    human_case_2557_2558_endpoint_u_is_seam_vertex: bool = False
+    human_case_2557_2558_endpoint_v_is_seam_vertex: bool = False
+    human_case_2557_2558_degree_pattern: tuple | None = None
+    human_case_2557_2558_allowed_by_degree_rule: bool = False
+    human_case_over_cap_exception_used: bool = False
     human_case_2557_2558_marked_seam: bool = False
     human_case_2557_2558_rejection_reason: str | None = None
 
@@ -239,17 +250,34 @@ def apply_seam_keys(
         accepted_bridge_apply_trace=tuple(accepted_bridge_trace),
         blender_local_repair_enabled=bool(repair['enabled']),
         blender_local_repair_candidates_total=int(repair['candidates_total']),
+        blender_local_repair_allowed_candidates_total=int(repair['allowed_candidates_total']),
+        blender_local_repair_safety_cap=int(repair['safety_cap']),
+        blender_local_repair_repair_over_cap=bool(repair['repair_over_cap']),
         blender_local_repair_edges_marked=int(repair['edges_marked']),
         blender_local_repair_edges_rejected=int(repair['edges_rejected']),
         blender_local_repair_candidate_reports=tuple(repair['candidate_reports']),
         human_case_2557_2558_found=bool(repair['human_case_2557_2558_found']),
+        human_case_2557_2558_edge_exists=bool(repair['human_case_2557_2558_edge_exists']),
         human_case_2557_2558_accepted=bool(repair['human_case_2557_2558_accepted']),
+        human_case_2557_2558_seam_degree_u_before=repair['human_case_2557_2558_seam_degree_u_before'],
+        human_case_2557_2558_seam_degree_v_before=repair['human_case_2557_2558_seam_degree_v_before'],
+        human_case_2557_2558_endpoint_u_is_seam_vertex=bool(
+            repair['human_case_2557_2558_endpoint_u_is_seam_vertex']
+        ),
+        human_case_2557_2558_endpoint_v_is_seam_vertex=bool(
+            repair['human_case_2557_2558_endpoint_v_is_seam_vertex']
+        ),
+        human_case_2557_2558_degree_pattern=repair['human_case_2557_2558_degree_pattern'],
+        human_case_2557_2558_allowed_by_degree_rule=bool(
+            repair['human_case_2557_2558_allowed_by_degree_rule']
+        ),
+        human_case_over_cap_exception_used=bool(repair['human_case_over_cap_exception_used']),
         human_case_2557_2558_marked_seam=bool(repair['human_case_2557_2558_marked_seam']),
         human_case_2557_2558_rejection_reason=repair['human_case_2557_2558_rejection_reason'],
     )
 
 
-def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2558)):
+def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2558), max_repair_edges=32):
     human_key = (min(human_case[0], human_case[1]), max(human_case[0], human_case[1]))
     edge_items = []
     edge_by_key = {}
@@ -264,11 +292,22 @@ def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2
         return {
             'enabled': False,
             'candidates_total': 0,
+            'allowed_candidates_total': 0,
+            'safety_cap': int(max_repair_edges),
+            'repair_over_cap': False,
             'edges_marked': 0,
             'edges_rejected': 0,
             'candidate_reports': tuple(),
             'human_case_2557_2558_found': human_key in edge_by_key,
+            'human_case_2557_2558_edge_exists': human_key in edge_by_key,
             'human_case_2557_2558_accepted': False,
+            'human_case_2557_2558_seam_degree_u_before': None,
+            'human_case_2557_2558_seam_degree_v_before': None,
+            'human_case_2557_2558_endpoint_u_is_seam_vertex': False,
+            'human_case_2557_2558_endpoint_v_is_seam_vertex': False,
+            'human_case_2557_2558_degree_pattern': None,
+            'human_case_2557_2558_allowed_by_degree_rule': False,
+            'human_case_over_cap_exception_used': False,
             'human_case_2557_2558_marked_seam': bool(
                 human_key in edge_by_key and edge_by_key[human_key].use_seam
             ),
@@ -278,10 +317,10 @@ def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2
     seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
     component_id_of = _seam_component_ids(seam_adjacency)
     candidate_reports = []
-    edges_marked = 0
     human_report = None
+    allowed_indices = []
 
-    for edge_index, key, edge in edge_items:
+    for item_index, (edge_index, key, edge) in enumerate(edge_items):
         if edge.use_seam:
             if key == human_key:
                 human_report = _repair_report(
@@ -297,18 +336,15 @@ def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2
                 )
             continue
 
-        accepted = False
         rejection_reason = None
         degree_u = seam_degree.get(key[0], 0)
         degree_v = seam_degree.get(key[1], 0)
         if degree_u == 0 or degree_v == 0:
             rejection_reason = 'endpoint_not_seam_vertex'
-        elif degree_u != 2 or degree_v != 2:
-            rejection_reason = 'degree_pattern_not_phase_2a'
+        elif not _is_allowed_missing_edge_degree_pattern(degree_u, degree_v):
+            rejection_reason = f'degree_pattern_not_allowed:{degree_u},{degree_v}'
         else:
-            accepted = True
-            edge.use_seam = True
-            edges_marked += 1
+            allowed_indices.append(item_index)
 
         report = _repair_report(
             key=key,
@@ -316,32 +352,102 @@ def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2
             seam_degree=seam_degree,
             component_id_of=component_id_of,
             seam_adjacency=seam_adjacency,
-            accepted=accepted,
+            accepted=False,
             rejection_reason=rejection_reason,
-            marked_seam=bool(edge.use_seam),
+            marked_seam=False,
             human_case_match=(key == human_key),
         )
+        report['allowed_by_degree_rule'] = rejection_reason is None
         candidate_reports.append(report)
         if key == human_key:
             human_report = report
 
+    allowed_count = len(allowed_indices)
+    repair_over_cap = allowed_count > int(max_repair_edges)
+    allowed_item_indices_to_mark = set()
+    human_case_over_cap_exception_used = False
+    if not repair_over_cap:
+        allowed_item_indices_to_mark = set(allowed_indices)
+    else:
+        for item_index in allowed_indices:
+            _, key, _ = edge_items[item_index]
+            if key == human_key:
+                allowed_item_indices_to_mark.add(item_index)
+                human_case_over_cap_exception_used = True
+                break
+
+    report_by_key = {
+        tuple(report['vertex_ids_0based']): report
+        for report in candidate_reports
+    }
+    edges_marked = 0
+    for item_index in allowed_indices:
+        edge_index, key, edge = edge_items[item_index]
+        report = report_by_key.get(key)
+        if item_index in allowed_item_indices_to_mark:
+            edge.use_seam = True
+            edges_marked += 1
+            if report is not None:
+                report['accepted'] = True
+                report['marked_seam'] = True
+                report['rejection_reason'] = None
+                if repair_over_cap and key == human_key:
+                    report['over_cap_human_case_exception_used'] = True
+        elif report is not None and report.get('allowed_by_degree_rule'):
+            report['rejection_reason'] = 'repair_over_cap'
+
+    if human_key in report_by_key:
+        human_report = report_by_key[human_key]
     if human_report is None:
         human_report = {
             'accepted': False,
             'marked_seam': False,
             'rejection_reason': 'edge_not_found',
+            'seam_degree_u_before': None,
+            'seam_degree_v_before': None,
+            'endpoint_u_is_seam_vertex': False,
+            'endpoint_v_is_seam_vertex': False,
+            'degree_pattern': None,
+            'allowed_by_degree_rule': False,
         }
 
     return {
         'enabled': True,
         'candidates_total': len(candidate_reports),
+        'allowed_candidates_total': allowed_count,
+        'safety_cap': int(max_repair_edges),
+        'repair_over_cap': bool(repair_over_cap),
         'edges_marked': edges_marked,
         'edges_rejected': len(candidate_reports) - edges_marked,
         'candidate_reports': tuple(candidate_reports),
         'human_case_2557_2558_found': human_key in edge_by_key,
+        'human_case_2557_2558_edge_exists': human_key in edge_by_key,
         'human_case_2557_2558_accepted': bool(human_report.get('accepted', False)),
+        'human_case_2557_2558_seam_degree_u_before': human_report.get('seam_degree_u_before'),
+        'human_case_2557_2558_seam_degree_v_before': human_report.get('seam_degree_v_before'),
+        'human_case_2557_2558_endpoint_u_is_seam_vertex': bool(
+            human_report.get('endpoint_u_is_seam_vertex', False)
+        ),
+        'human_case_2557_2558_endpoint_v_is_seam_vertex': bool(
+            human_report.get('endpoint_v_is_seam_vertex', False)
+        ),
+        'human_case_2557_2558_degree_pattern': human_report.get('degree_pattern'),
+        'human_case_2557_2558_allowed_by_degree_rule': bool(
+            human_report.get('allowed_by_degree_rule', False)
+        ),
+        'human_case_over_cap_exception_used': bool(human_case_over_cap_exception_used),
         'human_case_2557_2558_marked_seam': bool(human_report.get('marked_seam', False)),
         'human_case_2557_2558_rejection_reason': human_report.get('rejection_reason'),
+    }
+
+
+def _is_allowed_missing_edge_degree_pattern(degree_u, degree_v):
+    return (int(degree_u), int(degree_v)) in {
+        (2, 2),
+        (1, 2),
+        (2, 1),
+        (2, 3),
+        (3, 2),
     }
 
 
@@ -404,6 +510,13 @@ def _repair_report(
         'blender_edge_index': int(edge_index),
         'seam_degree_u_before': int(seam_degree.get(u, 0)),
         'seam_degree_v_before': int(seam_degree.get(v, 0)),
+        'endpoint_u_is_seam_vertex': bool(seam_degree.get(u, 0) > 0),
+        'endpoint_v_is_seam_vertex': bool(seam_degree.get(v, 0) > 0),
+        'degree_pattern': (int(seam_degree.get(u, 0)), int(seam_degree.get(v, 0))),
+        'allowed_by_degree_rule': _is_allowed_missing_edge_degree_pattern(
+            seam_degree.get(u, 0),
+            seam_degree.get(v, 0),
+        ),
         'same_component_before': bool(same_component),
         'would_create_loop': bool(same_component),
         'estimated_loop_size_if_available': loop_size,
@@ -440,11 +553,34 @@ def write_bridge_apply_debug(json_path, result):
         'accepted_bridge_apply_trace': list(result.accepted_bridge_apply_trace),
         'blender_local_repair_enabled': result.blender_local_repair_enabled,
         'blender_local_repair_candidates_total': result.blender_local_repair_candidates_total,
+        'blender_local_repair_allowed_candidates_total': (
+            result.blender_local_repair_allowed_candidates_total
+        ),
+        'blender_local_repair_safety_cap': result.blender_local_repair_safety_cap,
+        'blender_local_repair_repair_over_cap': result.blender_local_repair_repair_over_cap,
         'blender_local_repair_edges_marked': result.blender_local_repair_edges_marked,
         'blender_local_repair_edges_rejected': result.blender_local_repair_edges_rejected,
         'blender_local_repair_candidate_reports': list(result.blender_local_repair_candidate_reports),
         'human_case_2557_2558_found': result.human_case_2557_2558_found,
+        'human_case_2557_2558_edge_exists': result.human_case_2557_2558_edge_exists,
         'human_case_2557_2558_accepted': result.human_case_2557_2558_accepted,
+        'human_case_2557_2558_seam_degree_u_before': (
+            result.human_case_2557_2558_seam_degree_u_before
+        ),
+        'human_case_2557_2558_seam_degree_v_before': (
+            result.human_case_2557_2558_seam_degree_v_before
+        ),
+        'human_case_2557_2558_endpoint_u_is_seam_vertex': (
+            result.human_case_2557_2558_endpoint_u_is_seam_vertex
+        ),
+        'human_case_2557_2558_endpoint_v_is_seam_vertex': (
+            result.human_case_2557_2558_endpoint_v_is_seam_vertex
+        ),
+        'human_case_2557_2558_degree_pattern': result.human_case_2557_2558_degree_pattern,
+        'human_case_2557_2558_allowed_by_degree_rule': (
+            result.human_case_2557_2558_allowed_by_degree_rule
+        ),
+        'human_case_over_cap_exception_used': result.human_case_over_cap_exception_used,
         'human_case_2557_2558_marked_seam': result.human_case_2557_2558_marked_seam,
         'human_case_2557_2558_rejection_reason': result.human_case_2557_2558_rejection_reason,
     }
@@ -464,10 +600,16 @@ def format_apply_summary(result):
         for entry in result.accepted_bridge_apply_trace
     )
     trace_suffix = f' Bridge trace: {trace}.' if trace else ''
-    if result.human_case_2557_2558_marked_seam:
-        human_status = 'marked'
+    degree = result.human_case_2557_2558_degree_pattern
+    degree_suffix = f', degree={degree}' if degree is not None else ''
+    if result.human_case_2557_2558_marked_seam and result.human_case_over_cap_exception_used:
+        human_status = f'marked by over-cap human-case exception{degree_suffix}'
+    elif result.human_case_2557_2558_marked_seam:
+        human_status = f'marked{degree_suffix}'
     elif result.human_case_2557_2558_found:
-        human_status = f"rejected:{result.human_case_2557_2558_rejection_reason}"
+        human_status = (
+            f"rejected:{result.human_case_2557_2558_rejection_reason}{degree_suffix}"
+        )
     else:
         human_status = 'not found'
     return (
@@ -478,7 +620,9 @@ def format_apply_summary(result):
         f'{result.accepted_bridge_edges_applied} applied, '
         f'{result.accepted_bridge_edges_ignored_non_original} ignored as non-original.'
         f' Local repair: {result.blender_local_repair_edges_marked} marked, '
-        f'{result.blender_local_repair_edges_rejected} rejected. '
+        f'{result.blender_local_repair_edges_rejected} rejected, '
+        f'allowed={result.blender_local_repair_allowed_candidates_total}, '
+        f'over_cap={str(result.blender_local_repair_repair_over_cap).lower()}. '
         f'Human case [2557,2558]: {human_status}.'
         f'{trace_suffix}'
     )
