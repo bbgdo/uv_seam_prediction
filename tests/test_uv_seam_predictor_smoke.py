@@ -565,6 +565,123 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(result.blender_curved_two_edge_endpoint_bridge_enabled)
         self.assertFalse(result.blender_tangent_audit_endpoint_bridge_enabled)
 
+    def test_debug_sidecar_property_defaults_off_and_is_exposed(self):
+        properties_source = read_addon_file('properties.py')
+        ui_source = read_addon_file('ui.py')
+        operators_source = read_addon_file('operators.py')
+
+        self.assertIn('postprocess_write_debug_sidecars', properties_source)
+        self.assertIn("name='Write Debug Sidecars'", properties_source)
+        self.assertIn('default=False', properties_source)
+        self.assertIn(
+            "description='Write legacy post-processing diagnostic JSON files for debugging.'",
+            properties_source,
+        )
+        self.assertIn("post_box.prop(settings, 'postprocess_write_debug_sidecars')", ui_source)
+        self.assertIn(
+            'postprocess_write_debug_sidecars=settings.postprocess_write_debug_sidecars',
+            operators_source,
+        )
+        self.assertIn(
+            'collect_debug_diagnostics=self._run_settings.postprocess_write_debug_sidecars',
+            operators_source,
+        )
+
+    def test_apply_seam_keys_skips_legacy_debug_collectors_by_default(self):
+        seam_mapping = load_module('uvsp_debug_collectors_default_off_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        def fail_debug_collector(*args, **kwargs):
+            raise AssertionError('legacy debug collector should not be called by default')
+
+        seam_mapping.classify_human_gap_regressions = fail_debug_collector
+        seam_mapping.classify_residual_gap_phase2e = fail_debug_collector
+        seam_mapping.collect_general_residual_candidates_phase2h = fail_debug_collector
+        seam_mapping.simulate_unified_local_continuity_phase2h_r = fail_debug_collector
+        seam_mapping.build_phase2h_r3_visual_review = fail_debug_collector
+        seam_mapping.simulate_phase2j_r_small_gap_rule = fail_debug_collector
+        seam_mapping.simulate_phase2k_r_tangent_audit_rescue = fail_debug_collector
+
+        result = seam_mapping.apply_seam_keys(
+            FakeMesh(edges=[(0, 1)], vertex_count=2),
+            [(0, 1)],
+            clear_existing=True,
+        )
+
+        self.assertIsNone(result.human_gap_classification)
+        self.assertIsNone(result.residual_gap_phase2e_debug)
+        self.assertIsNone(result.general_residual_candidates_phase2h)
+        self.assertIsNone(result.unified_local_continuity_simulation_phase2h_r)
+        self.assertIsNone(result.phase2h_r3_visual_review)
+        self.assertIsNone(result.phase2j_r_small_gap_rule_simulation)
+        self.assertIsNone(result.phase2k_r_tangent_audit_rescue)
+
+    def test_apply_seam_keys_debug_collectors_are_reachable_without_legacy_active_repair(self):
+        seam_mapping = load_module('uvsp_debug_collectors_enabled_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        def fail_legacy(*args, **kwargs):
+            raise AssertionError('debug mode should not call legacy active repair')
+
+        calls = []
+
+        def record(name, payload):
+            def _inner(*args, **kwargs):
+                calls.append(name)
+                return payload
+            return _inner
+
+        seam_mapping.apply_missing_edge_continuity_repair = fail_legacy
+        seam_mapping.apply_two_edge_local_continuity_repair = fail_legacy
+        seam_mapping.apply_two_edge_endpoint_bridge_repair = fail_legacy
+        seam_mapping.apply_curved_two_edge_endpoint_bridge_repair = fail_legacy
+        seam_mapping.apply_tangent_audit_endpoint_bridge_rescue = fail_legacy
+        seam_mapping.classify_human_gap_regressions = record('human', {'name': 'human'})
+        seam_mapping.classify_residual_gap_phase2e = record('phase2e', {'name': 'phase2e'})
+        seam_mapping.collect_general_residual_candidates_phase2h = record('phase2h', {'name': 'phase2h'})
+        seam_mapping.simulate_unified_local_continuity_phase2h_r = record('phase2hr', {'name': 'phase2hr'})
+        seam_mapping.build_phase2h_r3_visual_review = record('phase2hr3', {'name': 'phase2hr3'})
+        seam_mapping.simulate_phase2j_r_small_gap_rule = record('phase2j', {'name': 'phase2j'})
+        seam_mapping.simulate_phase2k_r_tangent_audit_rescue = record('phase2k', {'name': 'phase2k'})
+
+        result = seam_mapping.apply_seam_keys(
+            FakeMesh(edges=[(0, 1)], vertex_count=2),
+            [(0, 1)],
+            clear_existing=True,
+            enable_local_repair=True,
+            collect_debug_diagnostics=True,
+        )
+
+        self.assertEqual(
+            calls,
+            ['human', 'phase2e', 'phase2h', 'phase2hr', 'phase2hr3', 'phase2j', 'phase2k'],
+        )
+        self.assertEqual(result.human_gap_classification, {'name': 'human'})
+        self.assertEqual(result.phase2k_r_tangent_audit_rescue, {'name': 'phase2k'})
+        self.assertFalse(result.blender_two_edge_repair_enabled)
+        self.assertFalse(result.blender_two_edge_endpoint_bridge_enabled)
+        self.assertFalse(result.blender_curved_two_edge_endpoint_bridge_enabled)
+        self.assertFalse(result.blender_tangent_audit_endpoint_bridge_enabled)
+
+    def test_operator_legacy_sidecar_writers_are_guarded_by_debug_setting(self):
+        operators_source = read_addon_file('operators.py')
+        guard = 'if self._run_settings.postprocess_write_debug_sidecars:'
+        guarded_source = operators_source[operators_source.index(guard):]
+        writer_names = (
+            'write_bridge_apply_debug',
+            'write_human_gap_classification',
+            'write_residual_gap_phase2e_debug',
+            'write_endpoint_bridge_ranking_debug',
+            'write_rank_9_to_16_review',
+            'write_general_residual_candidates_phase2h',
+            'write_unified_local_continuity_simulation_phase2h_r',
+            'write_phase2h_r3_visual_review',
+            'write_phase2j_r_small_gap_rule_simulation',
+            'write_phase2k_r_tangent_audit_rescue',
+        )
+
+        for writer_name in writer_names:
+            self.assertIn(f'seam_mapping.{writer_name}', guarded_source)
+            self.assertNotIn(f'seam_mapping.{writer_name}', operators_source[:operators_source.index(guard)])
+
     def test_feature_bundle_is_no_longer_part_of_cli_args(self):
         inference = load_module('uvsp_inference_smoke', ADDON_DIR / 'inference.py')
         prefs = SimpleNamespace(
@@ -2200,6 +2317,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             [(234, 319), (319, 318), (318, 214)],
             clear_existing=True,
             enable_local_repair=True,
+            collect_debug_diagnostics=True,
         )
         flags_before = [edge.use_seam for edge in mesh.edges]
         report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '2')
@@ -2238,6 +2356,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             predicted_keys,
             clear_existing=True,
             enable_local_repair=True,
+            collect_debug_diagnostics=True,
         )
 
         report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '9')
@@ -2372,6 +2491,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             predicted_keys,
             clear_existing=True,
             enable_local_repair=True,
+            collect_debug_diagnostics=True,
         )
 
         report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '8a')
@@ -3341,6 +3461,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             predicted_keys,
             clear_existing=True,
             enable_local_repair=True,
+            collect_debug_diagnostics=True,
         )
         flags_before = [edge.use_seam for edge in mesh.edges]
 
@@ -4046,6 +4167,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             predicted_keys,
             clear_existing=True,
             enable_local_repair=True,
+            collect_debug_diagnostics=True,
         )
         audit = result.phase2k_r_tangent_audit_rescue['phase2j_curved_repair_compact_audit']
 

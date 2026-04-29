@@ -495,6 +495,7 @@ def apply_seam_keys(
     enable_local_repair=False,
     fill_small_gaps=True,
     fill_gap_max_hops=2,
+    collect_debug_diagnostics=False,
 ):
     edge_by_key = {}
     for edge in mesh.edges:
@@ -601,58 +602,67 @@ def apply_seam_keys(
     two_edge_repair = _disabled_two_edge_repair_result()
     endpoint_bridge_repair = _disabled_endpoint_bridge_repair_result()
     target_status = _combined_two_edge_target_status(two_edge_repair, endpoint_bridge_repair)
-    human_gap_classification = classify_human_gap_regressions(
-        mesh,
-        predicted_keys=applied_keys,
-        local_repair_reports=repair['candidate_reports'],
-        two_edge_reports=two_edge_repair['candidate_reports'],
-        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
-    )
-    residual_gap_phase2e_debug = classify_residual_gap_phase2e(
-        mesh,
-        predicted_keys=applied_keys,
-        local_repair_reports=repair['candidate_reports'],
-        two_edge_reports=two_edge_repair['candidate_reports'],
-        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
-    )
-    general_residual_candidates_phase2h = collect_general_residual_candidates_phase2h(
-        mesh,
-        predicted_keys=applied_keys,
-        local_repair_reports=repair['candidate_reports'],
-        two_edge_reports=two_edge_repair['candidate_reports'],
-        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
-        residual_payload=residual_gap_phase2e_debug,
-    )
-    unified_local_continuity_simulation_phase2h_r = simulate_unified_local_continuity_phase2h_r(
-        mesh,
-        predicted_keys=applied_keys,
-        local_repair_reports=repair['candidate_reports'],
-        two_edge_reports=two_edge_repair['candidate_reports'],
-        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
-        residual_payload=residual_gap_phase2e_debug,
-    )
-    phase2h_r3_visual_review = build_phase2h_r3_visual_review(
-        unified_local_continuity_simulation_phase2h_r,
-    )
-    phase2j_r_small_gap_rule_simulation = simulate_phase2j_r_small_gap_rule(
-        mesh,
-        predicted_keys=applied_keys,
-        local_repair_reports=repair['candidate_reports'],
-        two_edge_reports=two_edge_repair['candidate_reports'],
-        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
-        residual_payload=residual_gap_phase2e_debug,
-    )
     curved_endpoint_bridge_repair = _disabled_curved_bridge_repair_result()
-    phase2k_r_tangent_audit_rescue = simulate_phase2k_r_tangent_audit_rescue(
-        mesh,
-        predicted_keys=applied_keys,
-        local_repair_reports=repair['candidate_reports'],
-        two_edge_reports=two_edge_repair['candidate_reports'],
-        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
-        residual_payload=residual_gap_phase2e_debug,
-        curved_repair=curved_endpoint_bridge_repair,
-    )
     tangent_audit_endpoint_bridge_repair = _disabled_tangent_bridge_repair_result()
+    human_gap_classification = None
+    residual_gap_phase2e_debug = None
+    general_residual_candidates_phase2h = None
+    unified_local_continuity_simulation_phase2h_r = None
+    phase2h_r3_visual_review = None
+    phase2j_r_small_gap_rule_simulation = None
+    phase2k_r_tangent_audit_rescue = None
+
+    if collect_debug_diagnostics:
+        human_gap_classification = classify_human_gap_regressions(
+            mesh,
+            predicted_keys=applied_keys,
+            local_repair_reports=repair['candidate_reports'],
+            two_edge_reports=two_edge_repair['candidate_reports'],
+            endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+        )
+        residual_gap_phase2e_debug = classify_residual_gap_phase2e(
+            mesh,
+            predicted_keys=applied_keys,
+            local_repair_reports=repair['candidate_reports'],
+            two_edge_reports=two_edge_repair['candidate_reports'],
+            endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+        )
+        general_residual_candidates_phase2h = collect_general_residual_candidates_phase2h(
+            mesh,
+            predicted_keys=applied_keys,
+            local_repair_reports=repair['candidate_reports'],
+            two_edge_reports=two_edge_repair['candidate_reports'],
+            endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+            residual_payload=residual_gap_phase2e_debug,
+        )
+        unified_local_continuity_simulation_phase2h_r = simulate_unified_local_continuity_phase2h_r(
+            mesh,
+            predicted_keys=applied_keys,
+            local_repair_reports=repair['candidate_reports'],
+            two_edge_reports=two_edge_repair['candidate_reports'],
+            endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+            residual_payload=residual_gap_phase2e_debug,
+        )
+        phase2h_r3_visual_review = build_phase2h_r3_visual_review(
+            unified_local_continuity_simulation_phase2h_r,
+        )
+        phase2j_r_small_gap_rule_simulation = simulate_phase2j_r_small_gap_rule(
+            mesh,
+            predicted_keys=applied_keys,
+            local_repair_reports=repair['candidate_reports'],
+            two_edge_reports=two_edge_repair['candidate_reports'],
+            endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+            residual_payload=residual_gap_phase2e_debug,
+        )
+        phase2k_r_tangent_audit_rescue = simulate_phase2k_r_tangent_audit_rescue(
+            mesh,
+            predicted_keys=applied_keys,
+            local_repair_reports=repair['candidate_reports'],
+            two_edge_reports=two_edge_repair['candidate_reports'],
+            endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+            residual_payload=residual_gap_phase2e_debug,
+            curved_repair=curved_endpoint_bridge_repair,
+        )
     mesh.update()
 
     return SeamApplyResult(

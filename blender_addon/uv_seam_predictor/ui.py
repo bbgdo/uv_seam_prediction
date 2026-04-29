@@ -66,6 +66,7 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         gap_row = post_box.row()
         gap_row.enabled = settings.postprocess_fill_small_gaps
         gap_row.prop(settings, 'postprocess_fill_gap_max_hops')
+        post_box.prop(settings, 'postprocess_write_debug_sidecars')
 
         actions = layout.box()
         actions.label(text='Actions')

@@ -85,6 +85,11 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         max=3,
         description='Maximum editable mesh edge hops used to fill small seam gaps.',
     )
+    postprocess_write_debug_sidecars: bpy.props.BoolProperty(
+        name='Write Debug Sidecars',
+        default=False,
+        description='Write legacy post-processing diagnostic JSON files for debugging.',
+    )
     clear_existing_seams: bpy.props.BoolProperty(
         name='Clear Existing Seams',
         default=True,
