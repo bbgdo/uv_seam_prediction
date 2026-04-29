@@ -76,6 +76,19 @@ class SeamApplyResult:
     probabilities_used_for_curved_repair: bool = False
     phase2j_curved_repair_uses_hardcoded_paths: bool = False
     phase2j_curved_repair_uses_probabilities: bool = False
+    blender_tangent_audit_endpoint_bridge_enabled: bool = False
+    blender_tangent_audit_endpoint_bridge_candidates_total: int = 0
+    blender_tangent_audit_endpoint_bridge_eligible_total: int = 0
+    blender_tangent_audit_endpoint_bridge_paths_marked: int = 0
+    blender_tangent_audit_endpoint_bridge_edges_marked: int = 0
+    blender_tangent_audit_endpoint_bridge_over_cap: bool = False
+    blender_tangent_audit_endpoint_bridge_safety_cap: int = 1
+    blender_tangent_audit_endpoint_bridge_candidate_reports: tuple = ()
+    selected_tangent_audit_endpoint_bridge_reports: tuple = ()
+    rejected_tangent_audit_endpoint_bridge_reports: tuple = ()
+    phase2k_tangent_rescue_uses_hardcoded_paths: bool = False
+    phase2k_tangent_rescue_uses_probabilities: bool = False
+    probabilities_used_for_tangent_rescue: bool = False
     target_path_2045_2541_4884_found: bool = False
     target_path_2045_2541_4884_allowed: bool = False
     target_path_2045_2541_4884_marked: bool = False
@@ -368,6 +381,10 @@ def apply_seam_keys(
         residual_payload=residual_gap_phase2e_debug,
         curved_repair=curved_endpoint_bridge_repair,
     )
+    tangent_audit_endpoint_bridge_repair = apply_tangent_audit_endpoint_bridge_rescue(
+        mesh,
+        enabled=bool(enable_local_repair),
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -502,6 +519,39 @@ def apply_seam_keys(
         probabilities_used_for_curved_repair=False,
         phase2j_curved_repair_uses_hardcoded_paths=False,
         phase2j_curved_repair_uses_probabilities=False,
+        blender_tangent_audit_endpoint_bridge_enabled=bool(
+            tangent_audit_endpoint_bridge_repair['enabled']
+        ),
+        blender_tangent_audit_endpoint_bridge_candidates_total=int(
+            tangent_audit_endpoint_bridge_repair['candidates_total']
+        ),
+        blender_tangent_audit_endpoint_bridge_eligible_total=int(
+            tangent_audit_endpoint_bridge_repair['eligible_total']
+        ),
+        blender_tangent_audit_endpoint_bridge_paths_marked=int(
+            tangent_audit_endpoint_bridge_repair['paths_marked']
+        ),
+        blender_tangent_audit_endpoint_bridge_edges_marked=int(
+            tangent_audit_endpoint_bridge_repair['edges_marked']
+        ),
+        blender_tangent_audit_endpoint_bridge_over_cap=bool(
+            tangent_audit_endpoint_bridge_repair['over_cap']
+        ),
+        blender_tangent_audit_endpoint_bridge_safety_cap=int(
+            tangent_audit_endpoint_bridge_repair['safety_cap']
+        ),
+        blender_tangent_audit_endpoint_bridge_candidate_reports=tuple(
+            tangent_audit_endpoint_bridge_repair['candidate_reports']
+        ),
+        selected_tangent_audit_endpoint_bridge_reports=tuple(
+            tangent_audit_endpoint_bridge_repair['selected_reports']
+        ),
+        rejected_tangent_audit_endpoint_bridge_reports=tuple(
+            tangent_audit_endpoint_bridge_repair['rejected_reports']
+        ),
+        phase2k_tangent_rescue_uses_hardcoded_paths=False,
+        phase2k_tangent_rescue_uses_probabilities=False,
+        probabilities_used_for_tangent_rescue=False,
         target_path_2045_2541_4884_found=bool(target_status[
             'target_path_2045_2541_4884_found'
         ]),
@@ -5040,6 +5090,182 @@ def _phase2jr_geq(value, threshold):
     return value is not None and value >= threshold
 
 
+def apply_tangent_audit_endpoint_bridge_rescue(mesh, enabled=True, max_repair_paths=1):
+    edge_items, edge_by_key, _ = _mesh_edge_lookup(mesh)
+    if not enabled:
+        return {
+            'enabled': False,
+            'candidates_total': 0,
+            'eligible_total': 0,
+            'paths_marked': 0,
+            'edges_marked': 0,
+            'over_cap': False,
+            'safety_cap': int(max_repair_paths),
+            'candidate_reports': tuple(),
+            'selected_reports': tuple(),
+            'rejected_reports': tuple(),
+        }
+
+    _, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    reports, _ = _phase2h_collect_candidate_reports(mesh)
+    candidates = [
+        _phase2hr_candidate_for_simulation(report, {})
+        for report in reports
+    ]
+    candidate_reports = [
+        _phase2k_active_tangent_rescue_report(mesh, candidate, seam_adjacency)
+        for candidate in candidates
+        if _phase2k_active_candidate_in_scope(candidate)
+    ]
+    eligible = [
+        report for report in candidate_reports
+        if report['rejection_reason'] is None
+    ]
+    eligible.sort(key=_phase2k_active_tangent_rescue_sort_key)
+    for rank, report in enumerate(eligible, start=1):
+        report['rank_if_eligible'] = rank
+
+    deduplicated = []
+    seen_endpoint_pairs = set()
+    for report in eligible:
+        pair = tuple(report.get('duplicate_endpoint_pair_key', ()))
+        if pair in seen_endpoint_pairs:
+            report['rejection_reason'] = 'duplicate_endpoint_pair_conflict'
+            continue
+        seen_endpoint_pairs.add(pair)
+        deduplicated.append(report)
+
+    over_cap = len(deduplicated) > int(max_repair_paths)
+    selected_reports = list(deduplicated[:int(max_repair_paths)])
+    selected_ids = {id(report) for report in selected_reports}
+    if over_cap:
+        for report in deduplicated:
+            if id(report) not in selected_ids:
+                report['rejection_reason'] = 'repair_over_cap'
+
+    marked_edge_keys = set()
+    for report in selected_reports:
+        marked_for_path = []
+        for edge_key in [tuple(edge_key) for edge_key in report['path_edge_keys']]:
+            edge = edge_by_key.get(edge_key, (None, None))[1]
+            if edge is None:
+                continue
+            edge.use_seam = True
+            marked_edge_keys.add(edge_key)
+            marked_for_path.append([int(edge_key[0]), int(edge_key[1])])
+        report['selected_for_marking'] = True
+        report['marked'] = True
+        report['accepted'] = True
+        report['marked_edge_count'] = len(marked_for_path)
+        report['marked_seam_edges'] = marked_for_path
+
+    rejected_reports = [
+        report for report in candidate_reports
+        if not report.get('marked', False)
+    ]
+    return {
+        'enabled': True,
+        'candidates_total': len(candidate_reports),
+        'eligible_total': len(deduplicated),
+        'paths_marked': sum(1 for report in selected_reports if report.get('marked', False)),
+        'edges_marked': len(marked_edge_keys),
+        'over_cap': bool(over_cap),
+        'safety_cap': int(max_repair_paths),
+        'candidate_reports': tuple(candidate_reports),
+        'selected_reports': tuple(selected_reports),
+        'rejected_reports': tuple(rejected_reports),
+    }
+
+
+def _phase2k_active_candidate_in_scope(candidate):
+    return bool(
+        candidate.get('path_length_edges') == 2
+        and candidate.get('component_relation') in ('different_components', 'same_component')
+    )
+
+
+def _phase2k_active_tangent_rescue_report(mesh, candidate, seam_adjacency):
+    report = _phase2kr_tangent_audit_report(mesh, candidate, seam_adjacency)
+    report['max_endpoint_tangent_alignment'] = _phase2k_max_alignment(report)
+    report['best_alternative_tangent_alignment'] = _phase2k_best_alternative_alignment(report)
+    report['selected_for_marking'] = False
+    report['marked'] = False
+    report['accepted'] = False
+    report['marked_edge_count'] = 0
+    report['marked_seam_edges'] = []
+    report['rank_if_eligible'] = None
+    report['diagnostic_labels_if_any'] = []
+    report['diagnostic_labels_used_for_selection'] = False
+    report['rejection_reason'] = _phase2k_active_tangent_rescue_rejection_reason(candidate, report)
+    return report
+
+
+def _phase2k_active_tangent_rescue_rejection_reason(candidate, report):
+    if candidate.get('path_length_edges') != 2:
+        return 'path_length_not_supported'
+    if not candidate.get('all_edges_exist_in_blender', False):
+        return 'edge_not_found'
+    if candidate.get('already_all_marked', False):
+        return 'edge_already_seam'
+    if candidate.get('degree_pattern') != [1, 0, 1]:
+        return 'degree_pattern_not_1_0_1'
+    if candidate.get('component_relation') != 'different_components':
+        return 'same_component_not_endpoint_bridge'
+    if candidate.get('loop_risk') != 'none':
+        return 'would_create_loop'
+    if candidate.get('topology_risk') != 'accepted_pattern':
+        return 'topology_not_accepted_pattern'
+    if not _phase2jr_geq(candidate.get('path_straightness'), 0.95):
+        return 'path_not_straight_enough'
+    if not _phase2jr_leq(candidate.get('normalized_total_path_length_if_mesh_scale_available'), 0.015):
+        return 'path_too_long'
+    if not _phase2jr_leq(candidate.get('normalized_endpoint_distance_if_mesh_scale_available'), 0.015):
+        return 'endpoint_distance_too_long'
+    alignments = [
+        value for value in (candidate.get('endpoint_tangent_alignments') or ())
+        if value is not None
+    ]
+    if len(alignments) != 2:
+        return 'tangent_unavailable'
+    if max(alignments) < 0.90:
+        return 'strong_endpoint_tangent_below_threshold'
+    if min(alignments) >= 0.30:
+        return 'not_tangent_weak'
+    if len([value for value in alignments if value < 0.30]) != 1:
+        return 'expected_exactly_one_weak_endpoint'
+    if _phase2k_best_alternative_alignment(report) is None:
+        return 'alternative_tangent_unavailable'
+    if _phase2k_best_alternative_alignment(report) < 0.85:
+        return 'alternative_tangent_below_threshold'
+    return None
+
+
+def _phase2k_active_tangent_rescue_sort_key(report):
+    return (
+        -float(report.get('path_straightness') or 0.0),
+        -float(report.get('best_alternative_tangent_alignment') or -999.0),
+        float(report.get('normalized_total_path_length') or 999.0),
+        -float(report.get('max_endpoint_tangent_alignment') or 0.0),
+        list(report.get('path_vertex_ids', ())),
+    )
+
+
+def _phase2k_best_alternative_alignment(report):
+    values = [
+        value for value in (report.get('alternative_tangent_alignment_values') or ())
+        if value is not None
+    ]
+    return max(values) if values else None
+
+
+def _phase2k_max_alignment(report):
+    values = [
+        value for value in (report.get('endpoint_tangent_alignments') or ())
+        if value is not None
+    ]
+    return max(values) if values else None
+
+
 PHASE2KR_REPRESENTATIVE_CASE = (5477, 5520, 5483)
 PHASE2KR_REPORT_CAPS = {
     'tangent_audit_candidates': 20,
@@ -5164,6 +5390,8 @@ def _phase2kr_tangent_audit_report(mesh, candidate, seam_adjacency):
         'normalized_endpoint_distance': candidate.get('normalized_endpoint_distance_if_mesh_scale_available'),
         'path_straightness': candidate.get('path_straightness'),
         'endpoint_tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+        'min_endpoint_tangent_alignment': candidate.get('min_endpoint_tangent_alignment'),
+        'max_endpoint_tangent_alignment': max(alignments) if alignments else None,
         'weak_endpoint_index': weak_index,
         'weak_endpoint_vertex_id': weak_vertex,
         'strong_endpoint_vertex_id': strong_vertex,
@@ -5175,6 +5403,10 @@ def _phase2kr_tangent_audit_report(mesh, candidate, seam_adjacency):
         'bridge_direction_from_strong_endpoint': detail['strong_bridge_direction'],
         'alternative_tangent_sources_checked': detail['alternative_tangent_sources_checked'],
         'alternative_tangent_alignment_values': detail['alternative_tangent_alignment_values'],
+        'best_alternative_tangent_alignment': (
+            max(detail['alternative_tangent_alignment_values'])
+            if detail['alternative_tangent_alignment_values'] else None
+        ),
         'component_direction_fallback_alignment': detail['component_direction_fallback_alignment'],
         'junction_or_short_fragment_warning': detail['junction_or_short_fragment_warning'],
         'tangent_audit_status': _phase2kr_audit_status(explicit_support, candidate, alignments),
@@ -5826,6 +6058,43 @@ def write_bridge_apply_debug(json_path, result):
         'phase2j_curved_repair_uses_probabilities': (
             result.phase2j_curved_repair_uses_probabilities
         ),
+        'blender_tangent_audit_endpoint_bridge_enabled': (
+            result.blender_tangent_audit_endpoint_bridge_enabled
+        ),
+        'blender_tangent_audit_endpoint_bridge_candidates_total': (
+            result.blender_tangent_audit_endpoint_bridge_candidates_total
+        ),
+        'blender_tangent_audit_endpoint_bridge_eligible_total': (
+            result.blender_tangent_audit_endpoint_bridge_eligible_total
+        ),
+        'blender_tangent_audit_endpoint_bridge_paths_marked': (
+            result.blender_tangent_audit_endpoint_bridge_paths_marked
+        ),
+        'blender_tangent_audit_endpoint_bridge_edges_marked': (
+            result.blender_tangent_audit_endpoint_bridge_edges_marked
+        ),
+        'blender_tangent_audit_endpoint_bridge_over_cap': (
+            result.blender_tangent_audit_endpoint_bridge_over_cap
+        ),
+        'blender_tangent_audit_endpoint_bridge_safety_cap': (
+            result.blender_tangent_audit_endpoint_bridge_safety_cap
+        ),
+        'blender_tangent_audit_endpoint_bridge_candidate_reports': list(
+            result.blender_tangent_audit_endpoint_bridge_candidate_reports
+        ),
+        'selected_tangent_audit_endpoint_bridge_reports': list(
+            result.selected_tangent_audit_endpoint_bridge_reports
+        ),
+        'rejected_tangent_audit_endpoint_bridge_reports': list(
+            result.rejected_tangent_audit_endpoint_bridge_reports
+        ),
+        'phase2k_tangent_rescue_uses_hardcoded_paths': (
+            result.phase2k_tangent_rescue_uses_hardcoded_paths
+        ),
+        'phase2k_tangent_rescue_uses_probabilities': (
+            result.phase2k_tangent_rescue_uses_probabilities
+        ),
+        'probabilities_used_for_tangent_rescue': result.probabilities_used_for_tangent_rescue,
         'target_path_2045_2541_4884_found': result.target_path_2045_2541_4884_found,
         'target_path_2045_2541_4884_allowed': result.target_path_2045_2541_4884_allowed,
         'target_path_2045_2541_4884_marked': result.target_path_2045_2541_4884_marked,
@@ -6909,6 +7178,12 @@ def format_apply_summary(result):
         f'eligible={result.blender_curved_two_edge_endpoint_bridge_eligible_total}, '
         f'over_cap={str(result.blender_curved_two_edge_endpoint_bridge_over_cap).lower()}, '
         f'cap={result.blender_curved_two_edge_endpoint_bridge_safety_cap}. '
+        f'Tangent-audit endpoint bridge: '
+        f'{result.blender_tangent_audit_endpoint_bridge_paths_marked} paths marked, '
+        f'{result.blender_tangent_audit_endpoint_bridge_edges_marked} edges marked, '
+        f'eligible={result.blender_tangent_audit_endpoint_bridge_eligible_total}, '
+        f'over_cap={str(result.blender_tangent_audit_endpoint_bridge_over_cap).lower()}, '
+        f'cap={result.blender_tangent_audit_endpoint_bridge_safety_cap}. '
         f'Human Phase 2B.1 paths selected: '
         f'{result.blender_two_edge_endpoint_bridge_human_paths_selected_by_rank}/'
         f'{len(result.blender_two_edge_endpoint_bridge_human_path_reports)}. '

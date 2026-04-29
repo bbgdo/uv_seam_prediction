@@ -3916,6 +3916,237 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             'max_repair_paths'
         ].default, 9)
 
+    def test_phase2k_tangent_audit_rescue_marks_generic_supported_candidate(self):
+        seam_mapping = load_module('uvsp_phase2k_active_mark_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, path = build_straight_tangent_weak_mesh(alternative_support=True)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(mesh)
+        selected = repair['selected_reports']
+
+        self.assertEqual(repair['candidates_total'], 1)
+        self.assertEqual(repair['eligible_total'], 1)
+        self.assertEqual(repair['paths_marked'], 1)
+        self.assertEqual(repair['edges_marked'], 2)
+        self.assertEqual(selected[0]['path_vertex_ids'], list(path))
+        self.assertTrue(selected[0]['marked'])
+        self.assertGreaterEqual(selected[0]['best_alternative_tangent_alignment'], 0.85)
+        self.assertFalse(selected[0]['diagnostic_labels_used_for_selection'])
+        for edge_index in selected[0]['blender_edge_indices']:
+            self.assertTrue(mesh.edges[edge_index].use_seam)
+
+    def test_phase2k_tangent_audit_rescue_rejects_without_alternative_support(self):
+        seam_mapping = load_module('uvsp_phase2k_active_no_support_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_straight_tangent_weak_mesh()
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(mesh)
+
+        self.assertEqual(repair['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'alternative_tangent_unavailable'
+            for report in repair['candidate_reports']
+        ))
+
+    def test_phase2k_tangent_audit_rescue_rejects_both_weak_and_low_straightness(self):
+        seam_mapping = load_module('uvsp_phase2k_active_metric_reject_smoke', ADDON_DIR / 'seam_mapping.py')
+        both_weak_mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (98, 100), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                98: (-1.0, 0.0, 0.0),
+                99: (0.0, -1.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (2.0, 0.0, 0.0),
+                103: (2.0, 1.0, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            both_weak_mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        both_weak = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(both_weak_mesh)
+
+        low_straight_mesh, predicted_keys, _ = build_straight_tangent_weak_mesh(alternative_support=True)
+        low_straight_mesh.vertices[101].co = (1.0, 0.4, 0.0)
+        seam_mapping.apply_seam_keys(
+            low_straight_mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        low_straight = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(low_straight_mesh)
+
+        self.assertEqual(both_weak['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'strong_endpoint_tangent_below_threshold'
+            for report in both_weak['candidate_reports']
+        ))
+        self.assertEqual(low_straight['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'path_not_straight_enough'
+            for report in low_straight['candidate_reports']
+        ))
+
+    def test_phase2k_tangent_audit_rescue_rejects_too_long_same_component_and_non_scope_paths(self):
+        seam_mapping = load_module('uvsp_phase2k_active_scope_reject_smoke', ADDON_DIR / 'seam_mapping.py')
+        long_mesh, predicted_keys, _ = build_straight_tangent_weak_mesh(alternative_support=True)
+        long_mesh.vertices[9999].co = (2.1, 0.0, 0.0)
+        seam_mapping.apply_seam_keys(
+            long_mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        too_long = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(long_mesh)
+
+        same_mesh, same_predicted, _ = build_straight_tangent_weak_mesh(
+            alternative_support=True,
+            same_component=True,
+        )
+        seam_mapping.apply_seam_keys(
+            same_mesh,
+            same_predicted,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        same_component = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(same_mesh)
+
+        length3_mesh = FakeMesh(
+            edges=[(0, 1), (4, 5), (1, 2), (2, 3), (3, 4)],
+            vertex_count=10000,
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.01, 0.0, 0.0),
+                2: (0.02, 0.0, 0.0),
+                3: (0.03, 0.0, 0.0),
+                4: (0.04, 0.0, 0.0),
+                5: (0.05, 0.0, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            length3_mesh,
+            [(0, 1), (4, 5)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        length3 = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(length3_mesh)
+
+        missing_mesh = FakeMesh(edges=[(0, 1), (3, 4)], vertex_count=5)
+        seam_mapping.apply_seam_keys(
+            missing_mesh,
+            [(0, 1), (3, 4)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        missing = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(missing_mesh)
+
+        self.assertEqual(too_long['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'path_too_long'
+            for report in too_long['candidate_reports']
+        ))
+        self.assertEqual(same_component['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'same_component_not_endpoint_bridge'
+            for report in same_component['candidate_reports']
+        ))
+        self.assertEqual(length3['paths_marked'], 0)
+        self.assertEqual(missing['paths_marked'], 0)
+
+    def test_phase2k_tangent_audit_rescue_cap_and_ranking_are_deterministic(self):
+        seam_mapping = load_module('uvsp_phase2k_active_cap_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = []
+        predicted_keys = []
+        coords = {9999: (1000.0, 1000.0, 1000.0)}
+        paths = []
+        for index in range(3):
+            base = 100 + index * 10
+            mesh_part, predicted_part, path = build_straight_tangent_weak_mesh(
+                path=(base, base + 1, base + 2),
+                alternative_support=True,
+            )
+            index_offset = len(edges)
+            edges.extend([tuple(edge.vertices) for edge in mesh_part.edges])
+            predicted_keys.extend(predicted_part)
+            coords.update({vertex: item.co for vertex, item in enumerate(mesh_part.vertices) if item.co is not None})
+            paths.append(path)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(mesh)
+
+        self.assertTrue(repair['over_cap'])
+        self.assertEqual(repair['eligible_total'], 3)
+        self.assertEqual(repair['paths_marked'], 1)
+        self.assertEqual(repair['edges_marked'], 2)
+        self.assertEqual(repair['selected_reports'][0]['path_vertex_ids'], list(paths[0]))
+        self.assertTrue(any(
+            report['rejection_reason'] == 'repair_over_cap'
+            for report in repair['candidate_reports']
+        ))
+
+    def test_phase2k_tangent_audit_rescue_diagnostic_labels_and_probabilities_are_not_used(self):
+        seam_mapping = load_module('uvsp_phase2k_active_integrity_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, path = build_straight_tangent_weak_mesh(alternative_support=True)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        no_label = seam_mapping.apply_tangent_audit_endpoint_bridge_rescue(mesh)
+
+        source = inspect.getsource(seam_mapping.apply_tangent_audit_endpoint_bridge_rescue)
+        source += inspect.getsource(seam_mapping._phase2k_active_tangent_rescue_report)
+        self.assertNotIn('DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS', source)
+        self.assertNotIn('DIAGNOSTIC_RESIDUAL_GAP_PHASE2E_PATHS', source)
+        self.assertNotIn('DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS', source)
+        self.assertTrue(all(
+            report['diagnostic_labels_used_for_selection'] is False
+            for report in no_label['candidate_reports']
+        ))
+
+        mesh2, predicted_keys2, _ = build_straight_tangent_weak_mesh(alternative_support=True)
+        result = seam_mapping.apply_seam_keys(
+            mesh2,
+            predicted_keys2,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        self.assertFalse(result.phase2k_tangent_rescue_uses_hardcoded_paths)
+        self.assertFalse(result.phase2k_tangent_rescue_uses_probabilities)
+        self.assertFalse(result.probabilities_used_for_tangent_rescue)
+        self.assertEqual(inspect.signature(seam_mapping.apply_tangent_audit_endpoint_bridge_rescue).parameters[
+            'max_repair_paths'
+        ].default, 1)
+        self.assertEqual(inspect.signature(seam_mapping.apply_curved_two_edge_endpoint_bridge_repair).parameters[
+            'max_repair_paths'
+        ].default, 6)
+        self.assertEqual(inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters[
+            'max_repair_paths'
+        ].default, 9)
+
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
         result = seam_mapping.SeamApplyResult(
@@ -3969,6 +4200,11 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn(
             'Curved two-edge endpoint bridge: 0 paths marked, 0 edges marked, eligible=0, '
             'over_cap=false, cap=6.',
+            summary,
+        )
+        self.assertIn(
+            'Tangent-audit endpoint bridge: 0 paths marked, 0 edges marked, eligible=0, '
+            'over_cap=false, cap=1.',
             summary,
         )
         self.assertIn('Human Phase 2B.1 paths selected: 1/2.', summary)
