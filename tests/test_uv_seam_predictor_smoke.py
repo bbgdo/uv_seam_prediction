@@ -1207,7 +1207,10 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
 
         self.assertTrue(result.blender_two_edge_endpoint_bridge_over_cap)
-        self.assertEqual(result.blender_two_edge_endpoint_bridge_selection_policy, 'top_k_ranked')
+        self.assertEqual(
+            result.blender_two_edge_endpoint_bridge_selection_policy,
+            'top_k_ranked_continuity_tier_v2',
+        )
         self.assertFalse(result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception)
         self.assertFalse(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
         self.assertFalse(result.target_path_2045_2541_4884_marked)
@@ -1247,7 +1250,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('candidate_score_tuple', reports[0])
         self.assertEqual(reports[-1]['skipped_reason'], 'over_cap_ranked_below_threshold')
 
-    def test_two_edge_endpoint_bridge_ranking_uses_total_length_first(self):
+    def test_two_edge_endpoint_bridge_ranking_uses_length_as_same_tier_tiebreaker(self):
         seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_rank_length_smoke', ADDON_DIR / 'seam_mapping.py')
         edges = []
         predicted_keys = []
@@ -1265,34 +1268,30 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
 
         reports = result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
         self.assertEqual(reports[0]['path_vertex_ids'], [800, 801, 802])
+        self.assertEqual(reports[0]['continuity_tier'], reports[1]['continuity_tier'])
+        self.assertEqual(reports[0]['q_floor'], reports[1]['q_floor'])
 
-    def test_two_edge_endpoint_bridge_ranking_uses_tangent_and_straightness(self):
+    def test_two_edge_endpoint_bridge_continuity_tier_outranks_short_bent_candidate(self):
         seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_rank_geometry_smoke', ADDON_DIR / 'seam_mapping.py')
-        better_tangent = {
+        coords = {
             9999: (1.0, 1.0, 1.0),
-            99: (-0.01, 0.0, 0.0),
+            99: (-0.02, 0.0, 0.0),
             100: (0.0, 0.0, 0.0),
-            101: (0.01, 0.0, 0.0),
-            102: (0.02, 0.0, 0.0),
-            103: (0.03, 0.0, 0.0),
+            101: (0.02, 0.0, 0.0),
+            102: (0.04, 0.0, 0.0),
+            103: (0.06, 0.0, 0.0),
             199: (-0.01, 1.0, 0.0),
             200: (0.0, 1.0, 0.0),
             201: (0.01, 1.0, 0.0),
-            202: (0.02, 1.0, 0.0),
-            203: (0.02, 1.01, 0.0),
-            299: (-0.01, 2.0, 0.0),
-            300: (0.0, 2.0, 0.0),
-            301: (0.01, 2.0, 0.0),
-            302: (0.02, 2.0, 0.0),
-            303: (0.03, 2.0, 0.0),
+            202: (0.01, 1.01, 0.0),
+            203: (0.01, 1.02, 0.0),
         }
         edges = [
             (99, 100), (102, 103), (100, 101), (101, 102),
             (199, 200), (202, 203), (200, 201), (201, 202),
-            (299, 300), (302, 303), (300, 301), (301, 302),
         ]
-        predicted_keys = [(99, 100), (102, 103), (199, 200), (202, 203), (299, 300), (302, 303)]
-        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=better_tangent)
+        predicted_keys = [(99, 100), (102, 103), (199, 200), (202, 203)]
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
 
         result = seam_mapping.apply_seam_keys(
             mesh,
@@ -1307,10 +1306,62 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             by_path[(100, 101, 102)]['rank'],
             by_path[(200, 201, 202)]['rank'],
         )
-        self.assertLess(
-            by_path[(100, 101, 102)]['candidate_score_tuple'][2],
-            by_path[(200, 201, 202)]['candidate_score_tuple'][2],
+        self.assertEqual(by_path[(100, 101, 102)]['continuity_tier'], 0)
+        self.assertEqual(by_path[(200, 201, 202)]['continuity_tier'], 3)
+        self.assertGreater(
+            by_path[(100, 101, 102)]['total_path_length'],
+            by_path[(200, 201, 202)]['total_path_length'],
         )
+
+    def test_old_validation_target_analogues_outrank_weak_short_candidates(self):
+        seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_old_targets_v2_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        def run_case(path, left_neighbor, right_neighbor):
+            u, middle, v = path
+            coords = {
+                left_neighbor: (-0.02, 0.0, 0.0),
+                u: (0.0, 0.0, 0.0),
+                middle: (0.02, 0.0, 0.0),
+                v: (0.04, 0.0, 0.0),
+                right_neighbor: (0.06, 0.0, 0.0),
+                99: (-0.01, 1.0, 0.0),
+                100: (0.0, 1.0, 0.0),
+                101: (0.01, 1.0, 0.0),
+                102: (0.01, 1.01, 0.0),
+                103: (0.01, 1.02, 0.0),
+                9999: (1.0, 1.0, 1.0),
+            }
+            edges = [
+                (left_neighbor, u), (v, right_neighbor), (u, middle), (middle, v),
+                (99, 100), (102, 103), (100, 101), (101, 102),
+            ]
+            predicted_keys = [(left_neighbor, u), (v, right_neighbor), (99, 100), (102, 103)]
+            mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+            return seam_mapping.apply_seam_keys(
+                mesh,
+                predicted_keys,
+                clear_existing=True,
+                enable_local_repair=True,
+            )
+
+        target_a_result = run_case((2045, 2541, 4884), 2044, 4885)
+        target_b_result = run_case((2540, 2541, 2544), 2539, 2545)
+
+        for result, target_path in (
+            (target_a_result, (2045, 2541, 4884)),
+            (target_b_result, (2540, 2541, 2544)),
+        ):
+            reports = {
+                tuple(report['path_vertex_ids']): report
+                for report in result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
+            }
+            target = reports[target_path]
+            weak = reports[(100, 101, 102)]
+            self.assertGreater(target['rank_v1_length_first'], weak['rank_v1_length_first'])
+            self.assertLess(target['rank_v2'], weak['rank_v2'])
+            self.assertEqual(target['continuity_tier'], 0)
+            self.assertEqual(weak['continuity_tier'], 3)
+            self.assertTrue(target['selected_for_marking'])
 
     def test_two_edge_endpoint_bridge_ranking_is_deterministic_under_ties(self):
         seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_rank_tie_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -1331,6 +1382,47 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         reports = result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
         self.assertEqual(reports[0]['path_vertex_ids'], [400, 401, 402])
         self.assertEqual(reports[1]['path_vertex_ids'], [500, 501, 502])
+
+    def test_two_edge_endpoint_bridge_suppresses_duplicate_endpoint_pair_before_cap(self):
+        seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_dedup_smoke', ADDON_DIR / 'seam_mapping.py')
+        coords = {
+            99: (-0.01, 0.0, 0.0),
+            100: (0.0, 0.0, 0.0),
+            101: (0.01, 0.0, 0.0),
+            102: (0.02, 0.0, 0.0),
+            103: (0.03, 0.0, 0.0),
+            104: (0.01, 0.01, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        edges = [(99, 100), (102, 103), (100, 101), (101, 102), (100, 104), (104, 102)]
+        predicted_keys = [(99, 100), (102, 103)]
+        for index in range(7):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 600 + index * 10, y=index + 1)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        reports = result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
+        duplicate_reports = [
+            report for report in reports
+            if report['endpoint_pair_key'] == [100, 102]
+        ]
+        self.assertEqual(result.blender_two_edge_endpoint_bridge_raw_allowed_total, 9)
+        self.assertEqual(result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total, 8)
+        self.assertEqual(result.blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed, 1)
+        self.assertFalse(result.blender_two_edge_endpoint_bridge_over_cap)
+        self.assertEqual(result.blender_two_edge_endpoint_bridge_paths_marked, 8)
+        self.assertEqual(len(duplicate_reports), 2)
+        self.assertTrue(any(report['duplicate_endpoint_pair_suppressed'] for report in duplicate_reports))
+        self.assertTrue(mesh.edges[2].use_seam)
+        self.assertTrue(mesh.edges[3].use_seam)
+        self.assertFalse(mesh.edges[4].use_seam)
+        self.assertFalse(mesh.edges[5].use_seam)
 
     def test_two_edge_endpoint_bridge_conflict_reports_shared_edge(self):
         seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_conflict_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -1382,13 +1474,29 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
 
         self.assertEqual(debug['phase_2b1_ranking_summary']['selected_rank_threshold'], 8)
+        self.assertEqual(debug['phase_2b1_ranking_summary']['raw_allowed_total'], 9)
+        self.assertEqual(debug['phase_2b1_ranking_summary']['deduplicated_allowed_total'], 9)
+        self.assertEqual(debug['phase_2b1_ranking_summary']['duplicate_endpoint_pairs_suppressed'], 0)
         self.assertEqual(len(debug['full_ranked_allowed_candidates']), 9)
         self.assertEqual(len(debug['top_12_ranked_allowed_candidates']), 9)
         self.assertEqual(len(debug['selected_top_k_candidates']), 8)
         self.assertEqual(debug['full_ranked_allowed_candidates'][0]['rank'], 1)
         self.assertIn('candidate_score_tuple', debug['full_ranked_allowed_candidates'][0])
+        self.assertIn('rank_v1_length_first', debug['full_ranked_allowed_candidates'][0])
+        self.assertIn('rank_v2', debug['full_ranked_allowed_candidates'][0])
         self.assertEqual(
             debug['phase_2b1_ranking_summary']['score_tuple_definition'],
+            [
+                'continuity_tier',
+                '-q_floor',
+                '-q_sum',
+                'total_path_length',
+                'endpoint_distance',
+                'path_vertex_ids',
+            ],
+        )
+        self.assertEqual(
+            debug['phase_2b1_ranking_summary']['score_tuple_definition_v1_length_first'],
             [
                 'total_path_length',
                 'endpoint_distance',
@@ -1685,9 +1793,11 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             target_path_2540_2541_2544_straightness=0.62,
             blender_two_edge_endpoint_bridge_paths_marked=2,
             blender_two_edge_endpoint_bridge_edges_marked=4,
+            blender_two_edge_endpoint_bridge_raw_allowed_total=2,
+            blender_two_edge_endpoint_bridge_deduplicated_allowed_total=2,
             blender_two_edge_endpoint_bridge_allowed_total=2,
             blender_two_edge_endpoint_bridge_over_cap=False,
-            blender_two_edge_endpoint_bridge_selection_policy='top_k_ranked',
+            blender_two_edge_endpoint_bridge_selection_policy='top_k_ranked_continuity_tier_v2',
             blender_two_edge_endpoint_bridge_human_paths_selected_by_rank=1,
             blender_two_edge_endpoint_bridge_human_paths_skipped_below_threshold=1,
             blender_two_edge_endpoint_bridge_human_path_reports=({'a': 1}, {'b': 2}),
@@ -1699,8 +1809,8 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('Human case [2557,2558]: marked, degree=(2, 3).', summary)
         self.assertIn('Two-edge repair: 2 paths marked, 4 edges marked, allowed=2, over_cap=false.', summary)
         self.assertIn(
-            'Two-edge endpoint bridge: 2 paths marked, 4 edges marked, allowed=2, '
-            'over_cap=false, policy=top_k_ranked.',
+            'Two-edge endpoint bridge: 2 paths marked, 4 edges marked, raw_allowed=2, '
+            'dedup_allowed=2, over_cap=false, policy=top_k_ranked_continuity_tier_v2.',
             summary,
         )
         self.assertIn('Human Phase 2B.1 paths selected: 1/2.', summary)

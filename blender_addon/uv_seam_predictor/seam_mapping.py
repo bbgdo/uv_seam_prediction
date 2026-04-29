@@ -43,14 +43,17 @@ class SeamApplyResult:
     blender_two_edge_repair_safety_cap: int = 16
     blender_two_edge_repair_candidate_reports: tuple = ()
     blender_two_edge_endpoint_bridge_enabled: bool = False
-    blender_two_edge_endpoint_bridge_selection_policy: str = 'top_k_ranked'
+    blender_two_edge_endpoint_bridge_selection_policy: str = 'top_k_ranked_continuity_tier_v2'
     blender_two_edge_endpoint_bridge_candidates_total: int = 0
+    blender_two_edge_endpoint_bridge_raw_allowed_total: int = 0
+    blender_two_edge_endpoint_bridge_deduplicated_allowed_total: int = 0
     blender_two_edge_endpoint_bridge_allowed_total: int = 0
     blender_two_edge_endpoint_bridge_paths_marked: int = 0
     blender_two_edge_endpoint_bridge_edges_marked: int = 0
     blender_two_edge_endpoint_bridge_over_cap: bool = False
     blender_two_edge_endpoint_bridge_safety_cap: int = 8
     blender_two_edge_endpoint_bridge_selected_rank_threshold: int | None = None
+    blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed: int = 0
     blender_two_edge_endpoint_bridge_candidate_reports: tuple = ()
     blender_two_edge_endpoint_bridge_allowed_candidate_reports: tuple = ()
     blender_two_edge_endpoint_bridge_human_paths_selected_by_rank: int = 0
@@ -348,6 +351,12 @@ def apply_seam_keys(
         blender_two_edge_endpoint_bridge_candidates_total=int(endpoint_bridge_repair[
             'candidates_total'
         ]),
+        blender_two_edge_endpoint_bridge_raw_allowed_total=int(endpoint_bridge_repair[
+            'raw_allowed_total'
+        ]),
+        blender_two_edge_endpoint_bridge_deduplicated_allowed_total=int(endpoint_bridge_repair[
+            'deduplicated_allowed_total'
+        ]),
         blender_two_edge_endpoint_bridge_allowed_total=int(endpoint_bridge_repair[
             'allowed_total'
         ]),
@@ -362,6 +371,9 @@ def apply_seam_keys(
         blender_two_edge_endpoint_bridge_selected_rank_threshold=endpoint_bridge_repair[
             'selected_rank_threshold'
         ],
+        blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed=int(
+            endpoint_bridge_repair['duplicate_endpoint_pairs_suppressed']
+        ),
         blender_two_edge_endpoint_bridge_candidate_reports=tuple(endpoint_bridge_repair[
             'candidate_reports'
         ]),
@@ -890,9 +902,11 @@ def apply_two_edge_endpoint_bridge_repair(
             enabled=False,
             candidate_reports=(),
             allowed_reports=(),
+            deduplicated_allowed_reports=(),
             safety_cap=max_repair_paths,
             over_cap=False,
             selected_rank_threshold=None,
+            duplicate_endpoint_pairs_suppressed=0,
             edges_marked=0,
             paths_marked=0,
             edge_by_key=edge_by_key,
@@ -947,11 +961,17 @@ def apply_two_edge_endpoint_bridge_repair(
         report for report in candidate_reports
         if report['rejection_reason'] is None
     ]
-    allowed_reports.sort(key=_two_edge_endpoint_bridge_sort_key)
+    v1_ranked_reports = sorted(allowed_reports, key=_two_edge_endpoint_bridge_sort_key_v1)
+    _annotate_endpoint_bridge_v1_reports(v1_ranked_reports)
+    allowed_reports.sort(key=_two_edge_endpoint_bridge_sort_key_v2)
     _annotate_ranked_endpoint_bridge_allowed_reports(allowed_reports)
-    over_cap = len(allowed_reports) > int(max_repair_paths)
-    selected_rank_threshold = min(len(allowed_reports), int(max_repair_paths))
-    reports_to_mark = list(allowed_reports[:selected_rank_threshold])
+    deduplicated_allowed_reports = _deduplicate_endpoint_bridge_reports(allowed_reports)
+    duplicate_suppressed = len(allowed_reports) - len(deduplicated_allowed_reports)
+    over_cap = len(deduplicated_allowed_reports) > int(max_repair_paths)
+    reports_to_mark = list(deduplicated_allowed_reports[:int(max_repair_paths)])
+    selected_rank_threshold = None
+    if reports_to_mark:
+        selected_rank_threshold = max(report['rank_v2'] for report in reports_to_mark)
     selected_report_ids = {id(report) for report in reports_to_mark}
 
     marked_edge_keys = set()
@@ -983,7 +1003,7 @@ def apply_two_edge_endpoint_bridge_repair(
         report['skipped_reason'] = 'selected'
 
     if over_cap:
-        for report in allowed_reports:
+        for report in deduplicated_allowed_reports:
             if id(report) not in selected_report_ids:
                 report['rejection_reason'] = 'repair_over_cap'
                 report['skipped_reason'] = 'over_cap_ranked_below_threshold'
@@ -997,9 +1017,11 @@ def apply_two_edge_endpoint_bridge_repair(
         enabled=True,
         candidate_reports=tuple(candidate_reports),
         allowed_reports=tuple(allowed_reports),
+        deduplicated_allowed_reports=tuple(deduplicated_allowed_reports),
         safety_cap=max_repair_paths,
         over_cap=over_cap,
         selected_rank_threshold=selected_rank_threshold,
+        duplicate_endpoint_pairs_suppressed=duplicate_suppressed,
         edges_marked=len(marked_edge_keys),
         paths_marked=sum(1 for report in reports_to_mark if report.get('accepted', False)),
         edge_by_key=edge_by_key,
@@ -1012,9 +1034,11 @@ def _two_edge_endpoint_bridge_result(
     enabled,
     candidate_reports,
     allowed_reports,
+    deduplicated_allowed_reports,
     safety_cap,
     over_cap,
     selected_rank_threshold,
+    duplicate_endpoint_pairs_suppressed,
     edges_marked,
     paths_marked,
     edge_by_key,
@@ -1024,14 +1048,17 @@ def _two_edge_endpoint_bridge_result(
     human_path_reports = _endpoint_bridge_human_path_reports(allowed_reports)
     result = {
         'enabled': bool(enabled),
-        'selection_policy': 'top_k_ranked',
+        'selection_policy': 'top_k_ranked_continuity_tier_v2',
         'candidates_total': len(candidate_reports),
+        'raw_allowed_total': len(allowed_reports),
+        'deduplicated_allowed_total': len(deduplicated_allowed_reports),
         'allowed_total': len(allowed_reports),
         'paths_marked': int(paths_marked),
         'edges_marked': int(edges_marked),
         'over_cap': bool(over_cap),
         'safety_cap': int(safety_cap),
         'selected_rank_threshold': selected_rank_threshold,
+        'duplicate_endpoint_pairs_suppressed': int(duplicate_endpoint_pairs_suppressed),
         'candidate_reports': tuple(candidate_reports),
         'allowed_candidate_reports': allowed_candidate_reports,
         'human_path_reports': tuple(human_path_reports),
@@ -1072,19 +1099,40 @@ def _two_edge_endpoint_bridge_result(
     return result
 
 
+def _annotate_endpoint_bridge_v1_reports(allowed_reports):
+    for rank, report in enumerate(allowed_reports, start=1):
+        report['rank_v1_length_first'] = rank
+        report['candidate_score_tuple_v1_length_first'] = _endpoint_bridge_score_tuple_v1(report)
+
+
 def _annotate_ranked_endpoint_bridge_allowed_reports(allowed_reports):
     for rank, report in enumerate(allowed_reports, start=1):
-        score = _endpoint_bridge_score_tuple(report)
+        score = _endpoint_bridge_score_tuple_v2(report)
+        report['rank_v2'] = rank
         report['rank'] = rank
+        report['rank_delta_v2_minus_v1'] = rank - report['rank_v1_length_first']
+        report['candidate_score_tuple_v2'] = score
         report['candidate_score_tuple'] = score
+        report['continuity_tier'] = _endpoint_bridge_continuity_tier(report)
+        report['q_floor'] = min(
+            report['min_endpoint_tangent_alignment'],
+            report['path_straightness'],
+        )
+        report['q_sum'] = (
+            report['min_endpoint_tangent_alignment']
+            + report['path_straightness']
+        )
+        report['endpoint_pair_key'] = sorted([report['path_vertex_ids'][0], report['path_vertex_ids'][2]])
+        report['duplicate_endpoint_pair_suppressed'] = False
         report['selected_for_marking'] = False
         report['marked'] = False
         report['skipped_reason'] = None
         report['conflict_reason'] = None
         report['human_gap_match_labels'] = _human_gap_labels_for_path(report['path_vertex_ids'])
+        report['old_validation_target_match_label'] = _old_validation_target_label(report['path_vertex_ids'])
 
 
-def _endpoint_bridge_score_tuple(report):
+def _endpoint_bridge_score_tuple_v1(report):
     return [
         report['total_path_length'],
         report['endpoint_distance'],
@@ -1094,10 +1142,59 @@ def _endpoint_bridge_score_tuple(report):
     ]
 
 
+def _endpoint_bridge_score_tuple_v2(report):
+    t = report['min_endpoint_tangent_alignment']
+    s = report['path_straightness']
+    q_floor = min(t, s)
+    q_sum = t + s
+    return [
+        _endpoint_bridge_continuity_tier(report),
+        -q_floor,
+        -q_sum,
+        report['total_path_length'],
+        report['endpoint_distance'],
+        list(report['path_vertex_ids']),
+    ]
+
+
+def _endpoint_bridge_continuity_tier(report):
+    t = report['min_endpoint_tangent_alignment']
+    s = report['path_straightness']
+    if s >= 0.85 and t >= 0.85:
+        return 0
+    if s >= 0.70 and t >= 0.70:
+        return 1
+    if s >= 0.50 and t >= 0.75:
+        return 2
+    return 3
+
+
+def _deduplicate_endpoint_bridge_reports(allowed_reports):
+    selected = []
+    seen_endpoint_pairs = set()
+    for report in allowed_reports:
+        key = tuple(report['endpoint_pair_key'])
+        if key in seen_endpoint_pairs:
+            report['duplicate_endpoint_pair_suppressed'] = True
+            report['skipped_reason'] = 'duplicate_endpoint_pair_suppressed'
+            continue
+        seen_endpoint_pairs.add(key)
+        selected.append(report)
+    return selected
+
+
 def _allowed_endpoint_bridge_report(report):
     return {
-        'rank': report.get('rank'),
-        'candidate_score_tuple': report.get('candidate_score_tuple'),
+        'rank': report.get('rank_v2'),
+        'rank_v1_length_first': report.get('rank_v1_length_first'),
+        'candidate_score_tuple_v1_length_first': report.get('candidate_score_tuple_v1_length_first'),
+        'rank_v2': report.get('rank_v2'),
+        'rank_delta_v2_minus_v1': report.get('rank_delta_v2_minus_v1'),
+        'candidate_score_tuple_v2': report.get('candidate_score_tuple_v2'),
+        'candidate_score_tuple': report.get('candidate_score_tuple_v2'),
+        'continuity_tier': report.get('continuity_tier'),
+        'q_floor': report.get('q_floor'),
+        'q_sum': report.get('q_sum'),
         'path_vertex_ids': list(report['path_vertex_ids']),
         'path_edge_keys': [list(edge_key) for edge_key in report['path_edge_keys']],
         'path_edge_indices_blender': list(report['path_edge_indices_blender']),
@@ -1112,7 +1209,12 @@ def _allowed_endpoint_bridge_report(report):
         'selected_for_marking': bool(report.get('selected_for_marking', False)),
         'marked': bool(report.get('accepted', False)),
         'skipped_reason': report.get('skipped_reason'),
+        'endpoint_pair_key': list(report.get('endpoint_pair_key', [])),
+        'duplicate_endpoint_pair_suppressed': bool(
+            report.get('duplicate_endpoint_pair_suppressed', False)
+        ),
         'human_gap_match_labels': list(report.get('human_gap_match_labels', [])),
+        'old_validation_target_match_label': report.get('old_validation_target_match_label'),
         'conflict_reason': report.get('conflict_reason'),
     }
 
@@ -1132,11 +1234,18 @@ def _endpoint_bridge_human_path_reports(allowed_reports):
             continue
         human_reports.append({
             'human_path_label': label,
-            'allowed_rank': report.get('rank'),
+            'allowed_rank': report.get('rank_v2'),
+            'rank_v1_length_first': report.get('rank_v1_length_first'),
+            'rank_v2': report.get('rank_v2'),
+            'rank_delta_v2_minus_v1': report.get('rank_delta_v2_minus_v1'),
+            'continuity_tier': report.get('continuity_tier'),
+            'q_floor': report.get('q_floor'),
+            'q_sum': report.get('q_sum'),
             'selected_for_marking': bool(report.get('selected_for_marking', False)),
             'marked': bool(report.get('accepted', False)),
             'skipped_reason': report.get('skipped_reason') or 'not_found',
-            'candidate_score_tuple': report.get('candidate_score_tuple'),
+            'candidate_score_tuple': report.get('candidate_score_tuple_v2'),
+            'candidate_score_tuple_v2': report.get('candidate_score_tuple_v2'),
         })
     return human_reports
 
@@ -1268,13 +1377,24 @@ def _two_edge_endpoint_bridge_geometry(mesh, path, seam_adjacency):
     }
 
 
-def _two_edge_endpoint_bridge_sort_key(report):
+def _two_edge_endpoint_bridge_sort_key_v1(report):
     min_alignment = report['min_endpoint_tangent_alignment']
     return (
         report['total_path_length'],
         report['endpoint_distance'],
         -min_alignment,
         -report['path_straightness'],
+        tuple(report['path_vertex_ids']),
+    )
+
+
+def _two_edge_endpoint_bridge_sort_key_v2(report):
+    return (
+        _endpoint_bridge_continuity_tier(report),
+        -min(report['min_endpoint_tangent_alignment'], report['path_straightness']),
+        -(report['min_endpoint_tangent_alignment'] + report['path_straightness']),
+        report['total_path_length'],
+        report['endpoint_distance'],
         tuple(report['path_vertex_ids']),
     )
 
@@ -1430,11 +1550,20 @@ OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS = (
 )
 
 
-ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION = [
+ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V1_LENGTH_FIRST = [
     'total_path_length',
     'endpoint_distance',
     '-min_endpoint_tangent_alignment',
     '-path_straightness',
+    'path_vertex_ids',
+]
+
+ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V2 = [
+    'continuity_tier',
+    '-q_floor',
+    '-q_sum',
+    'total_path_length',
+    'endpoint_distance',
     'path_vertex_ids',
 ]
 
@@ -2022,6 +2151,12 @@ def write_bridge_apply_debug(json_path, result):
         'blender_two_edge_endpoint_bridge_candidates_total': (
             result.blender_two_edge_endpoint_bridge_candidates_total
         ),
+        'blender_two_edge_endpoint_bridge_raw_allowed_total': (
+            result.blender_two_edge_endpoint_bridge_raw_allowed_total
+        ),
+        'blender_two_edge_endpoint_bridge_deduplicated_allowed_total': (
+            result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total
+        ),
         'blender_two_edge_endpoint_bridge_allowed_total': (
             result.blender_two_edge_endpoint_bridge_allowed_total
         ),
@@ -2037,6 +2172,9 @@ def write_bridge_apply_debug(json_path, result):
         ),
         'blender_two_edge_endpoint_bridge_selected_rank_threshold': (
             result.blender_two_edge_endpoint_bridge_selected_rank_threshold
+        ),
+        'blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed': (
+            result.blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed
         ),
         'blender_two_edge_endpoint_bridge_candidate_reports': list(
             result.blender_two_edge_endpoint_bridge_candidate_reports
@@ -2132,11 +2270,20 @@ def build_endpoint_bridge_ranking_debug(result):
     summary = {
         'selection_policy': result.blender_two_edge_endpoint_bridge_selection_policy,
         'safety_cap': result.blender_two_edge_endpoint_bridge_safety_cap,
+        'raw_allowed_total': result.blender_two_edge_endpoint_bridge_raw_allowed_total,
+        'deduplicated_allowed_total': result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total,
         'allowed_total': result.blender_two_edge_endpoint_bridge_allowed_total,
         'selected_total': result.blender_two_edge_endpoint_bridge_paths_marked,
         'over_cap': result.blender_two_edge_endpoint_bridge_over_cap,
         'selected_rank_threshold': threshold,
-        'score_tuple_definition': list(ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION),
+        'duplicate_endpoint_pairs_suppressed': (
+            result.blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed
+        ),
+        'score_tuple_definition_v1_length_first': list(
+            ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V1_LENGTH_FIRST
+        ),
+        'score_tuple_definition_v2': list(ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V2),
+        'score_tuple_definition': list(ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V2),
         'human_phase_2b1_total': len(human_reports),
         'human_phase_2b1_selected': sum(
             1 for report in human_reports if report['selected_for_marking']
@@ -2216,16 +2363,23 @@ def _endpoint_bridge_debug_human_reports(allowed, threshold):
             'preferred_group_id': group_id,
             'alternative_id': alternative_id,
             'path_vertex_ids': list(report['path_vertex_ids']),
-            'rank': report.get('rank'),
+            'rank': report.get('rank_v2'),
+            'rank_v1_length_first': report.get('rank_v1_length_first'),
+            'rank_v2': report.get('rank_v2'),
+            'rank_delta_v2_minus_v1': report.get('rank_delta_v2_minus_v1'),
+            'continuity_tier': report.get('continuity_tier'),
+            'q_floor': report.get('q_floor'),
+            'q_sum': report.get('q_sum'),
             'selected_for_marking': bool(report.get('selected_for_marking', False)),
             'marked': bool(report.get('marked', False)),
             'skipped_reason': report.get('skipped_reason'),
-            'candidate_score_tuple': report.get('candidate_score_tuple'),
+            'candidate_score_tuple': report.get('candidate_score_tuple_v2'),
+            'candidate_score_tuple_v2': report.get('candidate_score_tuple_v2'),
             'total_path_length': report.get('total_path_length'),
             'endpoint_distance': report.get('endpoint_distance'),
             'min_endpoint_tangent_alignment': report.get('min_endpoint_tangent_alignment'),
             'path_straightness': report.get('path_straightness'),
-            'rank_delta_from_threshold': _rank_delta(report.get('rank'), threshold),
+            'rank_delta_from_threshold': _rank_delta(report.get('rank_v2'), threshold),
         })
     return reports
 
@@ -2245,10 +2399,18 @@ def _endpoint_bridge_debug_old_target_reports(allowed, threshold):
             reports[target_label] = {
                 'found_in_allowed_candidates': False,
                 'rank': None,
+                'rank_v1_length_first': None,
+                'rank_v2': None,
+                'rank_delta_v2_minus_v1': None,
                 'selected_for_marking': False,
                 'marked': False,
                 'skipped_reason': 'not_found',
                 'candidate_score_tuple': None,
+                'candidate_score_tuple_v1_length_first': None,
+                'candidate_score_tuple_v2': None,
+                'continuity_tier': None,
+                'q_floor': None,
+                'q_sum': None,
                 'total_path_length': None,
                 'endpoint_distance': None,
                 'endpoint_tangent_alignment_u': None,
@@ -2257,27 +2419,39 @@ def _endpoint_bridge_debug_old_target_reports(allowed, threshold):
                 'path_straightness': None,
                 'rank_delta_from_threshold': None,
                 'primary_penalty_component': 'not_found',
+                'selected_by_v2_continuity_ranking': False,
             }
             continue
         reports[target_label] = {
             'found_in_allowed_candidates': True,
-            'rank': report.get('rank'),
+            'rank': report.get('rank_v2'),
+            'rank_v1_length_first': report.get('rank_v1_length_first'),
+            'rank_v2': report.get('rank_v2'),
+            'rank_delta_v2_minus_v1': report.get('rank_delta_v2_minus_v1'),
             'selected_for_marking': bool(report.get('selected_for_marking', False)),
             'marked': bool(report.get('marked', False)),
             'skipped_reason': report.get('skipped_reason'),
-            'candidate_score_tuple': report.get('candidate_score_tuple'),
+            'candidate_score_tuple': report.get('candidate_score_tuple_v2'),
+            'candidate_score_tuple_v1_length_first': report.get(
+                'candidate_score_tuple_v1_length_first'
+            ),
+            'candidate_score_tuple_v2': report.get('candidate_score_tuple_v2'),
+            'continuity_tier': report.get('continuity_tier'),
+            'q_floor': report.get('q_floor'),
+            'q_sum': report.get('q_sum'),
             'total_path_length': report.get('total_path_length'),
             'endpoint_distance': report.get('endpoint_distance'),
             'endpoint_tangent_alignment_u': report.get('endpoint_tangent_alignment_u'),
             'endpoint_tangent_alignment_v': report.get('endpoint_tangent_alignment_v'),
             'min_endpoint_tangent_alignment': report.get('min_endpoint_tangent_alignment'),
             'path_straightness': report.get('path_straightness'),
-            'rank_delta_from_threshold': _rank_delta(report.get('rank'), threshold),
+            'rank_delta_from_threshold': _rank_delta(report.get('rank_v2'), threshold),
             'primary_penalty_component': _primary_penalty_component(
                 report,
                 threshold_report,
                 selected,
             ),
+            'selected_by_v2_continuity_ranking': bool(report.get('selected_for_marking', False)),
         }
     return reports
 
@@ -2398,10 +2572,11 @@ def _primary_penalty_component(report, threshold_report, selected):
     if threshold_score is None:
         return 'unknown'
     labels = (
+        'continuity_tier',
+        'quality_floor',
+        'quality_sum',
         'total_path_length',
         'endpoint_distance',
-        'tangent_alignment',
-        'path_straightness',
         'tie_break',
     )
     for index, label in enumerate(labels):
@@ -2489,7 +2664,8 @@ def format_apply_summary(result):
         f'over_cap={str(result.blender_two_edge_repair_over_cap).lower()}. '
         f'Two-edge endpoint bridge: {result.blender_two_edge_endpoint_bridge_paths_marked} '
         f'paths marked, {result.blender_two_edge_endpoint_bridge_edges_marked} edges marked, '
-        f'allowed={result.blender_two_edge_endpoint_bridge_allowed_total}, '
+        f'raw_allowed={result.blender_two_edge_endpoint_bridge_raw_allowed_total}, '
+        f'dedup_allowed={result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total}, '
         f'over_cap={str(result.blender_two_edge_endpoint_bridge_over_cap).lower()}, '
         f'policy={result.blender_two_edge_endpoint_bridge_selection_policy}. '
         f'Human Phase 2B.1 paths selected: '
