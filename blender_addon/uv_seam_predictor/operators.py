@@ -208,7 +208,11 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
             )
             summary = seam_mapping.format_apply_summary(result)
             debug_path = seam_mapping.write_bridge_apply_debug(self._job.json_path, result)
-            summary = f'{summary} Bridge apply debug: {debug_path}'
+            human_gap_path = seam_mapping.write_human_gap_classification(self._job.json_path, result)
+            summary = (
+                f'{summary} Bridge apply debug: {debug_path}. '
+                f'Human gap classification: {human_gap_path}'
+            )
         except Exception as exc:
             return self._finish(context, error=str(exc))
 
