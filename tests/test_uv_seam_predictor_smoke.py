@@ -2558,10 +2558,217 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertTrue(selected[0]['simulation_candidate_for_review'])
         self.assertTrue(selected[0]['not_applied_to_mesh'])
         self.assertIn('summary', payload)
+        self.assertIn('normalized_summary', payload)
+        self.assertIn('normalized_residual_coverage', payload)
         self.assertIn('residual_coverage', payload)
         self.assertIn('per_class_reported_counts', payload)
         self.assertIn('per_class_truncation_counts', payload)
         self.assertIn('write_unified_local_continuity_simulation_phase2h_r', read_addon_file('operators.py'))
+
+    def test_unified_local_continuity_simulation_normalizes_open_residual_labels(self):
+        seam_mapping = load_module('uvsp_phase2hr_normalized_labels_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(5561, 5562), (5553, 5554), (5562, 5464), (5464, 5553)],
+            vertex_count=6000,
+            coords={
+                5561: (-0.01, 0.0, 0.0),
+                5562: (0.0, 0.0, 0.0),
+                5464: (0.01, 0.0, 0.0),
+                5553: (0.02, 0.0, 0.0),
+                5554: (0.03, 0.0, 0.0),
+                9999: (1.0, 1.0, 1.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(5561, 5562), (5553, 5554)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_unified_local_continuity_phase2h_r(
+            mesh,
+            residual_payload={
+                'paths': [
+                    {
+                        'label': '6a',
+                        'path_vertex_ids': [5562, 5464, 5553],
+                        'candidate_class_phase2e': 'phase_2b1_rank_below_cap',
+                    },
+                ],
+                'read_only': True,
+            },
+        )
+        normalized = payload['normalized_residual_coverage']
+        alias_by_label = {
+            item['canonical_label']: item
+            for item in normalized['residual_alias_groups']
+        }
+        canonical_labels = {
+            item['canonical_label']
+            for item in normalized['canonical_open_residual_paths']
+        }
+
+        self.assertEqual(normalized['canonical_open_residual_paths_total'], 14)
+        self.assertIn('6a', alias_by_label)
+        self.assertIn('6a', alias_by_label['6a']['aliases'])
+        self.assertIn('residual_6a', alias_by_label['6a']['aliases'])
+        self.assertGreaterEqual(normalized['duplicate_label_count'], 14)
+        self.assertNotIn('8a', canonical_labels)
+        self.assertFalse(any(label.startswith('solved_') for label in canonical_labels))
+        self.assertGreaterEqual(normalized['solved_label_count'], 4)
+        self.assertNotIn([5149, 3003, 3005], [
+            item['path_vertex_ids'] for item in normalized['canonical_open_residual_paths']
+        ])
+        self.assertNotIn([2557, 2558], [
+            item['path_vertex_ids'] for item in normalized['canonical_open_residual_paths']
+        ])
+        self.assertNotIn([2045, 2541, 4884], [
+            item['path_vertex_ids'] for item in normalized['canonical_open_residual_paths']
+        ])
+        self.assertNotIn([2540, 2541, 2544], [
+            item['path_vertex_ids'] for item in normalized['canonical_open_residual_paths']
+        ])
+
+    def test_unified_local_continuity_simulation_baseline_is_not_new_gain(self):
+        seam_mapping = load_module('uvsp_phase2hr_baseline_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        payload = result.unified_local_continuity_simulation_phase2h_r
+
+        policy = next(
+            item for item in payload['policies']
+            if item['policy_name'] == 'conservative_length2_only'
+        )
+        self.assertIn('legacy_selected_total', policy)
+        self.assertIn('selected_total_reported_legacy', policy)
+        self.assertGreaterEqual(policy['already_marked_baseline_selected'], 1)
+        self.assertLess(policy['newly_selected_total'], policy['selected_total_reported_legacy'])
+        self.assertEqual(policy['normalized_new_open_residual_coverage_count'], 0)
+        self.assertIn('normalized_open_residual_coverage_zero', policy['blocking_reasons'])
+        self.assertEqual(policy['production_readiness'], 'diagnostic_only')
+
+    def test_unified_local_continuity_simulation_low_straightness_blocks_readiness(self):
+        seam_mapping = load_module('uvsp_phase2hr_low_straightness_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                99: (-1.0, 0.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (1.2, 0.98, 0.0),
+                103: (1.4, 1.96, 0.0),
+                9999: (10.0, 10.0, 10.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+        policies = {
+            item['policy_name']: item
+            for item in payload['policies']
+        }
+        low_selected = [
+            candidate
+            for policy in payload['policies']
+            for candidate in policy['selected_candidates']
+            if candidate['selected_low_straightness_two_edge_bridge']
+        ]
+
+        self.assertTrue(low_selected)
+        self.assertTrue(low_selected[0]['low_straightness_warning'])
+        self.assertEqual(
+            low_selected[0]['visual_review_only_reason'],
+            'selected endpoint bridge has low path straightness',
+        )
+        self.assertGreater(
+            policies['conservative_length2_only']['selected_low_straightness_two_edge_bridge_total'],
+            0,
+        )
+        self.assertIn(
+            'low_straightness_endpoint_bridge_selected',
+            policies['conservative_length2_only']['blocking_reasons'],
+        )
+        self.assertNotEqual(
+            policies['conservative_length2_only']['production_readiness'],
+            'candidate_for_future_active_design',
+        )
+
+    def test_unified_local_continuity_simulation_reports_straight_but_tangent_weak(self):
+        seam_mapping = load_module('uvsp_phase2hr_tangent_weak_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                99: (0.0, -1.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (2.0, 0.0, 0.0),
+                103: (3.0, 0.0, 0.0),
+                9999: (10.0, 10.0, 10.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+        candidates = payload['straight_but_tangent_weak_candidates']
+
+        self.assertGreaterEqual(payload['straight_but_tangent_weak_candidate_count'], 1)
+        self.assertTrue(candidates[0]['straight_but_tangent_weak'])
+        self.assertTrue(candidates[0]['possible_tangent_model_false_negative'])
+        self.assertTrue(candidates[0]['do_not_select_automatically'])
+        self.assertFalse(any(
+            candidate['selected_by_simulation']
+            for policy in payload['policies']
+            for candidate in policy['selected_candidates']
+            if candidate['path_vertex_ids'] == candidates[0]['path_vertex_ids']
+        ))
+
+    def test_unified_local_continuity_simulation_high_risk_blocks_readiness(self):
+        seam_mapping = load_module('uvsp_phase2hr_high_risk_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (3, 4), (1, 2), (2, 3)],
+            vertex_count=5,
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.01, 0.0, 0.0),
+                2: (0.02, 0.0, 0.0),
+                3: (0.03, 0.0, 0.0),
+                4: (0.04, 0.0, 0.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (3, 4)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+        probe = next(
+            item for item in payload['policies']
+            if item['policy_name'] == 'class_balanced_probe'
+        )
+
+        self.assertGreater(probe['selected_high_risk_class_total'], 0)
+        self.assertIn('high_risk_class_selected', probe['blocking_reasons'])
+        self.assertEqual(probe['production_readiness'], 'diagnostic_only')
 
     def test_unified_local_continuity_simulation_labels_do_not_change_selection(self):
         seam_mapping = load_module('uvsp_phase2hr_label_smoke', ADDON_DIR / 'seam_mapping.py')

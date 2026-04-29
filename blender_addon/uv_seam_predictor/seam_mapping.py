@@ -2974,6 +2974,33 @@ PHASE2HR_POLICY_NAMES = (
 )
 
 
+PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS = (
+    ('2', (234, 319, 318, 214)),
+    ('3a', (3098, 3185, 3192)),
+    ('3b', (3098, 3097, 3192)),
+    ('5', (5477, 5520, 5483)),
+    ('6a', (5562, 5464, 5553)),
+    ('6b', (5562, 5463, 5553)),
+    ('8b', (5149, 5103, 3005)),
+    ('9', (3006, 3008, 3039)),
+    ('13a', (670, 669, 666)),
+    ('13b', (670, 671, 666)),
+    ('14a', (3, 2438, 2205)),
+    ('14b', (3, 700, 2205)),
+    ('15a', (2391, 1723)),
+    ('15b', (1734, 1723, 1722)),
+)
+
+
+PHASE2HR_HIGH_RISK_CLASSES = {
+    'one_edge_endpoint_to_skeleton',
+    'two_edge_same_component_local_closure',
+    'two_edge_tangent_failed_endpoint_bridge',
+    'two_edge_endpoint_to_skeleton_or_near_junction',
+    'three_edge_local_bridge',
+}
+
+
 def simulate_unified_local_continuity_phase2h_r(
     mesh,
     predicted_keys=None,
@@ -3007,6 +3034,18 @@ def simulate_unified_local_continuity_phase2h_r(
         residual_by_path,
         diagnostic_labels_by_path,
     )
+    normalized_residual_coverage = _phase2hr_normalized_residual_coverage(
+        candidates,
+        policies,
+        residual_by_path,
+        diagnostic_labels_by_path,
+    )
+    _phase2hr_annotate_policies_with_normalized_metrics(
+        policies,
+        candidates,
+        normalized_residual_coverage,
+    )
+    normalized_summary = _phase2hr_normalized_summary(policies, normalized_residual_coverage)
     reported_ids = _phase2hr_reported_candidate_ids(policies, candidates)
     per_class_reported_counts = {}
     for candidate in candidates:
@@ -3018,12 +3057,16 @@ def simulate_unified_local_continuity_phase2h_r(
         class_name: max(0, count - per_class_reported_counts.get(class_name, 0))
         for class_name, count in per_class_total_counts.items()
     }
+    straight_but_tangent_weak = [
+        candidate for candidate in candidates
+        if candidate['straight_but_tangent_weak']
+    ]
     summary = _phase2hr_summary(candidates, policies, residual_coverage)
     seam_flags_after = tuple(bool(edge.use_seam) for edge in mesh.edges)
     if seam_flags_after != seam_flags_before:
         raise RuntimeError('Unified local continuity simulation modified seam flags.')
     return {
-        'phase': '2H-R.1',
+        'phase': '2H-R.2',
         'name': 'unified_local_continuity_selector_simulation',
         'read_only': True,
         'seam_flags_unchanged': True,
@@ -3038,8 +3081,12 @@ def simulate_unified_local_continuity_phase2h_r(
         'per_class_truncation_counts': per_class_truncation_counts,
         'report_caps': dict(PHASE2HR_REPORT_CAPS),
         'summary': summary,
+        'normalized_summary': normalized_summary,
+        'normalized_residual_coverage': normalized_residual_coverage,
         'policies': policies,
         'residual_coverage': residual_coverage,
+        'straight_but_tangent_weak_candidate_count': len(straight_but_tangent_weak),
+        'straight_but_tangent_weak_candidates': straight_but_tangent_weak,
     }
 
 
@@ -3051,6 +3098,22 @@ def _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path):
     ))
     safety_tier = _phase2hr_safety_tier(report)
     score_tuple = _phase2hr_score_tuple(report, safety_tier)
+    edge_flags = list(report['edge_seam_flags_after_all_repairs'])
+    all_edges_exist = all(flag is not None for flag in edge_flags)
+    already_all_marked = bool(edge_flags and all(flag is True for flag in edge_flags))
+    low_straightness = bool(
+        report['candidate_class_phase2h'] == 'two_edge_inter_component_endpoint_bridge'
+        and report.get('path_straightness') is not None
+        and report['path_straightness'] < 0.50
+    )
+    straight_but_tangent_weak = bool(
+        report['path_length_edges'] == 2
+        and report['component_relation'] == 'different_components'
+        and report.get('path_straightness') is not None
+        and report.get('min_endpoint_tangent_alignment') is not None
+        and report['path_straightness'] >= 0.85
+        and report['min_endpoint_tangent_alignment'] < 0.30
+    )
     return {
         'candidate_id': report['candidate_id'],
         'path_vertex_ids': list(report['path_vertex_ids']),
@@ -3058,6 +3121,8 @@ def _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path):
         'path_edge_keys': list(report['path_edge_keys']),
         'blender_edge_indices': list(report['blender_edge_indices']),
         'edge_seam_flags_after_all_repairs': list(report['edge_seam_flags_after_all_repairs']),
+        'all_edges_exist_in_blender': all_edges_exist,
+        'already_all_marked': already_all_marked,
         'endpoint_seam_vertex_flags': list(report['endpoint_seam_vertex_flags']),
         'intermediate_seam_vertex_flags': list(report['intermediate_seam_vertex_flags']),
         'vertex_seam_degrees': list(report['vertex_seam_degrees']),
@@ -3093,6 +3158,14 @@ def _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path):
         'not_applied_to_mesh': True,
         'simulated_skip_reason': None,
         'residual_match_labels': labels,
+        'selected_low_straightness_two_edge_bridge': low_straightness,
+        'low_straightness_warning': low_straightness,
+        'visual_review_only_reason': (
+            'selected endpoint bridge has low path straightness' if low_straightness else None
+        ),
+        'straight_but_tangent_weak': straight_but_tangent_weak,
+        'possible_tangent_model_false_negative': straight_but_tangent_weak,
+        'do_not_select_automatically': straight_but_tangent_weak,
         'would_require_new_repair_class': bool(report['would_require_new_repair_class']),
         'would_require_cap_or_ranking_change': bool(report['would_require_parameter_or_cap_change']),
         'would_require_topology_remapping': bool(report['would_require_topology_remapping']),
@@ -3231,6 +3304,8 @@ def _phase2hr_policy_report(policy_name, candidates, diagnostic_labels_by_path):
 def _phase2hr_policy_eligibility(policy_name, candidate, selected_by_class):
     if candidate['candidate_class'] == 'non_original_or_missing_blender_edge':
         return False, 'unsafe_candidate'
+    if candidate.get('straight_but_tangent_weak', False):
+        return False, 'straight_but_tangent_weak_do_not_select_automatically'
     if policy_name == 'conservative_length2_only':
         if candidate['path_length_edges'] != 2:
             return False, 'policy_length_excluded'
@@ -3451,6 +3526,375 @@ def _phase2hr_recommended_next_action(candidates_by_class, residual_by_policy, r
     ):
         return 'revise_phase_2b1_ranking_or_cap'
     return 'defer_due_to_unsafe_candidate_distribution'
+
+
+def _phase2hr_normalized_residual_coverage(candidates, policies, residual_by_path, diagnostic_labels_by_path):
+    open_by_label = {
+        label: _phase2h_path_key(path)
+        for label, path in PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS
+    }
+    open_by_path = {path: label for label, path in open_by_label.items()}
+    candidate_by_path = {
+        _phase2h_path_key(candidate['path_vertex_ids']): candidate
+        for candidate in candidates
+    }
+    alias_groups = []
+    duplicate_label_count = 0
+    for label, path in PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS:
+        key = _phase2h_path_key(path)
+        aliases = set(diagnostic_labels_by_path.get(key, ()))
+        aliases.add(label)
+        aliases.add(f'residual_{label}')
+        ordered = _phase2hr_order_aliases(label, aliases)
+        duplicate_label_count += max(0, len(ordered) - 1)
+        alias_groups.append({
+            'canonical_label': label,
+            'aliases': ordered,
+            'path_vertex_ids': list(key),
+        })
+    solved_labels = sorted({
+        label
+        for labels in diagnostic_labels_by_path.values()
+        for label in labels
+        if str(label).startswith('solved_')
+    })
+    policy_selected_paths = {
+        policy['policy_name']: {
+            _phase2h_path_key(item['path_vertex_ids']): item
+            for item in policy['selected_candidates']
+        }
+        for policy in policies
+    }
+    selected_by_policy = {}
+    still_open_by_policy = {}
+    normalized_policy_coverage = {}
+    for policy in policies:
+        policy_name = policy['policy_name']
+        selected_labels = []
+        for label, path in open_by_label.items():
+            selected = policy_selected_paths[policy_name].get(path)
+            if selected is not None and not _phase2hr_is_baseline_candidate(selected):
+                selected_labels.append(label)
+        selected_labels = sorted(selected_labels, key=_phase2hr_open_label_sort_key)
+        selected_by_policy[policy_name] = selected_labels
+        still_open = [
+            label for label in sorted(open_by_label, key=_phase2hr_open_label_sort_key)
+            if label not in set(selected_labels)
+        ]
+        still_open_by_policy[policy_name] = still_open
+        normalized_policy_coverage[policy_name] = {
+            'count': len(selected_labels),
+            'labels': selected_labels,
+            'denominator': len(open_by_label),
+        }
+    open_details = []
+    for label, path in PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS:
+        key = _phase2h_path_key(path)
+        candidate = candidate_by_path.get(key)
+        residual = residual_by_path.get(key, {})
+        selected_normalized = {
+            policy_name: (
+                key in selected_paths and not _phase2hr_is_baseline_candidate(selected_paths[key])
+            )
+            for policy_name, selected_paths in policy_selected_paths.items()
+        }
+        skipped_normalized = {
+            policy_name: not selected
+            for policy_name, selected in selected_normalized.items()
+        }
+        reasons = {
+            policy_name: (
+                'selected_new_open_residual'
+                if selected_normalized[policy_name]
+                else _phase2hr_normalized_skip_reason(policy, label, key, candidate)
+            )
+            for policy in policies
+            for policy_name in (policy['policy_name'],)
+        }
+        open_details.append(_phase2hr_open_residual_detail(
+            label=label,
+            aliases=next(group['aliases'] for group in alias_groups if group['canonical_label'] == label),
+            path=key,
+            candidate=candidate,
+            residual=residual,
+            selected_normalized=selected_normalized,
+            skipped_normalized=skipped_normalized,
+            reasons=reasons,
+        ))
+    already_marked_labels = set(solved_labels)
+    for candidate in candidates:
+        if _phase2hr_is_baseline_candidate(candidate):
+            already_marked_labels.update(candidate['residual_match_labels'])
+    legacy_label_space = {
+        policy['policy_name']: {
+            'count': policy.get('legacy_residual_coverage_count', len(policy.get('residual_paths_selected', ()))),
+            'labels': list(policy.get('legacy_residual_coverage_labels', policy.get('residual_paths_selected', ()))),
+        }
+        for policy in policies
+    }
+    return {
+        'canonical_open_residual_paths_total': len(PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS),
+        'canonical_open_residual_paths': [
+            {'canonical_label': label, 'path_vertex_ids': list(_phase2h_path_key(path))}
+            for label, path in PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS
+        ],
+        'unique_open_residual_paths_selected_by_policy': selected_by_policy,
+        'unique_open_residual_paths_still_open_by_policy': still_open_by_policy,
+        'duplicate_label_count': duplicate_label_count,
+        'solved_label_count': len(solved_labels),
+        'already_marked_baseline_label_count': len(already_marked_labels),
+        'residual_alias_groups': alias_groups,
+        'legacy_label_space_coverage_by_policy': legacy_label_space,
+        'normalized_open_residual_coverage_by_policy': normalized_policy_coverage,
+        'open_residual_details': open_details,
+    }
+
+
+def _phase2hr_annotate_policies_with_normalized_metrics(policies, candidates, normalized):
+    open_labels = {
+        item['canonical_label']
+        for item in normalized['canonical_open_residual_paths']
+    }
+    open_path_to_label = {
+        tuple(item['path_vertex_ids']): item['canonical_label']
+        for item in normalized['canonical_open_residual_paths']
+    }
+    for policy in policies:
+        selected = policy['selected_candidates']
+        baseline = [item for item in selected if _phase2hr_is_baseline_candidate(item)]
+        new_selected = [item for item in selected if not _phase2hr_is_baseline_candidate(item)]
+        new_open_labels = []
+        for item in new_selected:
+            label = open_path_to_label.get(_phase2h_path_key(item['path_vertex_ids']))
+            if label is not None:
+                new_open_labels.append(label)
+        new_open_labels = sorted(set(new_open_labels), key=_phase2hr_open_label_sort_key)
+        non_residual = [
+            item for item in new_selected
+            if _phase2h_path_key(item['path_vertex_ids']) not in open_path_to_label
+        ]
+        low_straightness = [
+            item for item in new_selected
+            if item.get('selected_low_straightness_two_edge_bridge', False)
+        ]
+        high_risk = [
+            item for item in new_selected
+            if item['candidate_class'] in PHASE2HR_HIGH_RISK_CLASSES
+        ]
+        duplicate_new = [
+            item for item in new_selected
+            if item['candidate_class'] == 'two_edge_duplicate_alternative'
+        ]
+        unsafe_new = [
+            item for item in new_selected
+            if item['candidate_class'] == 'non_original_or_missing_blender_edge'
+        ]
+        straight_but_tangent_weak = [
+            item for item in new_selected
+            if item.get('straight_but_tangent_weak', False)
+        ]
+        policy['legacy_selected_total'] = policy['selected_total']
+        policy['selected_total_reported_legacy'] = policy['selected_total']
+        policy['legacy_residual_coverage_labels'] = list(policy.get('residual_paths_selected', ()))
+        policy['legacy_residual_coverage_count'] = len(policy['legacy_residual_coverage_labels'])
+        policy['already_marked_baseline_selected'] = len(baseline)
+        policy['newly_selected_total'] = len(new_selected)
+        policy['newly_selected_by_class'] = _count_by_key(new_selected, 'candidate_class')
+        policy['newly_selected_open_residual_labels'] = new_open_labels
+        policy['newly_selected_non_residual_candidates'] = non_residual
+        policy['unsafe_selected_total'] = len(unsafe_new)
+        policy['duplicate_selected_total'] = len(duplicate_new)
+        policy['selected_high_risk_class_total'] = len(high_risk)
+        policy['selected_low_straightness_two_edge_bridge_total'] = len(low_straightness)
+        policy['selected_straight_but_tangent_weak_total'] = len(straight_but_tangent_weak)
+        policy['normalized_new_open_residual_coverage_count'] = len(new_open_labels)
+        policy['normalized_new_open_residual_coverage_labels'] = new_open_labels
+        decision = _phase2hr_policy_decision(policy)
+        policy.update(decision)
+
+
+def _phase2hr_policy_decision(policy):
+    blocking = []
+    if policy['normalized_new_open_residual_coverage_count'] == 0:
+        blocking.append('normalized_open_residual_coverage_zero')
+    if policy['already_marked_baseline_selected'] >= policy['legacy_selected_total']:
+        blocking.append('coverage_inflated_by_already_marked_baseline')
+    if policy['selected_low_straightness_two_edge_bridge_total'] > 0:
+        blocking.append('low_straightness_endpoint_bridge_selected')
+    if policy['selected_high_risk_class_total'] > 0:
+        blocking.append('high_risk_class_selected')
+    if policy['unsafe_selected_total'] > 0:
+        blocking.append('unsafe_candidate_selected')
+    if policy['duplicate_selected_total'] > 0:
+        blocking.append('duplicate_candidate_selected')
+    if policy['normalized_new_open_residual_coverage_count'] == 0:
+        readiness = 'diagnostic_only'
+    elif policy['unsafe_selected_total'] or policy['selected_high_risk_class_total']:
+        readiness = 'diagnostic_only'
+    elif policy['selected_low_straightness_two_edge_bridge_total']:
+        readiness = 'candidate_for_visual_review'
+    else:
+        readiness = 'candidate_for_future_active_design'
+    return {
+        'high_risk_new_selection_count': policy['selected_high_risk_class_total'],
+        'low_straightness_new_selection_count': policy['selected_low_straightness_two_edge_bridge_total'],
+        'already_marked_baseline_count': policy['already_marked_baseline_selected'],
+        'duplicate_new_selection_count': policy['duplicate_selected_total'],
+        'unsafe_new_selection_count': policy['unsafe_selected_total'],
+        'would_this_policy_be_safe_for_active_phase2j': bool(
+            readiness == 'candidate_for_future_active_design' and not blocking
+        ),
+        'blocking_reasons': blocking,
+        'production_readiness': readiness,
+    }
+
+
+def _phase2hr_normalized_summary(policies, normalized):
+    coverage = normalized['normalized_open_residual_coverage_by_policy']
+    ranked = sorted(
+        (
+            {
+                'policy_name': policy_name,
+                'normalized_new_open_residual_coverage_count': item['count'],
+                'normalized_new_open_residual_coverage_labels': item['labels'],
+            }
+            for policy_name, item in coverage.items()
+        ),
+        key=lambda item: (-item['normalized_new_open_residual_coverage_count'], item['policy_name']),
+    )
+    best = ranked[0] if ranked else {
+        'policy_name': None,
+        'normalized_new_open_residual_coverage_count': 0,
+        'normalized_new_open_residual_coverage_labels': [],
+    }
+    policies_with_low = [
+        policy['policy_name'] for policy in policies
+        if policy.get('selected_low_straightness_two_edge_bridge_total', 0) > 0
+    ]
+    policies_with_high_risk = [
+        policy['policy_name'] for policy in policies
+        if policy.get('selected_high_risk_class_total', 0) > 0
+    ]
+    ready = [
+        policy['policy_name'] for policy in policies
+        if policy.get('would_this_policy_be_safe_for_active_phase2j', False)
+    ]
+    straight_weak_count = sum(
+        policy.get('selected_straight_but_tangent_weak_total', 0) for policy in policies
+    )
+    return {
+        'canonical_open_residual_paths_total': normalized['canonical_open_residual_paths_total'],
+        'best_policy_by_normalized_open_residual_coverage': best['policy_name'],
+        'best_policy_new_open_residual_coverage_count': best['normalized_new_open_residual_coverage_count'],
+        'best_policy_new_open_residual_coverage_labels': best['normalized_new_open_residual_coverage_labels'],
+        'policies_ranked_by_normalized_coverage': ranked,
+        'policies_with_low_straightness_selected': policies_with_low,
+        'policies_with_high_risk_class_selected': policies_with_high_risk,
+        'policies_production_ready': ready,
+        'recommended_next_action_normalized': _phase2hr_recommended_next_action_normalized(
+            policies_with_low,
+            straight_weak_count,
+            ready,
+            best['normalized_new_open_residual_coverage_count'],
+        ),
+    }
+
+
+def _phase2hr_recommended_next_action_normalized(policies_with_low, straight_weak_count, ready, best_count):
+    if policies_with_low:
+        return 'inspect_low_straightness_selected_candidates'
+    if straight_weak_count:
+        return 'inspect_straight_but_tangent_weak_candidates'
+    if best_count > 0 and ready:
+        return 'design_narrow_phase2j_from_normalized_policy'
+    if best_count > 0:
+        return 'refine_unified_scoring_before_active_repair'
+    return 'no_active_repair_recommended'
+
+
+def _phase2hr_open_residual_detail(
+    *,
+    label,
+    aliases,
+    path,
+    candidate,
+    residual,
+    selected_normalized,
+    skipped_normalized,
+    reasons,
+):
+    return {
+        'canonical_residual_label': label,
+        'aliases': aliases,
+        'path_vertex_ids': list(path),
+        'current_class': residual.get('candidate_class_phase2e'),
+        'current_status': residual.get('candidate_class_phase2e'),
+        'current_rejection_or_skip_reason': (
+            residual.get('phase_2b1_rejection_reason')
+            or residual.get('skipped_reason')
+            or residual.get('phase_2b_rejection_reason')
+            or residual.get('phase_2a1_rejection_reason')
+        ),
+        'unified_candidate_class': None if candidate is None else candidate['candidate_class'],
+        'all_edges_exist_in_blender': False if candidate is None else candidate['all_edges_exist_in_blender'],
+        'edge_seam_flags_after_all_repairs': None if candidate is None else candidate['edge_seam_flags_after_all_repairs'],
+        'already_all_marked': False if candidate is None else candidate['already_all_marked'],
+        'selected_by_each_policy_normalized': selected_normalized,
+        'skipped_by_each_policy_normalized': skipped_normalized,
+        'reason_selected_or_skipped_by_policy': reasons,
+        'path_straightness': None if candidate is None else candidate['path_straightness'],
+        'min_endpoint_tangent_alignment': None if candidate is None else candidate['min_endpoint_tangent_alignment'],
+        'endpoint_tangent_alignments': None if candidate is None else candidate['endpoint_tangent_alignments'],
+        'safety_tier': None if candidate is None else candidate['safety_tier'],
+        'loop_risk': None if candidate is None else candidate['loop_risk'],
+        'topology_risk': None if candidate is None else candidate['topology_risk'],
+        'would_require_new_repair_class': False if candidate is None else candidate['would_require_new_repair_class'],
+        'would_require_cap_or_ranking_change': False if candidate is None else candidate['would_require_cap_or_ranking_change'],
+        'would_require_topology_remapping': True if candidate is None else candidate['would_require_topology_remapping'],
+    }
+
+
+def _phase2hr_normalized_skip_reason(policy, label, path, candidate):
+    selected = {
+        _phase2h_path_key(item['path_vertex_ids']): item
+        for item in policy['selected_candidates']
+    }
+    if path in selected and _phase2hr_is_baseline_candidate(selected[path]):
+        return 'already_marked_baseline_not_new_gain'
+    for class_items in policy.get('top_rejected_candidates_by_class', {}).values():
+        for item in class_items:
+            if _phase2h_path_key(item['path_vertex_ids']) == path:
+                return item.get('simulated_skip_reason') or 'not_selected_by_simulation_policy'
+    if candidate is None:
+        return 'no_editable_candidate_for_open_residual'
+    return 'not_selected_by_simulation_policy'
+
+
+def _phase2hr_is_baseline_candidate(candidate):
+    return bool(
+        candidate.get('already_all_marked', False)
+        or candidate.get('candidate_class') == 'current_selected_repair'
+        or any(str(label).startswith('solved_') for label in candidate.get('residual_match_labels', ()))
+    )
+
+
+def _phase2hr_order_aliases(canonical_label, aliases):
+    result = [canonical_label]
+    residual_label = f'residual_{canonical_label}'
+    if residual_label in aliases:
+        result.append(residual_label)
+    for label in sorted(aliases):
+        if label not in result:
+            result.append(label)
+    return result
+
+
+def _phase2hr_open_label_sort_key(label):
+    order = {
+        item_label: index
+        for index, (item_label, _) in enumerate(PHASE2HR_CANONICAL_OPEN_RESIDUAL_PATHS)
+    }
+    return order.get(label, len(order))
 
 
 def _safe_ratio(value, denominator):
