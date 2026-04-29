@@ -2476,6 +2476,207 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(first['summary'], second['summary'])
         self.assertEqual(first['candidates'], second['candidates'])
 
+    def test_unified_local_continuity_simulation_sidecar_schema_and_read_only(self):
+        seam_mapping = load_module('uvsp_phase2hr_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prediction_path = str(Path(temp_dir) / 'prediction.json')
+            Path(prediction_path).write_text('{}', encoding='utf-8')
+            sidecar = seam_mapping.write_unified_local_continuity_simulation_phase2h_r(
+                prediction_path,
+                result,
+            )
+            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
+
+        self.assertTrue(sidecar.endswith('_unified_local_continuity_simulation_phase2h_r.json'))
+        self.assertTrue(payload['read_only'])
+        self.assertTrue(payload['seam_flags_unchanged'])
+        self.assertTrue(payload['not_applied_to_mesh'])
+        self.assertTrue(payload['compact_sidecar'])
+        self.assertFalse(payload['probabilities_used'])
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertEqual(
+            [policy['policy_name'] for policy in payload['policies']],
+            [
+                'conservative_length2_only',
+                'conservative_length1_to_3',
+                'class_balanced_probe',
+            ],
+        )
+        required_candidate_fields = {
+            'candidate_id',
+            'path_vertex_ids',
+            'path_length_edges',
+            'path_edge_keys',
+            'blender_edge_indices',
+            'edge_seam_flags_after_all_repairs',
+            'endpoint_seam_vertex_flags',
+            'intermediate_seam_vertex_flags',
+            'vertex_seam_degrees',
+            'degree_pattern',
+            'component_ids',
+            'component_relation',
+            'would_create_loop',
+            'existing_seam_distance_between_endpoints_if_available',
+            'total_path_length',
+            'endpoint_distance',
+            'normalized_total_path_length_if_mesh_scale_available',
+            'normalized_endpoint_distance_if_mesh_scale_available',
+            'path_straightness',
+            'endpoint_tangent_alignments',
+            'min_endpoint_tangent_alignment',
+            'tangent_available_flags',
+            'duplicate_endpoint_pair_key',
+            'candidate_class',
+            'safety_tier',
+            'continuity_score_tuple',
+            'loop_risk',
+            'tangent_risk',
+            'length_risk',
+            'topology_risk',
+            'selected_by_simulation',
+            'simulation_candidate_for_review',
+            'not_applied_to_mesh',
+            'simulated_skip_reason',
+            'residual_match_labels',
+            'would_require_new_repair_class',
+            'would_require_cap_or_ranking_change',
+            'would_require_topology_remapping',
+        }
+        selected = payload['policies'][0]['selected_candidates']
+        self.assertTrue(selected)
+        self.assertTrue(required_candidate_fields.issubset(selected[0]))
+        self.assertTrue(selected[0]['selected_by_simulation'])
+        self.assertTrue(selected[0]['simulation_candidate_for_review'])
+        self.assertTrue(selected[0]['not_applied_to_mesh'])
+        self.assertIn('summary', payload)
+        self.assertIn('residual_coverage', payload)
+        self.assertIn('per_class_reported_counts', payload)
+        self.assertIn('per_class_truncation_counts', payload)
+        self.assertIn('write_unified_local_continuity_simulation_phase2h_r', read_addon_file('operators.py'))
+
+    def test_unified_local_continuity_simulation_labels_do_not_change_selection(self):
+        seam_mapping = load_module('uvsp_phase2hr_label_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        no_label = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+        with_label = seam_mapping.simulate_unified_local_continuity_phase2h_r(
+            mesh,
+            residual_payload={
+                'paths': [
+                    {
+                        'label': 'manual_label',
+                        'path_vertex_ids': [100, 101, 102],
+                        'candidate_class_phase2e': 'manual',
+                    },
+                ],
+                'read_only': True,
+            },
+        )
+
+        def selected_paths(payload):
+            return {
+                policy['policy_name']: [
+                    item['path_vertex_ids'] for item in policy['selected_candidates']
+                ]
+                for policy in payload['policies']
+            }
+
+        self.assertEqual(selected_paths(no_label), selected_paths(with_label))
+        labeled = [
+            item
+            for policy in with_label['policies']
+            for item in policy['residual_matched_candidates']
+            if 'manual_label' in item['residual_match_labels']
+        ]
+        self.assertTrue(labeled)
+        self.assertNotIn('manual_label', json.dumps(no_label))
+
+    def test_unified_local_continuity_simulation_duplicate_suppression_and_determinism(self):
+        seam_mapping = load_module('uvsp_phase2hr_duplicate_smoke', ADDON_DIR / 'seam_mapping.py')
+        coords = {
+            99: (-0.01, 0.0, 0.0),
+            100: (0.0, 0.0, 0.0),
+            101: (0.01, 0.0, 0.0),
+            102: (0.02, 0.0, 0.0),
+            103: (0.03, 0.0, 0.0),
+            104: (0.01, 0.01, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102), (100, 104), (104, 102)],
+            vertex_count=10000,
+            coords=coords,
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        first = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+        second = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+
+        self.assertEqual(first['summary'], second['summary'])
+        self.assertEqual(
+            [
+                [item['candidate_id'] for item in policy['selected_candidates']]
+                for policy in first['policies']
+            ],
+            [
+                [item['candidate_id'] for item in policy['selected_candidates']]
+                for policy in second['policies']
+            ],
+        )
+        self.assertGreaterEqual(
+            sum(policy['duplicate_candidates_suppressed'] for policy in first['policies']),
+            1,
+        )
+
+    def test_unified_local_continuity_simulation_compact_and_probability_free(self):
+        seam_mapping = load_module('uvsp_phase2hr_compact_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = []
+        predicted_keys = []
+        coords = {9999: (1.0, 1.0, 1.0)}
+        for index in range(14):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 700 + index * 10, y=float(index))
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_unified_local_continuity_phase2h_r(mesh)
+        text = json.dumps(payload).lower()
+
+        self.assertTrue(payload['compact_sidecar'])
+        self.assertGreater(payload['total_candidates_considered'], 0)
+        self.assertGreater(payload['total_candidates_reported'], 0)
+        self.assertIn('selected_candidates', payload['policies'][0])
+        self.assertIn('residual_matched_candidates', payload['policies'][0])
+        self.assertIn('top_rejected_candidates_by_class', payload['policies'][0])
+        self.assertIn('per_class_reported_counts', payload)
+        self.assertIn('per_class_truncation_counts', payload)
+        self.assertNotIn('model_probability', text)
+        self.assertNotIn('probability_score', text)
+        self.assertFalse(payload['probabilities_used'])
+
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
         result = seam_mapping.SeamApplyResult(

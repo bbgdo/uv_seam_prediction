@@ -84,6 +84,7 @@ class SeamApplyResult:
     production_hardcoded_path_exceptions_enabled: bool = False
     production_hardcoded_path_exceptions_removed: bool = True
     diagnostic_path_labels_read_only: bool = True
+    unified_local_continuity_simulation_phase2h_r: dict | None = None
 
 
 def load_predicted_edge_keys(json_path):
@@ -318,6 +319,14 @@ def apply_seam_keys(
         endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
         residual_payload=residual_gap_phase2e_debug,
     )
+    unified_local_continuity_simulation_phase2h_r = simulate_unified_local_continuity_phase2h_r(
+        mesh,
+        predicted_keys=applied_keys,
+        local_repair_reports=repair['candidate_reports'],
+        two_edge_reports=two_edge_repair['candidate_reports'],
+        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+        residual_payload=residual_gap_phase2e_debug,
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -475,6 +484,7 @@ def apply_seam_keys(
         production_hardcoded_path_exceptions_enabled=False,
         production_hardcoded_path_exceptions_removed=True,
         diagnostic_path_labels_read_only=True,
+        unified_local_continuity_simulation_phase2h_r=unified_local_continuity_simulation_phase2h_r,
     )
 
 
@@ -2356,7 +2366,7 @@ PHASE2H_CANDIDATE_DETAIL_CAPS = {
 }
 
 
-def collect_general_residual_candidates_phase2h(
+def _phase2h_collect_candidate_reports(
     mesh,
     predicted_keys=None,
     local_repair_reports=(),
@@ -2364,7 +2374,6 @@ def collect_general_residual_candidates_phase2h(
     endpoint_bridge_reports=(),
     residual_payload=None,
 ):
-    seam_flags_before = tuple(bool(edge.use_seam) for edge in mesh.edges)
     edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
     seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
     component_id_of = _seam_component_ids(seam_adjacency)
@@ -2455,6 +2464,26 @@ def collect_general_residual_candidates_phase2h(
             residual_by_path=residual_by_path,
         ))
 
+    return reports, residual_by_path
+
+
+def collect_general_residual_candidates_phase2h(
+    mesh,
+    predicted_keys=None,
+    local_repair_reports=(),
+    two_edge_reports=(),
+    endpoint_bridge_reports=(),
+    residual_payload=None,
+):
+    seam_flags_before = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    reports, residual_by_path = _phase2h_collect_candidate_reports(
+        mesh,
+        predicted_keys=predicted_keys,
+        local_repair_reports=local_repair_reports,
+        two_edge_reports=two_edge_reports,
+        endpoint_bridge_reports=endpoint_bridge_reports,
+        residual_payload=residual_payload,
+    )
     stored_reports, truncation = _phase2h_apply_detail_caps(reports)
     residual_mapping = _phase2h_residual_mapping(residual_by_path, reports, stored_reports)
     summary = _phase2h_summary(reports, stored_reports, truncation, residual_mapping)
@@ -2932,6 +2961,498 @@ def _phase2h_unmatched_reason(residual, matches):
     return 'unknown'
 
 
+PHASE2HR_REPORT_CAPS = {
+    'top_rejected_per_class': 10,
+    'unsafe_examples_per_class': 5,
+}
+
+
+PHASE2HR_POLICY_NAMES = (
+    'conservative_length2_only',
+    'conservative_length1_to_3',
+    'class_balanced_probe',
+)
+
+
+def simulate_unified_local_continuity_phase2h_r(
+    mesh,
+    predicted_keys=None,
+    local_repair_reports=(),
+    two_edge_reports=(),
+    endpoint_bridge_reports=(),
+    residual_payload=None,
+):
+    seam_flags_before = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    reports, residual_by_path = _phase2h_collect_candidate_reports(
+        mesh,
+        predicted_keys=predicted_keys,
+        local_repair_reports=local_repair_reports,
+        two_edge_reports=two_edge_reports,
+        endpoint_bridge_reports=endpoint_bridge_reports,
+        residual_payload=residual_payload,
+    )
+    diagnostic_labels_by_path = _phase2hr_diagnostic_labels_by_path(residual_payload)
+    candidates = [
+        _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path)
+        for report in reports
+    ]
+    candidates.sort(key=_phase2hr_sort_key)
+    policies = [
+        _phase2hr_policy_report(policy_name, candidates, diagnostic_labels_by_path)
+        for policy_name in PHASE2HR_POLICY_NAMES
+    ]
+    residual_coverage = _phase2hr_residual_coverage(
+        candidates,
+        policies,
+        residual_by_path,
+        diagnostic_labels_by_path,
+    )
+    reported_ids = _phase2hr_reported_candidate_ids(policies, candidates)
+    per_class_reported_counts = {}
+    for candidate in candidates:
+        if candidate['candidate_id'] in reported_ids:
+            class_name = candidate['candidate_class']
+            per_class_reported_counts[class_name] = per_class_reported_counts.get(class_name, 0) + 1
+    per_class_total_counts = _count_by_key(candidates, 'candidate_class')
+    per_class_truncation_counts = {
+        class_name: max(0, count - per_class_reported_counts.get(class_name, 0))
+        for class_name, count in per_class_total_counts.items()
+    }
+    summary = _phase2hr_summary(candidates, policies, residual_coverage)
+    seam_flags_after = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    if seam_flags_after != seam_flags_before:
+        raise RuntimeError('Unified local continuity simulation modified seam flags.')
+    return {
+        'phase': '2H-R.1',
+        'name': 'unified_local_continuity_selector_simulation',
+        'read_only': True,
+        'seam_flags_unchanged': True,
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'compact_sidecar': True,
+        'total_candidates_considered': len(candidates),
+        'total_candidates_reported': len(reported_ids),
+        'total_candidates_truncated': max(0, len(candidates) - len(reported_ids)),
+        'per_class_reported_counts': per_class_reported_counts,
+        'per_class_truncation_counts': per_class_truncation_counts,
+        'report_caps': dict(PHASE2HR_REPORT_CAPS),
+        'summary': summary,
+        'policies': policies,
+        'residual_coverage': residual_coverage,
+    }
+
+
+def _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path):
+    path = tuple(report['path_vertex_ids'])
+    labels = sorted(set(
+        list(report.get('residual_match_labels', ()))
+        + diagnostic_labels_by_path.get(_phase2h_path_key(path), [])
+    ))
+    safety_tier = _phase2hr_safety_tier(report)
+    score_tuple = _phase2hr_score_tuple(report, safety_tier)
+    return {
+        'candidate_id': report['candidate_id'],
+        'path_vertex_ids': list(report['path_vertex_ids']),
+        'path_length_edges': report['path_length_edges'],
+        'path_edge_keys': list(report['path_edge_keys']),
+        'blender_edge_indices': list(report['blender_edge_indices']),
+        'edge_seam_flags_after_all_repairs': list(report['edge_seam_flags_after_all_repairs']),
+        'endpoint_seam_vertex_flags': list(report['endpoint_seam_vertex_flags']),
+        'intermediate_seam_vertex_flags': list(report['intermediate_seam_vertex_flags']),
+        'vertex_seam_degrees': list(report['vertex_seam_degrees']),
+        'degree_pattern': list(report['degree_pattern']),
+        'component_ids': list(report['component_ids']),
+        'component_relation': report['component_relation'],
+        'would_create_loop': bool(report['would_create_loop']),
+        'existing_seam_distance_between_endpoints_if_available': (
+            report['existing_seam_distance_between_endpoints_if_available']
+        ),
+        'total_path_length': report['total_path_length'],
+        'endpoint_distance': report['endpoint_distance'],
+        'normalized_total_path_length_if_mesh_scale_available': (
+            report['normalized_total_path_length_if_mesh_scale_available']
+        ),
+        'normalized_endpoint_distance_if_mesh_scale_available': (
+            report['normalized_endpoint_distance_if_mesh_scale_available']
+        ),
+        'path_straightness': report['path_straightness'],
+        'endpoint_tangent_alignments': report['endpoint_tangent_alignments'],
+        'min_endpoint_tangent_alignment': report['min_endpoint_tangent_alignment'],
+        'tangent_available_flags': list(report['tangent_available_flags']),
+        'duplicate_endpoint_pair_key': list(report['duplicate_endpoint_pair_key']),
+        'candidate_class': report['candidate_class_phase2h'],
+        'safety_tier': safety_tier,
+        'continuity_score_tuple': score_tuple,
+        'loop_risk': report['loop_risk'],
+        'tangent_risk': report['tangent_risk'],
+        'length_risk': report['length_risk'],
+        'topology_risk': report['topology_risk'],
+        'selected_by_simulation': False,
+        'simulation_candidate_for_review': False,
+        'not_applied_to_mesh': True,
+        'simulated_skip_reason': None,
+        'residual_match_labels': labels,
+        'would_require_new_repair_class': bool(report['would_require_new_repair_class']),
+        'would_require_cap_or_ranking_change': bool(report['would_require_parameter_or_cap_change']),
+        'would_require_topology_remapping': bool(report['would_require_topology_remapping']),
+        'would_be_allowed_by_phase_2b1_current_predicate': bool(
+            report.get('would_be_allowed_by_phase_2b1_current_predicate', False)
+        ),
+        'rank_v2_if_available': report.get('rank_v2_if_available'),
+    }
+
+
+def _phase2hr_safety_tier(report):
+    class_name = report['candidate_class_phase2h']
+    if class_name == 'non_original_or_missing_blender_edge':
+        return 'unsafe'
+    if class_name in ('unsupported_or_unknown', 'two_edge_tangent_failed_endpoint_bridge'):
+        return 'low'
+    if class_name in ('current_selected_repair', 'one_edge_missing_continuity'):
+        return 'high'
+    if class_name == 'two_edge_inter_component_endpoint_bridge':
+        if report['tangent_risk'] == 'low' and report['length_risk'] == 'local':
+            return 'high'
+        return 'medium'
+    if class_name == 'three_edge_local_bridge' and report['length_risk'] == 'local':
+        return 'high'
+    return 'medium'
+
+
+def _phase2hr_score_tuple(report, safety_tier):
+    safety_order = {'high': 0, 'medium': 1, 'low': 2, 'unsafe': 3}
+    loop_order = {'none': 0, 'local_loop': 1, 'unknown': 2, 'loop': 3}
+    component_order = {
+        'different_components': 0,
+        'same_component': 1,
+        'endpoint_not_seam': 2,
+        'no_endpoint_seam': 3,
+        'unknown': 4,
+    }
+    min_alignment = report.get('min_endpoint_tangent_alignment')
+    straightness = report.get('path_straightness')
+    normalized_total = report.get('normalized_total_path_length_if_mesh_scale_available')
+    normalized_endpoint = report.get('normalized_endpoint_distance_if_mesh_scale_available')
+    tangent_flags = report.get('tangent_available_flags') or []
+    return [
+        safety_order.get(safety_tier, 4),
+        0 if all(tangent_flags) else 1,
+        1.0 if min_alignment is None else -float(min_alignment),
+        1.0 if straightness is None else -float(straightness),
+        999.0 if normalized_total is None else float(normalized_total),
+        999.0 if normalized_endpoint is None else float(normalized_endpoint),
+        loop_order.get(report.get('loop_risk'), 4),
+        component_order.get(report.get('component_relation'), 5),
+        1 if report.get('candidate_class_phase2h') == 'two_edge_duplicate_alternative' else 0,
+        list(report.get('path_vertex_ids', ())),
+    ]
+
+
+def _phase2hr_sort_key(candidate):
+    score = candidate['continuity_score_tuple']
+    return tuple(score[:-1]) + (tuple(score[-1]),)
+
+
+def _phase2hr_policy_report(policy_name, candidates, diagnostic_labels_by_path):
+    selected = []
+    skipped_by_class = {}
+    skipped_reasons = {}
+    unsafe_examples = {}
+    duplicate_suppressed = 0
+    rejected = []
+    class_counts = {}
+    endpoint_pairs = set()
+    for candidate in candidates:
+        eligible, reason = _phase2hr_policy_eligibility(policy_name, candidate, class_counts)
+        if eligible and _phase2hr_candidate_uses_duplicate_endpoint(candidate, endpoint_pairs):
+            eligible = False
+            reason = 'duplicate_endpoint_pair_suppressed'
+            duplicate_suppressed += 1
+        if eligible:
+            item = dict(candidate)
+            item['selected_by_simulation'] = True
+            item['simulation_candidate_for_review'] = True
+            item['simulated_skip_reason'] = None
+            selected.append(item)
+            class_name = item['candidate_class']
+            class_counts[class_name] = class_counts.get(class_name, 0) + 1
+            endpoint_pairs.add(tuple(item['duplicate_endpoint_pair_key']))
+            continue
+        class_name = candidate['candidate_class']
+        skipped_by_class[class_name] = skipped_by_class.get(class_name, 0) + 1
+        skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+        item = dict(candidate)
+        item['simulated_skip_reason'] = reason
+        if reason == 'unsafe_candidate':
+            examples = unsafe_examples.setdefault(class_name, [])
+            if len(examples) < PHASE2HR_REPORT_CAPS['unsafe_examples_per_class']:
+                examples.append(item)
+        rejected.append(item)
+    selected_by_class = _count_by_key(selected, 'candidate_class')
+    residual_paths_selected = sorted({
+        label
+        for item in selected
+        for label in item['residual_match_labels']
+    })
+    all_labels = sorted({
+        label
+        for labels in diagnostic_labels_by_path.values()
+        for label in labels
+    })
+    top_rejected = _phase2hr_top_rejected_by_class(rejected)
+    return {
+        'policy_name': policy_name,
+        'selected_total': len(selected),
+        'selected_by_class': selected_by_class,
+        'selected_candidates': selected,
+        'skipped_by_class': skipped_by_class,
+        'skipped_reasons': skipped_reasons,
+        'residual_paths_selected': residual_paths_selected,
+        'residual_paths_still_open': [
+            label for label in all_labels if label not in set(residual_paths_selected)
+        ],
+        'unsafe_candidates_rejected': sum(
+            count for reason, count in skipped_reasons.items() if reason == 'unsafe_candidate'
+        ),
+        'unsafe_candidate_examples_by_class': unsafe_examples,
+        'duplicate_candidates_suppressed': duplicate_suppressed,
+        'residual_matched_candidates': [
+            item if item['candidate_id'] not in {selected_item['candidate_id'] for selected_item in selected}
+            else next(selected_item for selected_item in selected if selected_item['candidate_id'] == item['candidate_id'])
+            for item in candidates
+            if item['residual_match_labels']
+        ],
+        'top_rejected_candidates_by_class': top_rejected,
+        'note': 'read_only_simulation_not_applied',
+    }
+
+
+def _phase2hr_policy_eligibility(policy_name, candidate, selected_by_class):
+    if candidate['candidate_class'] == 'non_original_or_missing_blender_edge':
+        return False, 'unsafe_candidate'
+    if policy_name == 'conservative_length2_only':
+        if candidate['path_length_edges'] != 2:
+            return False, 'policy_length_excluded'
+        if candidate['candidate_class'] not in ('current_selected_repair', 'two_edge_inter_component_endpoint_bridge'):
+            return False, 'policy_class_excluded'
+        if sum(selected_by_class.values()) >= 9:
+            return False, 'policy_cap_reached'
+        return True, None
+    if policy_name == 'conservative_length1_to_3':
+        if candidate['path_length_edges'] not in (1, 2, 3):
+            return False, 'policy_length_excluded'
+        if candidate['safety_tier'] != 'high':
+            return False, 'safety_tier_not_high'
+        caps = {
+            'current_selected_repair': 9,
+            'one_edge_missing_continuity': 6,
+            'two_edge_inter_component_endpoint_bridge': 9,
+            'three_edge_local_bridge': 3,
+        }
+        cap = caps.get(candidate['candidate_class'], 0)
+        if selected_by_class.get(candidate['candidate_class'], 0) >= cap:
+            return False, 'policy_class_cap_reached'
+        return True, None
+    if policy_name == 'class_balanced_probe':
+        if candidate['candidate_class'] == 'unsupported_or_unknown':
+            return False, 'policy_class_excluded'
+        if candidate['safety_tier'] == 'unsafe':
+            return False, 'unsafe_candidate'
+        if selected_by_class.get(candidate['candidate_class'], 0) >= 2:
+            return False, 'policy_class_cap_reached'
+        return True, None
+    return False, 'unknown_policy'
+
+
+def _phase2hr_candidate_uses_duplicate_endpoint(candidate, endpoint_pairs):
+    if candidate['path_length_edges'] < 2:
+        return False
+    pair = tuple(candidate['duplicate_endpoint_pair_key'])
+    return pair in endpoint_pairs or candidate['candidate_class'] == 'two_edge_duplicate_alternative'
+
+
+def _phase2hr_top_rejected_by_class(rejected):
+    result = {}
+    counts = {}
+    for candidate in sorted(rejected, key=_phase2hr_sort_key):
+        class_name = candidate['candidate_class']
+        counts[class_name] = counts.get(class_name, 0) + 1
+        bucket = result.setdefault(class_name, [])
+        if len(bucket) < PHASE2HR_REPORT_CAPS['top_rejected_per_class']:
+            bucket.append(candidate)
+    for class_name, bucket in result.items():
+        for item in bucket:
+            item['class_rejected_total_before_truncation'] = counts[class_name]
+            item['class_rejected_truncated_count'] = max(0, counts[class_name] - len(bucket))
+    return result
+
+
+def _phase2hr_residual_coverage(candidates, policies, residual_by_path, diagnostic_labels_by_path):
+    by_path = {
+        _phase2h_path_key(candidate['path_vertex_ids']): candidate
+        for candidate in candidates
+    }
+    by_label = {}
+    for path, labels in diagnostic_labels_by_path.items():
+        for label in labels:
+            by_label[label] = path
+    policy_selected = {
+        policy['policy_name']: {
+            label
+            for item in policy['selected_candidates']
+            for label in item['residual_match_labels']
+        }
+        for policy in policies
+    }
+    coverage = []
+    for label, path in sorted(by_label.items()):
+        candidate = by_path.get(path)
+        residual = residual_by_path.get(path, {})
+        selected_by_policy = {
+            policy_name: label in labels
+            for policy_name, labels in policy_selected.items()
+        }
+        candidate_class = None if candidate is None else candidate['candidate_class']
+        similar_count = 0 if candidate_class is None else sum(
+            1 for item in candidates if item['candidate_class'] == candidate_class
+        )
+        coverage.append({
+            'residual_label': label,
+            'path_vertex_ids': list(path),
+            'current_status': residual.get('candidate_class_phase2e') or (
+                None if candidate is None else 'candidate_present_after_current_repairs'
+            ),
+            'current_class': residual.get('candidate_class_phase2e') or candidate_class,
+            'current_rejection_or_skip_reason': (
+                residual.get('phase_2b1_rejection_reason')
+                or residual.get('skipped_reason')
+                or residual.get('phase_2b_rejection_reason')
+                or residual.get('phase_2a1_rejection_reason')
+            ),
+            'unified_candidate_class': candidate_class,
+            'selected_by_each_simulation_policy': selected_by_policy,
+            'skipped_by_each_simulation_policy': {
+                policy['policy_name']: None if selected_by_policy[policy['policy_name']] else (
+                    _phase2hr_skip_reason_for_label(policy, label)
+                )
+                for policy in policies
+            },
+            'whether_similar_candidates_exist_beyond_the_listed_residual': similar_count > 1,
+            'count_of_similar_candidates': similar_count,
+        })
+    return coverage
+
+
+def _phase2hr_skip_reason_for_label(policy, label):
+    for class_items in policy['top_rejected_candidates_by_class'].values():
+        for item in class_items:
+            if label in item['residual_match_labels']:
+                return item['simulated_skip_reason']
+    if label in policy['residual_paths_still_open']:
+        return 'not_selected_by_simulation_policy'
+    return None
+
+
+def _phase2hr_diagnostic_labels_by_path(residual_payload):
+    result = {}
+
+    def add(label, path):
+        result.setdefault(_phase2h_path_key(path), []).append(label)
+
+    for report in (residual_payload or {}).get('paths', []):
+        path = report.get('path_vertex_ids')
+        label = report.get('label')
+        if isinstance(path, list) and len(path) >= 2 and label is not None:
+            add(str(label), path)
+    for label, _, _, path in DIAGNOSTIC_RESIDUAL_GAP_PHASE2E_PATHS:
+        add(f'residual_{label}', path)
+    add('solved_human_2557_2558', DIAGNOSTIC_HUMAN_CASE_2557_2558)
+    for label, path in DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+        add(f'solved_{label}', path)
+    add('solved_human_8a_5149_3003_3005', (5149, 3003, 3005))
+    for path in ((5149, 5103, 3005),):
+        add('residual_8b', path)
+    for path, labels in result.items():
+        result[path] = sorted(set(labels))
+    return result
+
+
+def _phase2hr_reported_candidate_ids(policies, candidates):
+    reported = set()
+    for policy in policies:
+        for item in policy['selected_candidates']:
+            reported.add(item['candidate_id'])
+        for item in policy['residual_matched_candidates']:
+            reported.add(item['candidate_id'])
+        for class_items in policy['top_rejected_candidates_by_class'].values():
+            for item in class_items:
+                reported.add(item['candidate_id'])
+        for class_items in policy['unsafe_candidate_examples_by_class'].values():
+            for item in class_items:
+                reported.add(item['candidate_id'])
+    for candidate in candidates:
+        if candidate['residual_match_labels']:
+            reported.add(candidate['candidate_id'])
+    return reported
+
+
+def _phase2hr_summary(candidates, policies, residual_coverage):
+    candidates_by_length = _count_by_key(candidates, 'path_length_edges')
+    candidates_by_class = _count_by_key(candidates, 'candidate_class')
+    selected_by_policy = {
+        policy['policy_name']: policy['selected_total']
+        for policy in policies
+    }
+    residual_by_policy = {
+        policy['policy_name']: sum(
+            1 for item in residual_coverage
+            if item['selected_by_each_simulation_policy'].get(policy['policy_name'], False)
+        )
+        for policy in policies
+    }
+    high_risk_classes = sorted(
+        class_name for class_name in candidates_by_class
+        if class_name in {
+            'non_original_or_missing_blender_edge',
+            'unsupported_or_unknown',
+            'two_edge_tangent_failed_endpoint_bridge',
+            'two_edge_same_component_local_closure',
+            'three_edge_local_bridge',
+        }
+    )
+    return {
+        'candidates_discovered_by_length': candidates_by_length,
+        'candidates_discovered_by_class': candidates_by_class,
+        'candidates_selected_by_policy': selected_by_policy,
+        'residual_coverage_by_policy': residual_by_policy,
+        'high_risk_classes': high_risk_classes,
+        'recommended_next_action': _phase2hr_recommended_next_action(
+            candidates_by_class,
+            residual_by_policy,
+            len(residual_coverage),
+        ),
+    }
+
+
+def _phase2hr_recommended_next_action(candidates_by_class, residual_by_policy, residual_total):
+    best_coverage = max(residual_by_policy.values(), default=0)
+    if best_coverage > 0:
+        return 'inspect_unified_simulation_selected_candidates'
+    if candidates_by_class.get('one_edge_endpoint_to_skeleton', 0) > 0:
+        return 'design_one_edge_endpoint_to_skeleton_repair'
+    if candidates_by_class.get('two_edge_same_component_local_closure', 0) > 0:
+        return 'design_two_edge_same_component_closure_repair'
+    if candidates_by_class.get('three_edge_local_bridge', 0) > 0:
+        return 'design_three_edge_local_bridge_repair'
+    if (
+        candidates_by_class.get('two_edge_duplicate_alternative', 0)
+        or candidates_by_class.get('two_edge_tangent_failed_endpoint_bridge', 0)
+    ):
+        return 'revise_phase_2b1_ranking_or_cap'
+    return 'defer_due_to_unsafe_candidate_distribution'
+
+
 def _safe_ratio(value, denominator):
     if value is None or denominator in (None, 0):
         return None
@@ -3395,6 +3916,47 @@ def write_general_residual_candidates_phase2h(json_path, result):
         json.dump(payload, file, indent=2)
         file.write('\n')
     return debug_path
+
+
+def write_unified_local_continuity_simulation_phase2h_r(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_unified_local_continuity_simulation_phase2h_r.json'
+    payload = result.unified_local_continuity_simulation_phase2h_r or {
+        'phase': '2H-R.1',
+        'name': 'unified_local_continuity_selector_simulation',
+        'summary': {
+            'recommended_next_action': 'defer_due_to_unsafe_candidate_distribution',
+            'candidates_selected_by_policy': {},
+            'residual_coverage_by_policy': {},
+        },
+        'policies': [],
+        'residual_coverage': [],
+        'read_only': True,
+        'seam_flags_unchanged': True,
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'compact_sidecar': True,
+    }
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_unified_local_continuity_simulation_phase2h_r_summary(payload, debug_path):
+    summary = payload.get('summary', {})
+    residual_coverage = summary.get('residual_coverage_by_policy', {})
+    best_coverage = max(residual_coverage.values(), default=0)
+    residual_total = len(payload.get('residual_coverage', ()))
+    return (
+        f"Unified continuity simulation: "
+        f"policies={len(payload.get('policies', ()))}, "
+        f"candidates considered={payload.get('total_candidates_considered', 0)}, "
+        f"reported={payload.get('total_candidates_reported', 0)}, "
+        f"residual coverage best={best_coverage}/{residual_total}, "
+        f"recommended_next_action={summary.get('recommended_next_action', 'defer_due_to_unsafe_candidate_distribution')}. "
+        f"Sidecar: {debug_path}"
+    )
 
 
 def format_general_residual_candidates_phase2h_summary(payload, debug_path):
