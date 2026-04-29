@@ -259,6 +259,14 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 result.phase2h_r3_visual_review or {},
                 visual_review_path,
             )
+            small_gap_simulation_path = seam_mapping.write_phase2j_r_small_gap_rule_simulation(
+                self._job.json_path,
+                result,
+            )
+            small_gap_simulation_summary = seam_mapping.format_phase2j_r_small_gap_rule_simulation_summary(
+                result.phase2j_r_small_gap_rule_simulation or {},
+                small_gap_simulation_path,
+            )
             summary = (
                 f'{summary} Bridge apply debug: {debug_path}. '
                 f'Human gap classification: {human_gap_path}. '
@@ -267,7 +275,8 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 f'{rank_review_summary}. '
                 f'{general_candidates_summary}. '
                 f'{unified_simulation_summary}. '
-                f'{visual_review_summary}'
+                f'{visual_review_summary}. '
+                f'{small_gap_simulation_summary}'
             )
         except Exception as exc:
             return self._finish(context, error=str(exc))

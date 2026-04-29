@@ -1,4 +1,5 @@
 import json
+import math
 from dataclasses import dataclass
 
 
@@ -86,6 +87,7 @@ class SeamApplyResult:
     diagnostic_path_labels_read_only: bool = True
     unified_local_continuity_simulation_phase2h_r: dict | None = None
     phase2h_r3_visual_review: dict | None = None
+    phase2j_r_small_gap_rule_simulation: dict | None = None
 
 
 def load_predicted_edge_keys(json_path):
@@ -331,6 +333,14 @@ def apply_seam_keys(
     phase2h_r3_visual_review = build_phase2h_r3_visual_review(
         unified_local_continuity_simulation_phase2h_r,
     )
+    phase2j_r_small_gap_rule_simulation = simulate_phase2j_r_small_gap_rule(
+        mesh,
+        predicted_keys=applied_keys,
+        local_repair_reports=repair['candidate_reports'],
+        two_edge_reports=two_edge_repair['candidate_reports'],
+        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+        residual_payload=residual_gap_phase2e_debug,
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -490,6 +500,7 @@ def apply_seam_keys(
         diagnostic_path_labels_read_only=True,
         unified_local_continuity_simulation_phase2h_r=unified_local_continuity_simulation_phase2h_r,
         phase2h_r3_visual_review=phase2h_r3_visual_review,
+        phase2j_r_small_gap_rule_simulation=phase2j_r_small_gap_rule_simulation,
     )
 
 
@@ -4223,6 +4234,476 @@ def _phase2hr3_decision_summary(
     }
 
 
+PHASE2JR_REPORT_CAPS = {
+    'curved_two_edge_endpoint_bridge_candidates': 20,
+    'straight_but_tangent_weak_audit_candidates': 20,
+    'length_three_local_bridge_diagnostics': 20,
+    'same_component_local_closure_diagnostics': 20,
+}
+
+
+PHASE2JR_REPRESENTATIVE_CASES = (
+    (234, 319, 318, 214),
+    (3098, 3185, 3192),
+    (3098, 3097, 3192),
+    (5477, 5520, 5483),
+    (3783, 3784, 3753),
+    (3783, 3750, 3753),
+    (5562, 5464, 5553),
+    (5562, 5463, 5553),
+    (2804, 2709, 2815),
+    (2804, 2816, 2815),
+    (670, 669, 666),
+    (670, 671, 666),
+    (3006, 3008, 3039),
+)
+
+
+def simulate_phase2j_r_small_gap_rule(
+    mesh,
+    predicted_keys=None,
+    local_repair_reports=(),
+    two_edge_reports=(),
+    endpoint_bridge_reports=(),
+    residual_payload=None,
+):
+    seam_flags_before = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    reports, residual_by_path = _phase2h_collect_candidate_reports(
+        mesh,
+        predicted_keys=predicted_keys,
+        local_repair_reports=local_repair_reports,
+        two_edge_reports=two_edge_reports,
+        endpoint_bridge_reports=endpoint_bridge_reports,
+        residual_payload=residual_payload,
+    )
+    diagnostic_labels_by_path = _phase2hr_diagnostic_labels_by_path(residual_payload)
+    candidates = [
+        _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path)
+        for report in reports
+    ]
+    candidates.sort(key=_phase2jr_sort_key)
+    curved_all = [
+        _phase2jr_curved_report(candidate)
+        for candidate in candidates
+        if _phase2jr_is_curved_two_edge_candidate(candidate)
+    ]
+    tangent_all = [
+        _phase2jr_tangent_audit_report(candidate)
+        for candidate in candidates
+        if _phase2jr_is_straight_tangent_weak_candidate(candidate)
+    ]
+    length3_all = [
+        _phase2jr_length3_report(candidate)
+        for candidate in candidates
+        if candidate.get('path_length_edges') == 3
+    ]
+    same_component_all = [
+        _phase2jr_same_component_report(candidate)
+        for candidate in candidates
+        if (
+            candidate.get('path_length_edges') == 2
+            and candidate.get('component_relation') == 'same_component'
+        )
+    ]
+    curved, curved_truncated = _phase2jr_cap_reports(
+        curved_all,
+        PHASE2JR_REPORT_CAPS['curved_two_edge_endpoint_bridge_candidates'],
+    )
+    tangent, tangent_truncated = _phase2jr_cap_reports(
+        tangent_all,
+        PHASE2JR_REPORT_CAPS['straight_but_tangent_weak_audit_candidates'],
+    )
+    length3, length3_truncated = _phase2jr_cap_reports(
+        length3_all,
+        PHASE2JR_REPORT_CAPS['length_three_local_bridge_diagnostics'],
+    )
+    same_component, same_component_truncated = _phase2jr_cap_reports(
+        same_component_all,
+        PHASE2JR_REPORT_CAPS['same_component_local_closure_diagnostics'],
+    )
+    all_by_path = {
+        _phase2h_path_key(candidate['path_vertex_ids']): candidate
+        for candidate in candidates
+    }
+    representative = _phase2jr_representative_case_matrix(all_by_path, residual_by_path)
+    decision = _phase2jr_decision_summary(curved_all, tangent_all, length3_all, same_component_all)
+    truncation = {
+        'curved_two_edge_endpoint_bridge_candidates': curved_truncated,
+        'straight_but_tangent_weak_audit_candidates': tangent_truncated,
+        'length_three_local_bridge_diagnostics': length3_truncated,
+        'same_component_local_closure_diagnostics': same_component_truncated,
+        'representative_case_matrix': 0,
+    }
+    reported_counts = {
+        'curved_two_edge_endpoint_bridge_candidates': len(curved),
+        'straight_but_tangent_weak_audit_candidates': len(tangent),
+        'length_three_local_bridge_diagnostics': len(length3),
+        'same_component_local_closure_diagnostics': len(same_component),
+        'representative_case_matrix': len(representative),
+    }
+    seam_flags_after = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    if seam_flags_after != seam_flags_before:
+        raise RuntimeError('Phase 2J-R small-gap rule simulation modified seam flags.')
+    return {
+        'phase': '2J-R',
+        'name': 'small_local_gap_closure_rule_simulation_v2',
+        'read_only': True,
+        'seam_flags_unchanged': True,
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'active_phase2j_allowed': decision['active_phase2j_allowed'],
+        'active_phase2j_allowed_means_review_only': True,
+        'active_phase2j_blocking_reasons': list(decision['active_phase2j_blocking_reasons']),
+        'recommended_next_action': decision['recommended_next_action'],
+        'compact_sidecar': True,
+        'curved_two_edge_endpoint_bridge_candidates': curved,
+        'straight_but_tangent_weak_audit_candidates': tangent,
+        'length_three_local_bridge_diagnostics': length3,
+        'same_component_local_closure_diagnostics': same_component,
+        'representative_case_matrix': representative,
+        'decision_summary': decision,
+        'compactness_summary': {
+            'total_candidates_considered': len(candidates),
+            'total_candidates_reported': sum(reported_counts.values()),
+            'total_candidates_truncated': sum(truncation.values()),
+            'per_group_reported_counts': reported_counts,
+            'per_group_truncation_counts': truncation,
+            'report_caps': dict(PHASE2JR_REPORT_CAPS),
+        },
+    }
+
+
+def _phase2jr_sort_key(candidate):
+    return (
+        candidate.get('normalized_total_path_length_if_mesh_scale_available')
+        if candidate.get('normalized_total_path_length_if_mesh_scale_available') is not None
+        else 999.0,
+        candidate.get('path_straightness') if candidate.get('path_straightness') is not None else 999.0,
+        tuple(candidate.get('path_vertex_ids', ())),
+    )
+
+
+def _phase2jr_is_curved_two_edge_candidate(candidate):
+    return bool(
+        candidate.get('path_length_edges') == 2
+        and candidate.get('all_edges_exist_in_blender', False)
+        and not candidate.get('already_all_marked', False)
+        and candidate.get('degree_pattern') == [1, 0, 1]
+        and candidate.get('component_relation') == 'different_components'
+        and candidate.get('loop_risk') == 'none'
+        and candidate.get('topology_risk') == 'accepted_pattern'
+        and _phase2jr_leq(candidate.get('normalized_total_path_length_if_mesh_scale_available'), 0.015)
+        and _phase2jr_geq(candidate.get('min_endpoint_tangent_alignment'), 0.75)
+        and candidate.get('path_straightness') is not None
+        and candidate['path_straightness'] < 0.50
+    )
+
+
+def _phase2jr_is_straight_tangent_weak_candidate(candidate):
+    alignments = candidate.get('endpoint_tangent_alignments') or ()
+    values = [value for value in alignments if value is not None]
+    return bool(
+        candidate.get('path_length_edges') == 2
+        and candidate.get('all_edges_exist_in_blender', False)
+        and not candidate.get('already_all_marked', False)
+        and candidate.get('component_relation') == 'different_components'
+        and candidate.get('loop_risk') == 'none'
+        and _phase2jr_geq(candidate.get('path_straightness'), 0.90)
+        and _phase2jr_leq(candidate.get('normalized_total_path_length_if_mesh_scale_available'), 0.015)
+        and values
+        and max(values) >= 0.90
+        and _phase2jr_lt(candidate.get('min_endpoint_tangent_alignment'), 0.30)
+    )
+
+
+def _phase2jr_curved_report(candidate):
+    report = _phase2jr_common_report(candidate)
+    report.update({
+        'segment_length_ratio_if_computable': _phase2jr_segment_length_ratio(candidate),
+        'turn_angle_degrees_if_computable': _phase2jr_turn_angle_degrees(candidate),
+        'bend_angle_degrees_if_computable': _phase2jr_turn_angle_degrees(candidate),
+        'current_rank_if_available': candidate.get('rank_v2_if_available'),
+        'selected_by_existing_policy_if_available': bool(candidate.get('selected_by_simulation', False)),
+        'curved_continuity_score': _phase2jr_curved_score(candidate),
+        'strict_rule_passed': True,
+        'would_be_active_candidate_under_strict_rule': True,
+        'visual_confirmation_required': True,
+        'why_selected_or_rejected': 'strict_curved_endpoint_bridge_rule_passed_for_review_only',
+    })
+    return report
+
+
+def _phase2jr_tangent_audit_report(candidate):
+    report = _phase2jr_common_report(candidate)
+    audit_status = _phase2jr_tangent_audit_status(candidate)
+    report.update({
+        'weak_endpoint_index': _phase2hr3_weak_endpoint_index(candidate),
+        'seam_neighbors_used_for_tangent_if_available': None,
+        'alternative_seam_neighbor_tangents_if_computable': None,
+        'component_direction_fallback_if_computable': None,
+        'tangent_audit_status': audit_status,
+        'would_be_active_candidate_under_strict_rule': audit_status == 'audit_supported_rescue',
+        'visual_confirmation_required': True,
+        'why_selected_or_rejected': (
+            'straight_bridge_one_sided_tangent_weak_audit_supported'
+            if audit_status == 'audit_supported_rescue'
+            else 'straight_bridge_tangent_audit_not_supported'
+        ),
+    })
+    return report
+
+
+def _phase2jr_length3_report(candidate):
+    return {
+        'path_vertex_ids': list(candidate.get('path_vertex_ids', ())),
+        'path_edge_keys': list(candidate.get('path_edge_keys', ())),
+        'all_edges_exist_in_blender': bool(candidate.get('all_edges_exist_in_blender', False)),
+        'component_relation': candidate.get('component_relation'),
+        'degree_pattern': list(candidate.get('degree_pattern', ())),
+        'endpoint_seam_vertex_flags': list(candidate.get('endpoint_seam_vertex_flags', ())),
+        'intermediate_seam_vertex_flags': list(candidate.get('intermediate_seam_vertex_flags', ())),
+        'would_create_loop': bool(candidate.get('would_create_loop', False)),
+        'existing_seam_distance_between_endpoints_if_available': (
+            candidate.get('existing_seam_distance_between_endpoints_if_available')
+        ),
+        'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+        'path_straightness_if_computable': candidate.get('path_straightness'),
+        'tangent_alignments_if_computable': candidate.get('endpoint_tangent_alignments'),
+        'length3_active_safe': False,
+        'blocking_reasons': ['length3_active_repair_not_implemented_in_phase2j_r'],
+    }
+
+
+def _phase2jr_same_component_report(candidate):
+    return {
+        'path_vertex_ids': list(candidate.get('path_vertex_ids', ())),
+        'path_edge_keys': list(candidate.get('path_edge_keys', ())),
+        'would_create_loop': bool(candidate.get('would_create_loop', False)),
+        'existing_seam_distance_between_endpoints_if_available': (
+            candidate.get('existing_seam_distance_between_endpoints_if_available')
+        ),
+        'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+        'path_straightness': candidate.get('path_straightness'),
+        'tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+        'same_component_active_safe': False,
+        'blocking_reasons': ['same_component_active_repair_not_implemented_in_phase2j_r'],
+    }
+
+
+def _phase2jr_common_report(candidate):
+    return {
+        'path_vertex_ids': list(candidate.get('path_vertex_ids', ())),
+        'path_length_edges': candidate.get('path_length_edges'),
+        'path_edge_keys': list(candidate.get('path_edge_keys', ())),
+        'blender_edge_indices': list(candidate.get('blender_edge_indices', ())),
+        'all_edges_exist_in_blender': bool(candidate.get('all_edges_exist_in_blender', False)),
+        'residual_labels_if_any': list(candidate.get('residual_match_labels', ())),
+        'total_path_length': candidate.get('total_path_length'),
+        'endpoint_distance': candidate.get('endpoint_distance'),
+        'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+        'normalized_endpoint_distance': candidate.get('normalized_endpoint_distance_if_mesh_scale_available'),
+        'path_straightness': candidate.get('path_straightness'),
+        'endpoint_tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+        'min_endpoint_tangent_alignment': candidate.get('min_endpoint_tangent_alignment'),
+        'component_relation': candidate.get('component_relation'),
+        'degree_pattern': list(candidate.get('degree_pattern', ())),
+        'loop_risk': candidate.get('loop_risk'),
+        'topology_risk': candidate.get('topology_risk'),
+        'duplicate_endpoint_pair_key': list(candidate.get('duplicate_endpoint_pair_key', ())),
+    }
+
+
+def _phase2jr_representative_case_matrix(candidate_by_path, residual_by_path):
+    rows = []
+    for path in PHASE2JR_REPRESENTATIVE_CASES:
+        key = _phase2h_path_key(path)
+        candidate = candidate_by_path.get(key)
+        residual = residual_by_path.get(key, {})
+        group = _phase2jr_group_for_candidate(candidate)
+        rows.append({
+            'path_vertex_ids': list(path),
+            'found_in_candidate_space': candidate is not None,
+            'found_in_current_residual_space': bool(residual),
+            'all_edges_exist_in_blender': None if candidate is None else candidate.get('all_edges_exist_in_blender'),
+            'current_class': residual.get('candidate_class_phase2e') or (
+                None if candidate is None else candidate.get('candidate_class')
+            ),
+            'proposed_phase2j_r_group': group,
+            'active_safe_under_strict_rule': _phase2jr_candidate_active_safe(candidate),
+            'visual_confirmation_required': bool(candidate is not None and _phase2jr_candidate_active_safe(candidate)),
+            'blocking_reasons': _phase2jr_representative_blocking_reasons(candidate, group),
+            'metrics': {} if candidate is None else {
+                'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+                'path_straightness': candidate.get('path_straightness'),
+                'min_endpoint_tangent_alignment': candidate.get('min_endpoint_tangent_alignment'),
+                'endpoint_tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+            },
+            'possible_canonical_match': _phase2jr_possible_canonical_match(path, candidate_by_path),
+        })
+    return rows
+
+
+def _phase2jr_decision_summary(curved, tangent, length3, same_component):
+    active_candidates = [
+        report for report in list(curved) + list(tangent)
+        if report.get('would_be_active_candidate_under_strict_rule', False)
+    ]
+    residual_matched = [
+        report for report in active_candidates
+        if report.get('residual_labels_if_any')
+    ]
+    blocking = []
+    if len(residual_matched) < 2:
+        blocking.append('fewer_than_two_residual_matched_strict_candidates')
+    if len(active_candidates) > 3:
+        blocking.append('simulation_cap_exceeded_more_than_three_candidates')
+    if any(report.get('path_length_edges') != 2 for report in active_candidates):
+        blocking.append('non_length2_candidate_would_be_active')
+    if any(report.get('component_relation') != 'different_components' for report in active_candidates):
+        blocking.append('non_inter_component_candidate_would_be_active')
+    if any(report.get('loop_risk') != 'none' for report in active_candidates):
+        blocking.append('loop_risk_candidate_would_be_active')
+    if any(not report.get('visual_confirmation_required', False) for report in active_candidates):
+        blocking.append('strict_candidate_missing_visual_confirmation_requirement')
+    active_allowed = not blocking
+    return {
+        'strict_curved_candidates_total': len(curved),
+        'strict_curved_candidates_residual_matched': sum(
+            1 for report in curved if report.get('residual_labels_if_any')
+        ),
+        'strict_curved_candidates_non_residual': sum(
+            1 for report in curved if not report.get('residual_labels_if_any')
+        ),
+        'straight_tangent_audit_candidates_total': len(tangent),
+        'audit_supported_rescue_count': sum(
+            1 for report in tangent
+            if report.get('tangent_audit_status') == 'audit_supported_rescue'
+        ),
+        'length3_diagnostic_count': len(length3),
+        'same_component_diagnostic_count': len(same_component),
+        'active_phase2j_allowed': active_allowed,
+        'active_phase2j_allowed_means_review_only': True,
+        'active_phase2j_blocking_reasons': blocking,
+        'recommended_next_action': (
+            'architect_review_strict_phase2j_candidates'
+            if active_allowed
+            else 'no_active_phase2j_repair_recommended_from_simulation'
+        ),
+    }
+
+
+def _phase2jr_candidate_active_safe(candidate):
+    if candidate is None:
+        return False
+    return bool(
+        _phase2jr_is_curved_two_edge_candidate(candidate)
+        or (
+            _phase2jr_is_straight_tangent_weak_candidate(candidate)
+            and _phase2jr_tangent_audit_status(candidate) == 'audit_supported_rescue'
+        )
+    )
+
+
+def _phase2jr_group_for_candidate(candidate):
+    if candidate is None:
+        return None
+    if _phase2jr_is_curved_two_edge_candidate(candidate):
+        return 'curved_two_edge_endpoint_bridge_candidates'
+    if _phase2jr_is_straight_tangent_weak_candidate(candidate):
+        return 'straight_but_tangent_weak_audit_candidates'
+    if candidate.get('path_length_edges') == 3:
+        return 'length_three_local_bridge_diagnostics'
+    if candidate.get('path_length_edges') == 2 and candidate.get('component_relation') == 'same_component':
+        return 'same_component_local_closure_diagnostics'
+    return 'not_in_phase2j_r_scope'
+
+
+def _phase2jr_representative_blocking_reasons(candidate, group):
+    if candidate is None:
+        return ['representative_path_not_found_in_candidate_space']
+    if not candidate.get('all_edges_exist_in_blender', False):
+        return ['missing_or_non_original_edges_not_active_safe']
+    if group == 'length_three_local_bridge_diagnostics':
+        return ['length3_active_repair_not_implemented_in_phase2j_r']
+    if group == 'same_component_local_closure_diagnostics':
+        return ['same_component_active_repair_not_implemented_in_phase2j_r']
+    if _phase2jr_candidate_active_safe(candidate):
+        return ['visual_confirmation_required_before_any_future_active_repair']
+    return ['strict_phase2j_r_rule_not_passed']
+
+
+def _phase2jr_possible_canonical_match(path, candidate_by_path):
+    key = _phase2h_path_key(path)
+    if key in candidate_by_path:
+        return None
+    reverse = _phase2h_path_key(tuple(reversed(path)))
+    if reverse in candidate_by_path:
+        return list(reverse)
+    return None
+
+
+def _phase2jr_cap_reports(reports, cap):
+    reports = sorted(reports, key=lambda report: tuple(report.get('path_vertex_ids', ())))
+    return reports[:cap], max(0, len(reports) - cap)
+
+
+def _phase2jr_curved_score(candidate):
+    return [
+        -float(candidate.get('min_endpoint_tangent_alignment') or 0.0),
+        float(candidate.get('path_straightness') or 0.0),
+        float(candidate.get('normalized_total_path_length_if_mesh_scale_available') or 999.0),
+        list(candidate.get('path_vertex_ids', ())),
+    ]
+
+
+def _phase2jr_segment_length_ratio(candidate):
+    total = candidate.get('total_path_length')
+    endpoint = candidate.get('endpoint_distance')
+    if total in (None, 0) or endpoint is None:
+        return None
+    return endpoint / total
+
+
+def _phase2jr_turn_angle_degrees(candidate):
+    straightness = candidate.get('path_straightness')
+    if straightness is None:
+        return None
+    clamped = max(-1.0, min(1.0, float(straightness)))
+    return math.degrees(math.acos(clamped))
+
+
+def _phase2jr_tangent_audit_status(candidate):
+    alignments = [
+        value for value in (candidate.get('endpoint_tangent_alignments') or ())
+        if value is not None
+    ]
+    if not alignments:
+        return 'audit_inconclusive'
+    if (
+        len(alignments) >= 2
+        and max(alignments) >= 0.95
+        and min(alignments) >= 0.0
+        and _phase2jr_geq(candidate.get('path_straightness'), 0.95)
+    ):
+        return 'audit_supported_rescue'
+    if min(alignments) < 0.0:
+        return 'audit_reject'
+    return 'audit_inconclusive'
+
+
+def _phase2jr_leq(value, threshold):
+    return value is not None and value <= threshold
+
+
+def _phase2jr_lt(value, threshold):
+    return value is not None and value < threshold
+
+
+def _phase2jr_geq(value, threshold):
+    return value is not None and value >= threshold
+
+
 def _safe_ratio(value, denominator):
     if value is None or denominator in (None, 0):
         return None
@@ -4722,6 +5203,41 @@ def write_phase2h_r3_visual_review(json_path, result):
         json.dump(payload, file, indent=2)
         file.write('\n')
     return debug_path
+
+
+def write_phase2j_r_small_gap_rule_simulation(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_phase2j_r_small_gap_rule_simulation.json'
+    payload = result.phase2j_r_small_gap_rule_simulation or {
+        'phase': '2J-R',
+        'name': 'small_local_gap_closure_rule_simulation_v2',
+        'read_only': True,
+        'seam_flags_unchanged': True,
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'active_phase2j_allowed': False,
+        'active_phase2j_allowed_means_review_only': True,
+        'active_phase2j_blocking_reasons': ['simulation_not_available'],
+        'recommended_next_action': 'no_active_phase2j_repair_recommended_from_simulation',
+        'compact_sidecar': True,
+    }
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_phase2j_r_small_gap_rule_simulation_summary(payload, debug_path):
+    decision = payload.get('decision_summary', {})
+    return (
+        f"Phase 2J-R small-gap simulation: "
+        f"curved={decision.get('strict_curved_candidates_total', 0)}, "
+        f"tangent_audit={decision.get('straight_tangent_audit_candidates_total', 0)}, "
+        f"length3={decision.get('length3_diagnostic_count', 0)}, "
+        f"same_component={decision.get('same_component_diagnostic_count', 0)}, "
+        f"active_phase2j_allowed={str(payload.get('active_phase2j_allowed', False)).lower()}. "
+        f"Sidecar: {debug_path}"
+    )
 
 
 def format_phase2h_r3_visual_review_summary(payload, debug_path):

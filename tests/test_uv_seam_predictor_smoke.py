@@ -3130,6 +3130,229 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(with_label['probabilities_used'])
         self.assertFalse(with_label['active_phase2j_allowed'])
 
+    def test_phase2jr_small_gap_sidecar_is_emitted_and_read_only(self):
+        seam_mapping = load_module('uvsp_phase2jr_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prediction_path = str(Path(temp_dir) / 'prediction.json')
+            Path(prediction_path).write_text('{}', encoding='utf-8')
+            sidecar = seam_mapping.write_phase2j_r_small_gap_rule_simulation(prediction_path, result)
+            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
+
+        self.assertTrue(sidecar.endswith('_phase2j_r_small_gap_rule_simulation.json'))
+        self.assertEqual(payload['phase'], '2J-R')
+        self.assertEqual(payload['name'], 'small_local_gap_closure_rule_simulation_v2')
+        self.assertTrue(payload['read_only'])
+        self.assertTrue(payload['seam_flags_unchanged'])
+        self.assertTrue(payload['not_applied_to_mesh'])
+        self.assertFalse(payload['probabilities_used'])
+        self.assertTrue(payload['diagnostic_paths_are_labels_only'])
+        self.assertTrue(payload['active_phase2j_allowed_means_review_only'])
+        self.assertTrue(payload['compact_sidecar'])
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertIn('decision_summary', payload)
+        self.assertIn('compactness_summary', payload)
+        self.assertIn('write_phase2j_r_small_gap_rule_simulation', read_addon_file('operators.py'))
+
+    def test_phase2jr_curved_candidates_require_strict_guards(self):
+        seam_mapping = load_module('uvsp_phase2jr_curved_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                99: (-1.0, 0.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (1.2, 0.98, 0.0),
+                103: (1.4, 1.96, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_phase2j_r_small_gap_rule(
+            mesh,
+            residual_payload={
+                'paths': [{'label': 'curved_case', 'path_vertex_ids': [100, 101, 102]}],
+                'read_only': True,
+            },
+        )
+        reports = payload['curved_two_edge_endpoint_bridge_candidates']
+
+        self.assertTrue(reports)
+        self.assertEqual(reports[0]['path_vertex_ids'], [100, 101, 102])
+        self.assertEqual(reports[0]['degree_pattern'], [1, 0, 1])
+        self.assertEqual(reports[0]['component_relation'], 'different_components')
+        self.assertEqual(reports[0]['loop_risk'], 'none')
+        self.assertEqual(reports[0]['topology_risk'], 'accepted_pattern')
+        self.assertLessEqual(reports[0]['normalized_total_path_length'], 0.015)
+        self.assertGreaterEqual(reports[0]['min_endpoint_tangent_alignment'], 0.75)
+        self.assertLess(reports[0]['path_straightness'], 0.50)
+        self.assertTrue(reports[0]['strict_rule_passed'])
+        self.assertTrue(reports[0]['would_be_active_candidate_under_strict_rule'])
+        self.assertTrue(reports[0]['visual_confirmation_required'])
+        self.assertFalse(payload['probabilities_used'])
+
+    def test_phase2jr_straight_tangent_weak_requires_audit_support(self):
+        seam_mapping = load_module('uvsp_phase2jr_tangent_audit_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                99: (0.0, -1.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (2.0, 0.0, 0.0),
+                103: (3.0, 0.0, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_phase2j_r_small_gap_rule(mesh)
+        reports = payload['straight_but_tangent_weak_audit_candidates']
+
+        self.assertTrue(reports)
+        self.assertEqual(reports[0]['path_vertex_ids'], [100, 101, 102])
+        self.assertGreaterEqual(reports[0]['path_straightness'], 0.90)
+        self.assertLess(reports[0]['min_endpoint_tangent_alignment'], 0.30)
+        self.assertEqual(reports[0]['tangent_audit_status'], 'audit_supported_rescue')
+        self.assertTrue(reports[0]['would_be_active_candidate_under_strict_rule'])
+        self.assertTrue(reports[0]['visual_confirmation_required'])
+        self.assertTrue(payload['active_phase2j_allowed_means_review_only'])
+
+    def test_phase2jr_length_three_and_same_component_are_diagnostic_only(self):
+        seam_mapping = load_module('uvsp_phase2jr_diagnostic_classes_smoke', ADDON_DIR / 'seam_mapping.py')
+        length3_mesh = FakeMesh(
+            edges=[(0, 1), (4, 5), (1, 2), (2, 3), (3, 4)],
+            vertex_count=10000,
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.01, 0.0, 0.0),
+                2: (0.02, 0.0, 0.0),
+                3: (0.03, 0.0, 0.0),
+                4: (0.04, 0.0, 0.0),
+                5: (0.05, 0.0, 0.0),
+                9999: (1.0, 1.0, 1.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            length3_mesh,
+            [(0, 1), (4, 5)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        length3_payload = seam_mapping.simulate_phase2j_r_small_gap_rule(length3_mesh)
+        length3_reports = length3_payload['length_three_local_bridge_diagnostics']
+
+        same_component_mesh, predicted_keys, _ = build_endpoint_bridge_mesh(same_component=True)
+        seam_mapping.apply_seam_keys(
+            same_component_mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        same_component_payload = seam_mapping.simulate_phase2j_r_small_gap_rule(same_component_mesh)
+        same_component_reports = same_component_payload['same_component_local_closure_diagnostics']
+
+        self.assertTrue(length3_reports)
+        self.assertFalse(length3_reports[0]['length3_active_safe'])
+        self.assertIn('length3_active_repair_not_implemented_in_phase2j_r', length3_reports[0]['blocking_reasons'])
+        self.assertTrue(same_component_reports)
+        self.assertFalse(same_component_reports[0]['same_component_active_safe'])
+        self.assertIn(
+            'same_component_active_repair_not_implemented_in_phase2j_r',
+            same_component_reports[0]['blocking_reasons'],
+        )
+
+    def test_phase2jr_representative_missing_edges_are_never_active_safe(self):
+        seam_mapping = load_module('uvsp_phase2jr_missing_edges_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_phase2j_r_small_gap_rule(
+            mesh,
+            residual_payload={
+                'paths': [{'label': 'missing_case', 'path_vertex_ids': [234, 319, 318, 214]}],
+                'read_only': True,
+            },
+        )
+        row = next(
+            item for item in payload['representative_case_matrix']
+            if item['path_vertex_ids'] == [234, 319, 318, 214]
+        )
+
+        self.assertTrue(row['found_in_candidate_space'])
+        self.assertFalse(row['all_edges_exist_in_blender'])
+        self.assertFalse(row['active_safe_under_strict_rule'])
+        self.assertIn('missing_or_non_original_edges_not_active_safe', row['blocking_reasons'])
+
+    def test_phase2jr_labels_do_not_affect_selection_or_marking(self):
+        seam_mapping = load_module('uvsp_phase2jr_labels_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+        no_label = seam_mapping.simulate_phase2j_r_small_gap_rule(mesh)
+        with_label = seam_mapping.simulate_phase2j_r_small_gap_rule(
+            mesh,
+            residual_payload={
+                'paths': [{'label': 'manual_label', 'path_vertex_ids': [100, 101, 102]}],
+                'read_only': True,
+            },
+        )
+
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertEqual(
+            no_label['curved_two_edge_endpoint_bridge_candidates'],
+            with_label['curved_two_edge_endpoint_bridge_candidates'],
+        )
+        self.assertEqual(
+            no_label['straight_but_tangent_weak_audit_candidates'],
+            with_label['straight_but_tangent_weak_audit_candidates'],
+        )
+        self.assertFalse(with_label['probabilities_used'])
+
+    def test_phase2jr_keeps_existing_phase2_constraints_intact(self):
+        seam_mapping = load_module('uvsp_phase2jr_constraints_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        self.assertEqual(
+            set(inspect.signature(seam_mapping.apply_missing_edge_continuity_repair).parameters),
+            {'mesh', 'enabled', 'max_repair_edges'},
+        )
+        self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_local_continuity_repair).parameters)
+        self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters)
+        self.assertEqual(inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters[
+            'max_repair_paths'
+        ].default, 9)
+
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
         result = seam_mapping.SeamApplyResult(
