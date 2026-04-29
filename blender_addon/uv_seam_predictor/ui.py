@@ -49,24 +49,30 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         inference_box.prop(settings, 'model_weights_path')
         inference_box.prop(settings, 'threshold')
         inference_box.prop(settings, 'use_post_processing')
+        inference_box.label(text='Threshold controls raw seam classification.', icon='INFO')
+        inference_box.label(text='Post-processing may skeletonize, bridge, prune, and fill editable gaps.')
         inference_box.prop(settings, 'clear_existing_seams')
         inference_box.prop(settings, 'make_single_user_mesh')
 
         post_box = layout.box()
-        post_box.label(text='Post-process Settings')
+        post_box.label(text='Post-processing')
         post_box.enabled = settings.use_post_processing
         post_box.prop(settings, 'postprocess_tau_low')
-        post_box.prop(settings, 'postprocess_tau_high')
         post_box.prop(settings, 'postprocess_d_max')
         post_box.prop(settings, 'postprocess_r_bridge')
         post_box.prop(settings, 'postprocess_l_min')
-        post_box.prop(settings, 'postprocess_epsilon')
         post_box.prop(settings, 'postprocess_anchor_boundary')
         post_box.prop(settings, 'postprocess_fill_small_gaps')
         gap_row = post_box.row()
         gap_row.enabled = settings.postprocess_fill_small_gaps
         gap_row.prop(settings, 'postprocess_fill_gap_max_hops')
-        post_box.prop(settings, 'postprocess_write_debug_sidecars')
+
+        legacy_box = layout.box()
+        legacy_box.label(text='Legacy / Debug')
+        legacy_box.enabled = settings.use_post_processing
+        legacy_box.prop(settings, 'postprocess_tau_high')
+        legacy_box.prop(settings, 'postprocess_epsilon')
+        legacy_box.prop(settings, 'postprocess_write_debug_sidecars')
 
         actions = layout.box()
         actions.label(text='Actions')

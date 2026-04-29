@@ -524,6 +524,32 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(mesh.edges[5].use_seam)
         self.assertFalse(mesh.edges[6].use_seam)
 
+    def test_editable_gap_fill_rejects_path_with_existing_seam_edge(self):
+        seam_mapping = load_module('uvsp_editable_gap_existing_seam_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1),
+                (4, 5),
+                (2, 3),
+                (2, 6),
+                (3, 7),
+                (1, 2),
+                (3, 4),
+            ],
+            vertex_count=8,
+        )
+        before_edge_count = len(mesh.edges)
+        for index in range(5):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=3)
+
+        self.assertEqual(len(mesh.edges), before_edge_count)
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertGreaterEqual(result['rejected_existing_seam_internal'], 1)
+        self.assertFalse(mesh.edges[5].use_seam)
+        self.assertFalse(mesh.edges[6].use_seam)
+
     def test_editable_gap_fill_deterministic_when_multiple_candidates_exist(self):
         seam_mapping = load_module('uvsp_editable_gap_deterministic_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(edges=[(0, 1), (4, 5), (6, 7), (9, 10), (1, 4), (7, 9)], vertex_count=11)
@@ -534,6 +560,68 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
 
         self.assertEqual(result['accepted_paths_count'], 2)
         self.assertEqual([path['vertices'] for path in result['accepted_paths']], [[1, 4], [7, 9]])
+
+    def test_editable_gap_fill_skips_second_candidate_after_endpoint_consumed(self):
+        seam_mapping = load_module('uvsp_editable_gap_consumed_endpoint_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1),
+                (3, 4),
+                (5, 6),
+                (1, 2),
+                (2, 3),
+                (1, 7),
+                (7, 5),
+            ],
+            vertex_count=8,
+        )
+        for index in range(3):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [1, 2, 3])
+        self.assertEqual(result['accepted_edges_count'], 2)
+        self.assertGreaterEqual(result['rejected_conflict_consumed_endpoint'], 1)
+        self.assertTrue(mesh.edges[3].use_seam)
+        self.assertTrue(mesh.edges[4].use_seam)
+        self.assertFalse(mesh.edges[5].use_seam)
+        self.assertFalse(mesh.edges[6].use_seam)
+
+    def test_editable_gap_fill_skips_candidate_reusing_reserved_bridge_edge(self):
+        seam_mapping = load_module('uvsp_editable_gap_reserved_edge_conflict_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1),
+                (5, 11),
+                (6, 12),
+                (10, 13),
+                (1, 2),
+                (2, 3),
+                (3, 5),
+                (6, 7),
+                (7, 2),
+                (3, 8),
+                (8, 10),
+            ],
+            vertex_count=14,
+        )
+        for index in range(4):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=5)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [1, 2, 3, 5])
+        self.assertGreaterEqual(result['rejected_conflict_consumed_endpoint'], 1)
+        self.assertTrue(mesh.edges[4].use_seam)
+        self.assertTrue(mesh.edges[5].use_seam)
+        self.assertTrue(mesh.edges[6].use_seam)
+        self.assertFalse(mesh.edges[7].use_seam)
+        self.assertFalse(mesh.edges[8].use_seam)
+        self.assertFalse(mesh.edges[9].use_seam)
+        self.assertFalse(mesh.edges[10].use_seam)
 
     def test_apply_seam_keys_uses_editable_gap_fill_not_legacy_repair_stack(self):
         seam_mapping = load_module('uvsp_editable_gap_routing_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -571,13 +659,14 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         operators_source = read_addon_file('operators.py')
 
         self.assertIn('postprocess_write_debug_sidecars', properties_source)
-        self.assertIn("name='Write Debug Sidecars'", properties_source)
+        self.assertIn("name='Write Legacy Debug Sidecars'", properties_source)
         self.assertIn('default=False', properties_source)
         self.assertIn(
-            "description='Write legacy post-processing diagnostic JSON files for debugging.'",
+            "description='Debug only: write legacy post-processing diagnostic JSON sidecars.'",
             properties_source,
         )
-        self.assertIn("post_box.prop(settings, 'postprocess_write_debug_sidecars')", ui_source)
+        self.assertIn("legacy_box.label(text='Legacy / Debug')", ui_source)
+        self.assertIn("legacy_box.prop(settings, 'postprocess_write_debug_sidecars')", ui_source)
         self.assertIn(
             'postprocess_write_debug_sidecars=settings.postprocess_write_debug_sidecars',
             operators_source,
