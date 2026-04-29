@@ -306,6 +306,31 @@ def build_curved_endpoint_bridge_mesh(count=1, *, vertex_count=10000):
     return FakeMesh(edges=edges, vertex_count=vertex_count, coords=coords), predicted_keys, paths
 
 
+def build_straight_tangent_weak_mesh(path=(100, 101, 102), *, alternative_support=False, same_component=False):
+    u, middle, v = path
+    left_neighbor = u - 1
+    right_neighbor = v + 1
+    alt_neighbor = u - 2
+    edges = [(left_neighbor, u), (v, right_neighbor), (u, middle), (middle, v)]
+    predicted_keys = [(left_neighbor, u), (v, right_neighbor)]
+    if alternative_support:
+        edges.append((alt_neighbor, u))
+    if same_component:
+        edges.append((left_neighbor, right_neighbor))
+        predicted_keys.append((left_neighbor, right_neighbor))
+    coords = {
+        left_neighbor: (0.0, -1.0, 0.0),
+        u: (0.0, 0.0, 0.0),
+        middle: (1.0, 0.0, 0.0),
+        v: (2.0, 0.0, 0.0),
+        right_neighbor: (3.0, 0.0, 0.0),
+        alt_neighbor: (-1.0, 0.0, 0.0),
+        9999: (1000.0, 1000.0, 1000.0),
+    }
+    vertex_count = max(max(vertex for edge in edges for vertex in edge), 9999) + 1
+    return FakeMesh(edges=edges, vertex_count=vertex_count, coords=coords), predicted_keys, path
+
+
 def rank_review_allowed_report(rank, path, *, human_labels=(), duplicate=False, weak=False, selected=False):
     u, middle, v = path
     tier = 3 if weak else 1
@@ -2951,6 +2976,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
         self.assertTrue(payload['compact_sidecar'])
         self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertIn('write_phase2k_r_tangent_audit_rescue', read_addon_file('operators.py'))
         self.assertIn('normalized_decision_summary', payload)
         self.assertIn('compactness_summary', payload)
         self.assertIn('write_phase2h_r3_visual_review', read_addon_file('operators.py'))
@@ -3695,6 +3721,197 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertNotIn('human_case', inspect.signature(seam_mapping.apply_missing_edge_continuity_repair).parameters)
         self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_local_continuity_repair).parameters)
         self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters)
+        self.assertEqual(inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters[
+            'max_repair_paths'
+        ].default, 9)
+
+    def test_phase2k_r_tangent_audit_sidecar_is_emitted_and_read_only(self):
+        seam_mapping = load_module('uvsp_phase2kr_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_straight_tangent_weak_mesh(alternative_support=True)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prediction_path = str(Path(temp_dir) / 'prediction.json')
+            Path(prediction_path).write_text('{}', encoding='utf-8')
+            sidecar = seam_mapping.write_phase2k_r_tangent_audit_rescue(prediction_path, result)
+            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
+
+        self.assertTrue(sidecar.endswith('_phase2k_r_tangent_audit_rescue.json'))
+        self.assertEqual(payload['phase'], '2K-R')
+        self.assertEqual(payload['name'], 'straight_tangent_weak_rescue_audit')
+        self.assertTrue(payload['read_only'])
+        self.assertTrue(payload['seam_flags_unchanged'])
+        self.assertTrue(payload['not_applied_to_mesh'])
+        self.assertFalse(payload['probabilities_used'])
+        self.assertTrue(payload['diagnostic_paths_are_labels_only'])
+        self.assertTrue(payload['active_phase2k_allowed_means_review_only'])
+        self.assertTrue(payload['compact_sidecar'])
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+
+    def test_phase2k_r_reports_straight_one_sided_weak_candidates_without_audit_evidence(self):
+        seam_mapping = load_module('uvsp_phase2kr_inconclusive_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, path = build_straight_tangent_weak_mesh()
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(mesh)
+        reports = payload['tangent_audit_candidates']
+
+        self.assertTrue(reports)
+        self.assertEqual(reports[0]['path_vertex_ids'], list(path))
+        self.assertEqual(reports[0]['tangent_audit_status'], 'audit_inconclusive')
+        self.assertFalse(reports[0]['active_safe_under_future_phase2k'])
+        self.assertEqual(reports[0]['rejection_or_blocking_reason'], 'no_explicit_tangent_audit_support')
+        self.assertFalse(payload['active_phase2k_allowed'])
+
+    def test_phase2k_r_active_safe_requires_explicit_alternative_tangent_support(self):
+        seam_mapping = load_module('uvsp_phase2kr_supported_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, path = build_straight_tangent_weak_mesh(alternative_support=True)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(mesh)
+        reports = payload['tangent_audit_candidates']
+
+        self.assertTrue(reports)
+        self.assertEqual(reports[0]['path_vertex_ids'], list(path))
+        self.assertEqual(reports[0]['tangent_audit_status'], 'audit_supported_rescue')
+        self.assertTrue(reports[0]['explicit_audit_support']['alternative_tangent_supported'])
+        self.assertTrue(reports[0]['active_safe_under_future_phase2k'])
+        self.assertTrue(reports[0]['active_safe_under_future_phase2k_means_review_only'])
+        self.assertTrue(payload['active_phase2k_allowed'])
+
+    def test_phase2k_r_rejects_same_component_length3_and_missing_edges_from_audit_candidates(self):
+        seam_mapping = load_module('uvsp_phase2kr_reject_scope_smoke', ADDON_DIR / 'seam_mapping.py')
+        same_mesh, same_predicted, _ = build_straight_tangent_weak_mesh(
+            alternative_support=True,
+            same_component=True,
+        )
+        seam_mapping.apply_seam_keys(
+            same_mesh,
+            same_predicted,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        same_payload = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(same_mesh)
+
+        length3_mesh = FakeMesh(
+            edges=[(0, 1), (4, 5), (1, 2), (2, 3), (3, 4)],
+            vertex_count=10000,
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.01, 0.0, 0.0),
+                2: (0.02, 0.0, 0.0),
+                3: (0.03, 0.0, 0.0),
+                4: (0.04, 0.0, 0.0),
+                5: (0.05, 0.0, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            length3_mesh,
+            [(0, 1), (4, 5)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        length3_payload = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(length3_mesh)
+
+        missing_payload = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(
+            same_mesh,
+            residual_payload={
+                'paths': [{'label': 'missing_case', 'path_vertex_ids': [5477, 5520, 5483]}],
+                'read_only': True,
+            },
+        )
+
+        self.assertEqual(same_payload['decision_summary']['straight_tangent_weak_candidates_total'], 0)
+        self.assertEqual(length3_payload['decision_summary']['straight_tangent_weak_candidates_total'], 0)
+        self.assertFalse(missing_payload['representative_case']['all_edges_exist_in_blender'])
+        self.assertFalse(missing_payload['representative_case']['tangent_audit_candidate'])
+
+    def test_phase2k_r_diagnostic_labels_do_not_affect_active_safe_decision(self):
+        seam_mapping = load_module('uvsp_phase2kr_labels_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, path = build_straight_tangent_weak_mesh(alternative_support=True)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        no_label = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(mesh)
+        with_label = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(
+            mesh,
+            residual_payload={
+                'paths': [{'label': 'manual_label', 'path_vertex_ids': list(path)}],
+                'read_only': True,
+            },
+        )
+
+        self.assertEqual(
+            no_label['tangent_audit_candidates'][0]['active_safe_under_future_phase2k'],
+            with_label['tangent_audit_candidates'][0]['active_safe_under_future_phase2k'],
+        )
+        self.assertIn('manual_label', with_label['tangent_audit_candidates'][0]['diagnostic_labels_if_any'])
+        self.assertFalse(with_label['tangent_audit_candidates'][0]['diagnostic_labels_used_for_selection'])
+
+    def test_phase2k_r_representative_5477_style_case_appears_by_generic_rule(self):
+        seam_mapping = load_module('uvsp_phase2kr_representative_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_straight_tangent_weak_mesh(
+            path=(5477, 5520, 5483),
+            alternative_support=True,
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        payload = seam_mapping.simulate_phase2k_r_tangent_audit_rescue(mesh)
+        representative = payload['representative_case']
+
+        self.assertTrue(representative['found_in_candidate_space'])
+        self.assertTrue(representative['all_edges_exist_in_blender'])
+        self.assertTrue(representative['tangent_audit_candidate'])
+        self.assertEqual(representative['tangent_audit_status'], 'audit_supported_rescue')
+        self.assertTrue(representative['active_safe_under_future_phase2k'])
+        self.assertFalse(representative['diagnostic_labels_used_for_selection'])
+        self.assertTrue(any(
+            report['path_vertex_ids'] == [5477, 5520, 5483]
+            for report in payload['tangent_audit_candidates']
+        ))
+
+    def test_phase2k_r_phase2j_compact_audit_and_existing_caps_remain_intact(self):
+        seam_mapping = load_module('uvsp_phase2kr_phase2j_audit_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_curved_endpoint_bridge_mesh()
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        audit = result.phase2k_r_tangent_audit_rescue['phase2j_curved_repair_compact_audit']
+
+        self.assertEqual(audit['curved_safety_cap'], 6)
+        self.assertEqual(audit['curved_paths_marked'], result.blender_curved_two_edge_endpoint_bridge_paths_marked)
+        self.assertIn('integrity_flags', audit)
+        self.assertFalse(audit['integrity_flags']['probabilities_used_for_curved_repair'])
+        self.assertFalse(audit['integrity_flags']['phase2j_curved_repair_uses_hardcoded_paths'])
         self.assertEqual(inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters[
             'max_repair_paths'
         ].default, 9)

@@ -101,6 +101,7 @@ class SeamApplyResult:
     unified_local_continuity_simulation_phase2h_r: dict | None = None
     phase2h_r3_visual_review: dict | None = None
     phase2j_r_small_gap_rule_simulation: dict | None = None
+    phase2k_r_tangent_audit_rescue: dict | None = None
 
 
 def load_predicted_edge_keys(json_path):
@@ -358,6 +359,15 @@ def apply_seam_keys(
         mesh,
         enabled=bool(enable_local_repair),
     )
+    phase2k_r_tangent_audit_rescue = simulate_phase2k_r_tangent_audit_rescue(
+        mesh,
+        predicted_keys=applied_keys,
+        local_repair_reports=repair['candidate_reports'],
+        two_edge_reports=two_edge_repair['candidate_reports'],
+        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+        residual_payload=residual_gap_phase2e_debug,
+        curved_repair=curved_endpoint_bridge_repair,
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -549,6 +559,7 @@ def apply_seam_keys(
         unified_local_continuity_simulation_phase2h_r=unified_local_continuity_simulation_phase2h_r,
         phase2h_r3_visual_review=phase2h_r3_visual_review,
         phase2j_r_small_gap_rule_simulation=phase2j_r_small_gap_rule_simulation,
+        phase2k_r_tangent_audit_rescue=phase2k_r_tangent_audit_rescue,
     )
 
 
@@ -5029,6 +5040,475 @@ def _phase2jr_geq(value, threshold):
     return value is not None and value >= threshold
 
 
+PHASE2KR_REPRESENTATIVE_CASE = (5477, 5520, 5483)
+PHASE2KR_REPORT_CAPS = {
+    'tangent_audit_candidates': 20,
+}
+
+
+def simulate_phase2k_r_tangent_audit_rescue(
+    mesh,
+    predicted_keys=None,
+    local_repair_reports=(),
+    two_edge_reports=(),
+    endpoint_bridge_reports=(),
+    residual_payload=None,
+    curved_repair=None,
+):
+    seam_flags_before = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    reports, residual_by_path = _phase2h_collect_candidate_reports(
+        mesh,
+        predicted_keys=predicted_keys,
+        local_repair_reports=local_repair_reports,
+        two_edge_reports=two_edge_reports,
+        endpoint_bridge_reports=endpoint_bridge_reports,
+        residual_payload=residual_payload,
+    )
+    diagnostic_labels_by_path = _phase2hr_diagnostic_labels_by_path(residual_payload)
+    candidates = [
+        _phase2hr_candidate_for_simulation(report, diagnostic_labels_by_path)
+        for report in reports
+    ]
+    edge_items, _, _ = _mesh_edge_lookup(mesh)
+    _, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    audit_reports = [
+        _phase2kr_tangent_audit_report(mesh, candidate, seam_adjacency)
+        for candidate in candidates
+        if _phase2kr_is_tangent_weak_base_candidate(candidate)
+    ]
+    audit_reports.sort(key=_phase2kr_audit_sort_key)
+    _phase2kr_apply_duplicate_endpoint_pair_audit(audit_reports)
+    capped_reports, truncated = _phase2jr_cap_reports(
+        audit_reports,
+        PHASE2KR_REPORT_CAPS['tangent_audit_candidates'],
+    )
+    representative = _phase2kr_representative_case(candidates, audit_reports, residual_by_path)
+    phase2j_audit = _phase2kr_phase2j_curved_compact_audit(curved_repair)
+    decision = _phase2kr_decision_summary(audit_reports)
+    seam_flags_after = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    if seam_flags_after != seam_flags_before:
+        raise RuntimeError('Phase 2K-R tangent audit modified seam flags.')
+    return {
+        'phase': '2K-R',
+        'name': 'straight_tangent_weak_rescue_audit',
+        'read_only': True,
+        'seam_flags_unchanged': True,
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'active_phase2k_allowed': decision['active_phase2k_allowed'],
+        'active_phase2k_allowed_means_review_only': True,
+        'active_phase2k_blocking_reasons': list(decision['active_phase2k_blocking_reasons']),
+        'recommended_next_action': decision['recommended_next_action'],
+        'compact_sidecar': True,
+        'tangent_audit_candidates': capped_reports,
+        'representative_case': representative,
+        'phase2j_curved_repair_compact_audit': phase2j_audit,
+        'decision_summary': decision,
+        'compactness_summary': {
+            'total_candidates_considered': len(candidates),
+            'total_tangent_audit_candidates_before_truncation': len(audit_reports),
+            'total_candidates_reported': len(capped_reports) + 1,
+            'total_candidates_truncated': truncated,
+            'report_caps': dict(PHASE2KR_REPORT_CAPS),
+        },
+    }
+
+
+def _phase2kr_is_tangent_weak_base_candidate(candidate):
+    alignments = [
+        value for value in (candidate.get('endpoint_tangent_alignments') or ())
+        if value is not None
+    ]
+    return bool(
+        candidate.get('path_length_edges') == 2
+        and candidate.get('all_edges_exist_in_blender', False)
+        and not candidate.get('already_all_marked', False)
+        and candidate.get('degree_pattern') == [1, 0, 1]
+        and candidate.get('component_relation') == 'different_components'
+        and candidate.get('loop_risk') == 'none'
+        and candidate.get('topology_risk') == 'accepted_pattern'
+        and _phase2jr_geq(candidate.get('path_straightness'), 0.90)
+        and _phase2jr_leq(candidate.get('normalized_total_path_length_if_mesh_scale_available'), 0.015)
+        and alignments
+        and max(alignments) >= 0.90
+        and _phase2jr_lt(candidate.get('min_endpoint_tangent_alignment'), 0.30)
+    )
+
+
+def _phase2kr_tangent_audit_report(mesh, candidate, seam_adjacency):
+    detail = _phase2kr_tangent_detail(mesh, candidate, seam_adjacency)
+    alignments = [
+        value for value in (candidate.get('endpoint_tangent_alignments') or ())
+        if value is not None
+    ]
+    weak_index = _phase2hr3_weak_endpoint_index(candidate)
+    path = list(candidate.get('path_vertex_ids', ()))
+    weak_vertex = None if weak_index is None or not path else path[0 if weak_index == 0 else -1]
+    strong_vertex = None if weak_index is None or not path else path[-1 if weak_index == 0 else 0]
+    explicit_support = _phase2kr_explicit_support(detail, candidate, alignments)
+    duplicate_conflict = False
+    rejection = _phase2kr_rejection_reason(candidate, detail, explicit_support, duplicate_conflict)
+    active_safe = rejection is None
+    return {
+        'path_vertex_ids': path,
+        'path_edge_keys': list(candidate.get('path_edge_keys', ())),
+        'blender_edge_indices': list(candidate.get('blender_edge_indices', ())),
+        'degree_pattern': list(candidate.get('degree_pattern', ())),
+        'component_relation': candidate.get('component_relation'),
+        'loop_risk': candidate.get('loop_risk'),
+        'topology_risk': candidate.get('topology_risk'),
+        'total_path_length': candidate.get('total_path_length'),
+        'endpoint_distance': candidate.get('endpoint_distance'),
+        'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+        'normalized_endpoint_distance': candidate.get('normalized_endpoint_distance_if_mesh_scale_available'),
+        'path_straightness': candidate.get('path_straightness'),
+        'endpoint_tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+        'weak_endpoint_index': weak_index,
+        'weak_endpoint_vertex_id': weak_vertex,
+        'strong_endpoint_vertex_id': strong_vertex,
+        'seam_neighbor_used_for_tangent_at_weak_endpoint': detail['weak_seam_neighbor'],
+        'seam_neighbor_used_for_tangent_at_strong_endpoint': detail['strong_seam_neighbor'],
+        'weak_endpoint_original_tangent_vector_if_available': detail['weak_tangent_vector'],
+        'strong_endpoint_original_tangent_vector_if_available': detail['strong_tangent_vector'],
+        'bridge_direction_from_weak_endpoint': detail['weak_bridge_direction'],
+        'bridge_direction_from_strong_endpoint': detail['strong_bridge_direction'],
+        'alternative_tangent_sources_checked': detail['alternative_tangent_sources_checked'],
+        'alternative_tangent_alignment_values': detail['alternative_tangent_alignment_values'],
+        'component_direction_fallback_alignment': detail['component_direction_fallback_alignment'],
+        'junction_or_short_fragment_warning': detail['junction_or_short_fragment_warning'],
+        'tangent_audit_status': _phase2kr_audit_status(explicit_support, candidate, alignments),
+        'active_safe_under_future_phase2k': bool(active_safe),
+        'active_safe_under_future_phase2k_means_review_only': True,
+        'rejection_or_blocking_reason': rejection,
+        'diagnostic_labels_if_any': list(candidate.get('residual_match_labels', ())),
+        'diagnostic_labels_used_for_selection': False,
+        'duplicate_endpoint_pair_key': list(candidate.get('duplicate_endpoint_pair_key', ())),
+        'duplicate_endpoint_pair_conflict': duplicate_conflict,
+        'explicit_audit_support': explicit_support,
+    }
+
+
+def _phase2kr_tangent_detail(mesh, candidate, seam_adjacency):
+    path = list(candidate.get('path_vertex_ids', ()))
+    alignments = candidate.get('endpoint_tangent_alignments') or ()
+    weak_index = _phase2hr3_weak_endpoint_index(candidate)
+    if len(path) != 3 or weak_index is None:
+        return _phase2kr_empty_tangent_detail()
+    weak_endpoint = path[0] if weak_index == 0 else path[2]
+    strong_endpoint = path[2] if weak_index == 0 else path[0]
+    middle = path[1]
+    weak_neighbor = _phase2kr_single_seam_neighbor(seam_adjacency, weak_endpoint)
+    strong_neighbor = _phase2kr_single_seam_neighbor(seam_adjacency, strong_endpoint)
+    pos_weak = _vertex_position(mesh, weak_endpoint)
+    pos_strong = _vertex_position(mesh, strong_endpoint)
+    pos_middle = _vertex_position(mesh, middle)
+    pos_weak_neighbor = None if weak_neighbor is None else _vertex_position(mesh, weak_neighbor)
+    pos_strong_neighbor = None if strong_neighbor is None else _vertex_position(mesh, strong_neighbor)
+    weak_tangent = None
+    strong_tangent = None
+    weak_bridge = None
+    strong_bridge = None
+    component_fallback = None
+    if None not in (pos_weak, pos_middle):
+        weak_bridge = _normalize(_vector_sub(pos_middle, pos_weak))
+    if None not in (pos_strong, pos_middle):
+        strong_bridge = _normalize(_vector_sub(pos_middle, pos_strong))
+    if None not in (pos_weak, pos_weak_neighbor):
+        weak_tangent = _normalize(_vector_sub(pos_weak, pos_weak_neighbor))
+    if None not in (pos_strong, pos_strong_neighbor):
+        strong_tangent = _normalize(_vector_sub(pos_strong, pos_strong_neighbor))
+    second_hop = _phase2kr_second_hop_seam_neighbor(seam_adjacency, weak_endpoint, weak_neighbor)
+    pos_second_hop = None if second_hop is None else _vertex_position(mesh, second_hop)
+    if None not in (pos_weak, pos_second_hop, weak_bridge):
+        component_direction = _normalize(_vector_sub(pos_weak, pos_second_hop))
+        component_fallback = None if component_direction is None else _dot(component_direction, weak_bridge)
+    alternative_sources, alternative_values = _phase2kr_alternative_tangent_sources(
+        mesh,
+        candidate,
+        seam_adjacency,
+        weak_endpoint,
+        middle,
+        weak_bridge,
+    )
+    weak_seam_len = None if None in (pos_weak, pos_weak_neighbor) else _distance(pos_weak, pos_weak_neighbor)
+    total_len = candidate.get('total_path_length')
+    short_fragment = bool(
+        weak_seam_len is not None
+        and total_len not in (None, 0)
+        and weak_seam_len <= total_len * 0.25
+    )
+    return {
+        'weak_seam_neighbor': weak_neighbor,
+        'strong_seam_neighbor': strong_neighbor,
+        'weak_tangent_vector': None if weak_tangent is None else list(weak_tangent),
+        'strong_tangent_vector': None if strong_tangent is None else list(strong_tangent),
+        'weak_bridge_direction': None if weak_bridge is None else list(weak_bridge),
+        'strong_bridge_direction': None if strong_bridge is None else list(strong_bridge),
+        'alternative_tangent_sources_checked': alternative_sources,
+        'alternative_tangent_alignment_values': alternative_values,
+        'component_direction_fallback_alignment': component_fallback,
+        'junction_or_short_fragment_warning': short_fragment,
+        'strong_alignment': None if not alignments else alignments[1 - weak_index],
+    }
+
+
+def _phase2kr_empty_tangent_detail():
+    return {
+        'weak_seam_neighbor': None,
+        'strong_seam_neighbor': None,
+        'weak_tangent_vector': None,
+        'strong_tangent_vector': None,
+        'weak_bridge_direction': None,
+        'strong_bridge_direction': None,
+        'alternative_tangent_sources_checked': [],
+        'alternative_tangent_alignment_values': [],
+        'component_direction_fallback_alignment': None,
+        'junction_or_short_fragment_warning': False,
+        'strong_alignment': None,
+    }
+
+
+def _phase2kr_single_seam_neighbor(seam_adjacency, vertex):
+    neighbors = sorted(seam_adjacency.get(vertex, ()))
+    return None if len(neighbors) != 1 else neighbors[0]
+
+
+def _phase2kr_second_hop_seam_neighbor(seam_adjacency, endpoint, seam_neighbor):
+    if seam_neighbor is None:
+        return None
+    candidates = [vertex for vertex in sorted(seam_adjacency.get(seam_neighbor, ())) if vertex != endpoint]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _phase2kr_alternative_tangent_sources(mesh, candidate, seam_adjacency, weak_endpoint, middle, weak_bridge):
+    if weak_bridge is None:
+        return [], []
+    path_vertices = set(candidate.get('path_vertex_ids', ()))
+    seam_neighbors = set(seam_adjacency.get(weak_endpoint, ()))
+    edge_items, _, adjacency = _mesh_edge_lookup(mesh)
+    del edge_items
+    sources = []
+    values = []
+    for neighbor in sorted(adjacency.get(weak_endpoint, ())):
+        if neighbor == middle or neighbor in seam_neighbors or neighbor in path_vertices:
+            continue
+        pos_endpoint = _vertex_position(mesh, weak_endpoint)
+        pos_neighbor = _vertex_position(mesh, neighbor)
+        if None in (pos_endpoint, pos_neighbor):
+            continue
+        tangent = _normalize(_vector_sub(pos_endpoint, pos_neighbor))
+        if tangent is None:
+            continue
+        sources.append({'neighbor_vertex_id': int(neighbor), 'source': 'adjacent_non_path_edge'})
+        values.append(_dot(tangent, weak_bridge))
+    return sources, values
+
+
+def _phase2kr_explicit_support(detail, candidate, alignments):
+    component_support = _phase2jr_geq(detail['component_direction_fallback_alignment'], 0.85)
+    alternative_support = any(value >= 0.75 for value in detail['alternative_tangent_alignment_values'])
+    short_fragment_support = bool(
+        detail['junction_or_short_fragment_warning']
+        and alignments
+        and max(alignments) >= 0.90
+        and _phase2jr_geq(candidate.get('path_straightness'), 0.95)
+    )
+    return {
+        'component_direction_fallback_supported': bool(component_support),
+        'alternative_tangent_supported': bool(alternative_support),
+        'short_fragment_supported': bool(short_fragment_support),
+    }
+
+
+def _phase2kr_audit_status(explicit_support, candidate, alignments):
+    if not alignments:
+        return 'audit_inconclusive'
+    if min(alignments) < -0.25:
+        return 'audit_reject'
+    if (
+        _phase2jr_geq(candidate.get('path_straightness'), 0.95)
+        and any(explicit_support.values())
+    ):
+        return 'audit_supported_rescue'
+    return 'audit_inconclusive'
+
+
+def _phase2kr_rejection_reason(candidate, detail, explicit_support, duplicate_conflict):
+    if duplicate_conflict:
+        return 'duplicate_endpoint_pair_conflict'
+    alignments = [
+        value for value in (candidate.get('endpoint_tangent_alignments') or ())
+        if value is not None
+    ]
+    if not _phase2kr_is_tangent_weak_base_candidate(candidate):
+        return 'base_candidate_conditions_not_met'
+    if len([value for value in alignments if value < 0.30]) != 1:
+        return 'expected_exactly_one_weak_endpoint'
+    if not _phase2jr_geq(candidate.get('path_straightness'), 0.95):
+        return 'path_not_straight_enough_for_future_phase2k'
+    if not any(explicit_support.values()):
+        return 'no_explicit_tangent_audit_support'
+    if _phase2kr_audit_status(explicit_support, candidate, alignments) != 'audit_supported_rescue':
+        return 'tangent_audit_not_supported'
+    return None
+
+
+def _phase2kr_apply_duplicate_endpoint_pair_audit(reports):
+    seen = set()
+    for report in reports:
+        key = tuple(report.get('duplicate_endpoint_pair_key', ()))
+        if key in seen:
+            report['duplicate_endpoint_pair_conflict'] = True
+            report['active_safe_under_future_phase2k'] = False
+            report['rejection_or_blocking_reason'] = 'duplicate_endpoint_pair_conflict'
+            if report['tangent_audit_status'] == 'audit_supported_rescue':
+                report['tangent_audit_status'] = 'audit_inconclusive'
+            continue
+        seen.add(key)
+
+
+def _phase2kr_audit_sort_key(report):
+    return (
+        0 if report.get('active_safe_under_future_phase2k') else 1,
+        -float(report.get('path_straightness') or 0.0),
+        float(report.get('normalized_total_path_length') or 999.0),
+        tuple(report.get('path_vertex_ids', ())),
+    )
+
+
+def _phase2kr_representative_case(candidates, audit_reports, residual_by_path):
+    key = _phase2h_path_key(PHASE2KR_REPRESENTATIVE_CASE)
+    candidate = next(
+        (
+            item for item in candidates
+            if _phase2h_path_key(item.get('path_vertex_ids', ())) == key
+        ),
+        None,
+    )
+    audit = next(
+        (
+            item for item in audit_reports
+            if _phase2h_path_key(item.get('path_vertex_ids', ())) == key
+        ),
+        None,
+    )
+    residual = residual_by_path.get(key, {})
+    return {
+        'path_vertex_ids': list(PHASE2KR_REPRESENTATIVE_CASE),
+        'found_in_candidate_space': candidate is not None,
+        'all_edges_exist_in_blender': None if candidate is None else candidate.get('all_edges_exist_in_blender'),
+        'tangent_audit_candidate': audit is not None,
+        'active_safe_under_future_phase2k': bool(
+            audit and audit.get('active_safe_under_future_phase2k', False)
+        ),
+        'tangent_audit_status': None if audit is None else audit.get('tangent_audit_status'),
+        'blocking_reasons_if_false': (
+            ['representative_path_not_found']
+            if candidate is None else (
+                [audit.get('rejection_or_blocking_reason')]
+                if audit and audit.get('rejection_or_blocking_reason') else []
+            )
+        ),
+        'metrics': {} if candidate is None else {
+            'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+            'normalized_endpoint_distance': candidate.get('normalized_endpoint_distance_if_mesh_scale_available'),
+            'path_straightness': candidate.get('path_straightness'),
+            'endpoint_tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+            'min_endpoint_tangent_alignment': candidate.get('min_endpoint_tangent_alignment'),
+            'component_relation': candidate.get('component_relation'),
+            'loop_risk': candidate.get('loop_risk'),
+            'topology_risk': candidate.get('topology_risk'),
+        },
+        'diagnostic_labels_if_any': [] if not residual else [residual.get('label')],
+        'diagnostic_labels_used_for_selection': False,
+    }
+
+
+def _phase2kr_phase2j_curved_compact_audit(curved_repair):
+    if not curved_repair:
+        return {
+            'phase2j_curved_repair_compact_audit_unavailable_reason': (
+                'phase2j_curved_repair_data_not_available'
+            )
+        }
+    selected = list(curved_repair.get('selected_reports', ()))
+    return {
+        'curved_candidates_total': int(curved_repair.get('candidates_total', 0)),
+        'curved_eligible_total': int(curved_repair.get('eligible_total', 0)),
+        'curved_paths_marked': int(curved_repair.get('paths_marked', 0)),
+        'curved_edges_marked': int(curved_repair.get('edges_marked', 0)),
+        'curved_over_cap': bool(curved_repair.get('over_cap', False)),
+        'curved_safety_cap': int(curved_repair.get('safety_cap', 6)),
+        'selected_curved_path_vertex_ids': [
+            list(report.get('path_vertex_ids', ())) for report in selected
+        ],
+        'selected_curved_candidate_metrics_minimal': [
+            {
+                'path_vertex_ids': list(report.get('path_vertex_ids', ())),
+                'normalized_total_path_length': report.get('normalized_total_path_length'),
+                'path_straightness': report.get('path_straightness'),
+                'endpoint_tangent_alignments': report.get('endpoint_tangent_alignments'),
+                'min_endpoint_tangent_alignment': report.get('min_endpoint_tangent_alignment'),
+                'segment_length_ratio': report.get('segment_length_ratio'),
+                'diagnostic_labels_if_any': report.get('diagnostic_residual_labels_if_any', []),
+                'diagnostic_labels_used_for_selection': bool(
+                    report.get('diagnostic_labels_used_for_selection', False)
+                ),
+            }
+            for report in selected
+        ],
+        'integrity_flags': {
+            'probabilities_used_for_curved_repair': False,
+            'phase2j_curved_repair_uses_hardcoded_paths': False,
+            'phase2j_curved_repair_uses_probabilities': False,
+            'production_hardcoded_path_exceptions_enabled': False,
+            'diagnostic_path_labels_read_only': True,
+        },
+    }
+
+
+def _phase2kr_decision_summary(audit_reports):
+    active_safe = [
+        report for report in audit_reports
+        if report.get('active_safe_under_future_phase2k', False)
+    ]
+    blocking = []
+    if not active_safe:
+        blocking.append('no_active_safe_tangent_audit_candidates')
+    if len(active_safe) > 1:
+        blocking.append('more_than_one_active_safe_candidate')
+    if any(report.get('component_relation') != 'different_components' for report in active_safe):
+        blocking.append('non_inter_component_candidate_would_be_active')
+    if any(report.get('loop_risk') != 'none' for report in active_safe):
+        blocking.append('loop_risk_candidate_would_be_active')
+    active_allowed = not blocking
+    return {
+        'straight_tangent_weak_candidates_total': len(audit_reports),
+        'audit_supported_rescue_count': sum(
+            1 for report in audit_reports
+            if report.get('tangent_audit_status') == 'audit_supported_rescue'
+        ),
+        'audit_inconclusive_count': sum(
+            1 for report in audit_reports
+            if report.get('tangent_audit_status') == 'audit_inconclusive'
+        ),
+        'audit_reject_count': sum(
+            1 for report in audit_reports
+            if report.get('tangent_audit_status') == 'audit_reject'
+        ),
+        'active_safe_candidates_total': len(active_safe),
+        'active_phase2k_allowed': active_allowed,
+        'active_phase2k_allowed_means_review_only': True,
+        'active_phase2k_blocking_reasons': blocking,
+        'recommended_next_action': (
+            'architect_review_phase2k_tangent_rescue_candidate'
+            if active_allowed
+            else 'no_active_phase2k_repair_recommended_from_audit'
+        ),
+    }
+
+
 def _safe_ratio(value, denominator):
     if value is None or denominator in (None, 0):
         return None
@@ -5587,6 +6067,39 @@ def write_phase2j_r_small_gap_rule_simulation(json_path, result):
         json.dump(payload, file, indent=2)
         file.write('\n')
     return debug_path
+
+
+def write_phase2k_r_tangent_audit_rescue(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_phase2k_r_tangent_audit_rescue.json'
+    payload = result.phase2k_r_tangent_audit_rescue or {
+        'phase': '2K-R',
+        'name': 'straight_tangent_weak_rescue_audit',
+        'read_only': True,
+        'seam_flags_unchanged': True,
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'active_phase2k_allowed': False,
+        'active_phase2k_allowed_means_review_only': True,
+        'active_phase2k_blocking_reasons': ['audit_not_available'],
+        'recommended_next_action': 'no_active_phase2k_repair_recommended_from_audit',
+        'compact_sidecar': True,
+    }
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_phase2k_r_tangent_audit_rescue_summary(payload, debug_path):
+    summary = payload.get('decision_summary', {})
+    return (
+        f"Phase 2K-R tangent audit: "
+        f"candidates={summary.get('straight_tangent_weak_candidates_total', 0)}, "
+        f"supported={summary.get('audit_supported_rescue_count', 0)}, "
+        f"active_phase2k_allowed={str(payload.get('active_phase2k_allowed', False)).lower()}. "
+        f"Sidecar: {debug_path}"
+    )
 
 
 def format_phase2j_r_small_gap_rule_simulation_summary(payload, debug_path):
