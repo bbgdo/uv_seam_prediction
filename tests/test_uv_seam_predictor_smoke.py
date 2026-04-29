@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import json
 import sys
 import tempfile
@@ -528,6 +529,40 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(result.blender_local_repair_candidate_reports[-1]['vertex_ids_0based'], [0, 2])
         self.assertTrue(result.blender_local_repair_candidate_reports[-1]['accepted'])
 
+    def test_active_repair_signatures_do_not_accept_hardcoded_paths(self):
+        seam_mapping = load_module('uvsp_seam_mapping_repair_signature_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        self.assertNotIn(
+            'human_case',
+            inspect.signature(seam_mapping.apply_missing_edge_continuity_repair).parameters,
+        )
+        self.assertNotIn(
+            'target_paths',
+            inspect.signature(seam_mapping.apply_two_edge_local_continuity_repair).parameters,
+        )
+        self.assertNotIn(
+            'target_paths',
+            inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters,
+        )
+
+    def test_production_hardcoded_path_exception_telemetry_is_disabled(self):
+        seam_mapping = load_module('uvsp_seam_mapping_hardcode_telemetry_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1)], vertex_count=2)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        self.assertFalse(result.production_hardcoded_path_exceptions_enabled)
+        self.assertTrue(result.production_hardcoded_path_exceptions_removed)
+        self.assertTrue(result.diagnostic_path_labels_read_only)
+        self.assertFalse(result.human_case_over_cap_exception_used)
+        self.assertFalse(result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception)
+        self.assertFalse(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
+
     def test_local_repair_marks_human_2557_2558_style_case(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_human_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(
@@ -690,7 +725,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(result.blender_local_repair_edges_marked, 0)
         self.assertTrue(all(not mesh.edges[index].use_seam for index in candidate_indices))
 
-    def test_local_repair_over_cap_marks_only_allowed_human_case(self):
+    def test_local_repair_over_cap_does_not_special_case_human_edge(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_cap_human_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh, predicted_keys, candidate_indices = build_many_allowed_repair_candidates(
             32,
@@ -707,17 +742,19 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
 
         self.assertEqual(result.blender_local_repair_allowed_candidates_total, 33)
         self.assertTrue(result.blender_local_repair_repair_over_cap)
-        self.assertTrue(result.human_case_over_cap_exception_used)
-        self.assertTrue(result.human_case_2557_2558_marked_seam)
-        self.assertIs(mesh.edges[human_candidate_index].use_seam, True)
+        self.assertFalse(result.human_case_over_cap_exception_used)
+        self.assertFalse(result.human_case_2557_2558_marked_seam)
+        self.assertIs(mesh.edges[human_candidate_index].use_seam, False)
         self.assertTrue(all(not mesh.edges[index].use_seam for index in candidate_indices[1:]))
-        self.assertEqual(result.blender_local_repair_edges_marked, 1)
+        self.assertEqual(result.blender_local_repair_edges_marked, 0)
         human_reports = [
             report for report in result.blender_local_repair_candidate_reports
             if report['human_case_match']
         ]
         self.assertEqual(human_reports[0]['degree_pattern'], (2, 2))
-        self.assertTrue(human_reports[0]['over_cap_human_case_exception_used'])
+        self.assertTrue(human_reports[0]['allowed_by_degree_rule'])
+        self.assertFalse(human_reports[0]['accepted'])
+        self.assertEqual(human_reports[0]['rejection_reason'], 'repair_over_cap')
 
     def test_two_edge_repair_marks_valid_degree_patterns(self):
         seam_mapping = load_module('uvsp_seam_mapping_two_edge_valid_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -908,14 +945,12 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             self.assertFalse(mesh.edges[first_index].use_seam)
             self.assertFalse(mesh.edges[second_index].use_seam)
 
-    def test_two_edge_repair_over_cap_marks_only_allowed_targets(self):
+    def test_two_edge_repair_over_cap_does_not_special_case_targets(self):
         seam_mapping = load_module('uvsp_seam_mapping_two_edge_target_cap_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh, predicted_keys, path_edge_indices = build_many_two_edge_repair_candidates(
             15,
             include_targets=True,
         )
-        target_indices = path_edge_indices[:2]
-        non_target_indices = path_edge_indices[2:]
 
         result = seam_mapping.apply_seam_keys(
             mesh,
@@ -925,14 +960,12 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
 
         self.assertTrue(result.blender_two_edge_repair_over_cap)
-        self.assertTrue(result.target_path_2045_2541_4884_marked)
-        self.assertTrue(result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception)
-        self.assertTrue(result.target_path_2540_2541_2544_marked)
-        self.assertTrue(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
-        for first_index, second_index in target_indices:
-            self.assertTrue(mesh.edges[first_index].use_seam)
-            self.assertTrue(mesh.edges[second_index].use_seam)
-        for first_index, second_index in non_target_indices:
+        self.assertFalse(result.target_path_2045_2541_4884_marked)
+        self.assertFalse(result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception)
+        self.assertFalse(result.target_path_2540_2541_2544_marked)
+        self.assertFalse(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
+        self.assertEqual(result.blender_two_edge_repair_paths_marked, 0)
+        for first_index, second_index in path_edge_indices:
             self.assertFalse(mesh.edges[first_index].use_seam)
             self.assertFalse(mesh.edges[second_index].use_seam)
 
@@ -1084,11 +1117,11 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
                 coords=endpoint_bridge_coords(),
             ),
             enabled=True,
-            target_paths=((100, 101, 102),),
         )
-        missing_report = missing['candidate_reports'][-1]
-        self.assertEqual(missing_report['path_vertex_ids'], [100, 101, 102])
-        self.assertEqual(missing_report['rejection_reason'], 'edge_not_found')
+        self.assertFalse(any(
+            report['path_vertex_ids'] == [100, 101, 102]
+            for report in missing['candidate_reports']
+        ))
 
     def test_two_edge_endpoint_bridge_rejects_tangent_unavailable(self):
         seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_no_tangent_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -1316,6 +1349,106 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         for first_index, second_index in non_target_indices[9:]:
             self.assertFalse(mesh.edges[first_index].use_seam)
             self.assertFalse(mesh.edges[second_index].use_seam)
+
+    def test_two_edge_endpoint_bridge_selects_named_paths_only_by_rank_and_cap(self):
+        seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_named_rank_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = []
+        predicted_keys = []
+        coords = {9999: (1.0, 1.0, 1.0)}
+        path_indices = {}
+
+        def append_named_path(path, left_neighbor, right_neighbor, total_span, y):
+            u, middle, v = path
+            step = total_span / 4.0
+            coords[left_neighbor] = (0.0, y, 0.0)
+            coords[u] = (step, y, 0.0)
+            coords[middle] = (step * 2.0, y, 0.0)
+            coords[v] = (step * 3.0, y, 0.0)
+            coords[right_neighbor] = (total_span, y, 0.0)
+            edges.extend([(left_neighbor, u), (v, right_neighbor)])
+            predicted_keys.extend([(left_neighbor, u), (v, right_neighbor)])
+            path_indices[path] = (len(edges), len(edges) + 1)
+            edges.extend([(u, middle), (middle, v)])
+
+        def append_path_with_coords(path, left_neighbor, right_neighbor, vertex_coords):
+            for vertex, co in vertex_coords.items():
+                coords[vertex] = co
+            u, middle, v = path
+            edges.extend([(left_neighbor, u), (v, right_neighbor)])
+            predicted_keys.extend([(left_neighbor, u), (v, right_neighbor)])
+            path_indices[path] = (len(edges), len(edges) + 1)
+            edges.extend([(u, middle), (middle, v)])
+
+        append_path_with_coords(
+            (2045, 2541, 4884),
+            2044,
+            4885,
+            {
+                2044: (0.0, 0.0, 0.0),
+                2045: (0.01, 0.0, 0.0),
+                2541: (0.02, 0.0, 0.0),
+                4884: (0.03, 0.0, 0.0),
+                4885: (0.04, 0.0, 0.0),
+            },
+        )
+        append_path_with_coords(
+            (2540, 2541, 2544),
+            2539,
+            2545,
+            {
+                2539: (0.005, 0.0, 0.0),
+                2540: (0.015, 0.0, 0.0),
+                2541: (0.02, 0.0, 0.0),
+                2544: (0.025, 0.0, 0.0),
+                2545: (0.035, 0.0, 0.0),
+            },
+        )
+        for index in range(6):
+            append_endpoint_bridge_candidate(
+                edges,
+                predicted_keys,
+                coords,
+                600 + index * 10,
+                total_span=0.03 + index * 0.01,
+                y=2.0 + index,
+            )
+        append_named_path((5149, 3003, 3005), 5100, 3006, 0.13, 9.0)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        reports = {
+            tuple(report['path_vertex_ids']): report
+            for report in result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
+        }
+        self.assertEqual(result.blender_two_edge_endpoint_bridge_selection_policy, 'top_k_ranked_continuity_tier_v2')
+        self.assertEqual(result.blender_two_edge_endpoint_bridge_safety_cap, 9)
+        self.assertTrue(result.blender_two_edge_endpoint_bridge_over_cap)
+        self.assertLessEqual(reports[(2045, 2541, 4884)]['rank_v2'], 9)
+        self.assertLessEqual(reports[(2540, 2541, 2544)]['rank_v2'], 9)
+        self.assertTrue(reports[(2045, 2541, 4884)]['selected_for_marking'])
+        self.assertTrue(reports[(2540, 2541, 2544)]['selected_for_marking'])
+        self.assertTrue(result.target_path_2045_2541_4884_marked)
+        self.assertTrue(result.target_path_2540_2541_2544_marked)
+        self.assertFalse(result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception)
+        self.assertFalse(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
+        self.assertEqual(reports[(3005, 3003, 5149)]['rank_v2'], 9)
+        self.assertTrue(reports[(3005, 3003, 5149)]['selected_for_marking'])
+        rank_10_report = next(
+            report for report in reports.values()
+            if report['rank_v2'] == 10
+        )
+        self.assertFalse(rank_10_report['selected_for_marking'])
+        self.assertEqual(rank_10_report['skipped_reason'], 'over_cap_ranked_below_threshold')
+        for path in ((5149, 3003, 3005),):
+            first_index, second_index = path_indices[path]
+            self.assertTrue(mesh.edges[first_index].use_seam)
+            self.assertTrue(mesh.edges[second_index].use_seam)
 
     def test_two_edge_endpoint_bridge_allowed_reports_include_selected_and_unselected(self):
         seam_mapping = load_module('uvsp_seam_mapping_endpoint_bridge_allowed_reports_smoke', ADDON_DIR / 'seam_mapping.py')

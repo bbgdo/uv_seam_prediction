@@ -81,6 +81,9 @@ class SeamApplyResult:
     human_gap_classification: dict | None = None
     residual_gap_phase2e_debug: dict | None = None
     general_residual_candidates_phase2h: dict | None = None
+    production_hardcoded_path_exceptions_enabled: bool = False
+    production_hardcoded_path_exceptions_removed: bool = True
+    diagnostic_path_labels_read_only: bool = True
 
 
 def load_predicted_edge_keys(json_path):
@@ -469,10 +472,14 @@ def apply_seam_keys(
         human_gap_classification=human_gap_classification,
         residual_gap_phase2e_debug=residual_gap_phase2e_debug,
         general_residual_candidates_phase2h=general_residual_candidates_phase2h,
+        production_hardcoded_path_exceptions_enabled=False,
+        production_hardcoded_path_exceptions_removed=True,
+        diagnostic_path_labels_read_only=True,
     )
 
 
-def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2558), max_repair_edges=32):
+def apply_missing_edge_continuity_repair(mesh, enabled=True, max_repair_edges=32):
+    human_case = DIAGNOSTIC_HUMAN_CASE_2557_2558
     human_key = (min(human_case[0], human_case[1]), max(human_case[0], human_case[1]))
     edge_items = []
     edge_by_key = {}
@@ -563,13 +570,6 @@ def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2
     human_case_over_cap_exception_used = False
     if not repair_over_cap:
         allowed_item_indices_to_mark = set(allowed_indices)
-    else:
-        for item_index in allowed_indices:
-            _, key, _ = edge_items[item_index]
-            if key == human_key:
-                allowed_item_indices_to_mark.add(item_index)
-                human_case_over_cap_exception_used = True
-                break
 
     report_by_key = {
         tuple(report['vertex_ids_0based']): report
@@ -586,8 +586,6 @@ def apply_missing_edge_continuity_repair(mesh, enabled=True, human_case=(2557, 2
                 report['accepted'] = True
                 report['marked_seam'] = True
                 report['rejection_reason'] = None
-                if repair_over_cap and key == human_key:
-                    report['over_cap_human_case_exception_used'] = True
         elif report is not None and report.get('allowed_by_degree_rule'):
             report['rejection_reason'] = 'repair_over_cap'
 
@@ -649,7 +647,6 @@ def _is_allowed_missing_edge_degree_pattern(degree_u, degree_v):
 def apply_two_edge_local_continuity_repair(
     mesh,
     enabled=True,
-    target_paths=((2045, 2541, 4884), (2540, 2541, 2544)),
     max_repair_paths=16,
 ):
     edge_items = []
@@ -664,7 +661,7 @@ def apply_two_edge_local_continuity_repair(
         adjacency.setdefault(key[0], set()).add(key[1])
         adjacency.setdefault(key[1], set()).add(key[0])
 
-    target_keys = {_canonical_two_edge_path(path) for path in target_paths}
+    target_keys = _diagnostic_old_endpoint_bridge_target_keys()
     if not enabled:
         return _two_edge_repair_result(
             enabled=False,
@@ -707,31 +704,11 @@ def apply_two_edge_local_continuity_repair(
                 if report['rejection_reason'] is None:
                     allowed_paths.append(path)
 
-    for target_path in sorted(target_keys):
-        if target_path in report_by_path:
-            continue
-        if not _two_edge_path_edges_exist(target_path, edge_by_key):
-            continue
-        report = _two_edge_repair_report(
-            path=target_path,
-            edge_by_key=edge_by_key,
-            seam_degree=seam_degree,
-            component_id_of=component_id_of,
-            seam_adjacency=seam_adjacency,
-            target_keys=target_keys,
-        )
-        candidate_reports.append(report)
-        report_by_path[target_path] = report
-        if report['rejection_reason'] is None:
-            allowed_paths.append(target_path)
-
     allowed_count = len(allowed_paths)
     over_cap = allowed_count > int(max_repair_paths)
     paths_to_mark = set()
     if not over_cap:
         paths_to_mark = set(allowed_paths)
-    else:
-        paths_to_mark = {path for path in allowed_paths if path in target_keys}
 
     marked_edge_keys = set()
     paths_marked = 0
@@ -753,10 +730,7 @@ def apply_two_edge_local_continuity_repair(
         report['rejection_reason'] = None
         report['marked_edge_count'] = len(marked_for_path)
         report['marked_seam_edges'] = marked_for_path
-        if over_cap and path in target_keys:
-            report['accepted_by_target_over_cap_exception'] = True
-        else:
-            report['accepted_by_normal_rule'] = True
+        report['accepted_by_normal_rule'] = True
 
     target_reports = {
         path: report_by_path.get(path)
@@ -923,11 +897,10 @@ def _two_edge_target_prefix(path):
 def apply_two_edge_endpoint_bridge_repair(
     mesh,
     enabled=True,
-    target_paths=((2045, 2541, 4884), (2540, 2541, 2544)),
     max_repair_paths=9,
 ):
     edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
-    target_keys = {_canonical_two_edge_path(path) for path in target_paths}
+    target_keys = _diagnostic_old_endpoint_bridge_target_keys()
     if not enabled:
         return _two_edge_endpoint_bridge_result(
             enabled=False,
@@ -971,22 +944,6 @@ def apply_two_edge_endpoint_bridge_repair(
                 )
                 candidate_reports.append(report)
                 report_by_path[path] = report
-
-    for target_path in sorted(target_keys):
-        if target_path in report_by_path:
-            continue
-        report = _two_edge_endpoint_bridge_report(
-            mesh=mesh,
-            path=target_path,
-            edge_by_key=edge_by_key,
-            seam_degree=seam_degree,
-            seam_adjacency=seam_adjacency,
-            component_id_of=component_id_of,
-            bbox_diagonal=bbox_diagonal,
-            target_keys=target_keys,
-        )
-        candidate_reports.append(report)
-        report_by_path[target_path] = report
 
     allowed_reports = [
         report for report in candidate_reports
@@ -1266,7 +1223,7 @@ def _endpoint_bridge_human_path_reports(allowed_reports):
         for report in allowed_reports
     }
     human_reports = []
-    for label, _, _, path in HUMAN_GAP_REGRESSION_PATHS:
+    for label, _, _, path in DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS:
         if len(path) != 3:
             continue
         canonical = _canonical_two_edge_path(path)
@@ -1294,7 +1251,7 @@ def _endpoint_bridge_human_path_reports(allowed_reports):
 def _human_gap_labels_for_path(path):
     canonical = _canonical_two_edge_path(path)
     return [
-        label for label, _, _, human_path in HUMAN_GAP_REGRESSION_PATHS
+        label for label, _, _, human_path in DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS
         if len(human_path) == 3 and _canonical_two_edge_path(human_path) == canonical
     ]
 
@@ -1561,7 +1518,10 @@ def _combined_two_edge_target_status(two_edge_repair, endpoint_bridge_repair):
     return result
 
 
-HUMAN_GAP_REGRESSION_PATHS = (
+DIAGNOSTIC_HUMAN_CASE_2557_2558 = (2557, 2558)
+
+
+DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS = (
     ('1', '1', 'main', (3085, 3084, 3190)),
     ('2', '2', 'main', (234, 319, 318, 214)),
     ('3a', '3', 'a', (3098, 3185, 3192)),
@@ -1588,7 +1548,7 @@ HUMAN_GAP_REGRESSION_PATHS = (
 )
 
 
-RESIDUAL_GAP_PHASE2E_PATHS = (
+DIAGNOSTIC_RESIDUAL_GAP_PHASE2E_PATHS = (
     ('2', '2', 'main', (234, 319, 318, 214)),
     ('3a', '3', 'a', (3098, 3185, 3192)),
     ('3b', '3', 'b', (3098, 3097, 3192)),
@@ -1607,10 +1567,17 @@ RESIDUAL_GAP_PHASE2E_PATHS = (
 )
 
 
-OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS = (
+DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS = (
     ('target_a_2045_2541_4884', (2045, 2541, 4884)),
     ('target_b_2540_2541_2544', (2540, 2541, 2544)),
 )
+
+
+def _diagnostic_old_endpoint_bridge_target_keys():
+    return {
+        _canonical_two_edge_path(path)
+        for _, path in DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS
+    }
 
 
 ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V1_LENGTH_FIRST = [
@@ -1633,7 +1600,7 @@ ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION_V2 = [
 
 def classify_human_gap_regressions(
     mesh,
-    paths=HUMAN_GAP_REGRESSION_PATHS,
+    paths=DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS,
     predicted_keys=None,
     local_repair_reports=(),
     two_edge_reports=(),
@@ -1991,7 +1958,7 @@ def _recommended_human_gap_next_action(summary):
 
 def classify_residual_gap_phase2e(
     mesh,
-    paths=RESIDUAL_GAP_PHASE2E_PATHS,
+    paths=DIAGNOSTIC_RESIDUAL_GAP_PHASE2E_PATHS,
     predicted_keys=None,
     local_repair_reports=(),
     two_edge_reports=(),
@@ -3281,6 +3248,13 @@ def write_bridge_apply_debug(json_path, result):
         'target_path_2540_2541_2544_accepted_by_target_over_cap_exception': (
             result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception
         ),
+        'production_hardcoded_path_exceptions_enabled': (
+            result.production_hardcoded_path_exceptions_enabled
+        ),
+        'production_hardcoded_path_exceptions_removed': (
+            result.production_hardcoded_path_exceptions_removed
+        ),
+        'diagnostic_path_labels_read_only': result.diagnostic_path_labels_read_only,
     }
     with open(debug_path, 'w', encoding='utf-8') as file:
         json.dump(payload, file, indent=2)
@@ -3846,7 +3820,7 @@ def format_endpoint_bridge_ranking_debug_summary(payload, debug_path):
     summary = payload['phase_2b1_ranking_summary']
     old_targets = payload['old_validation_target_reports']
     target_bits = []
-    for _, path in OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+    for _, path in DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
         label = _old_validation_target_label(path)
         report = old_targets[label]
         state = 'selected' if report['selected_for_marking'] else report['skipped_reason']
@@ -3869,7 +3843,7 @@ def _endpoint_bridge_debug_human_reports(allowed, threshold):
         for report in allowed
     }
     reports = []
-    for label, group_id, alternative_id, path in HUMAN_GAP_REGRESSION_PATHS:
+    for label, group_id, alternative_id, path in DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS:
         if len(path) != 3:
             continue
         report = by_path.get(_canonical_two_edge_path(path))
@@ -3909,7 +3883,7 @@ def _endpoint_bridge_debug_old_target_reports(allowed, threshold):
     selected = [report for report in allowed if report.get('selected_for_marking')]
     threshold_report = _threshold_report(allowed, threshold)
     reports = {}
-    for label, path in OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+    for label, path in DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
         target_label = _old_validation_target_label(path)
         report = by_path.get(_canonical_two_edge_path(path))
         if report is None:
@@ -4067,7 +4041,7 @@ def _endpoint_bridge_ranking_diagnosis(allowed, selected, human_reports, old_tar
 
 
 def _old_validation_target_label(path):
-    for label, target_path in OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+    for label, target_path in DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
         if _canonical_two_edge_path(path) == _canonical_two_edge_path(target_path):
             return label
     return None
@@ -4132,9 +4106,7 @@ def format_apply_summary(result):
     trace_suffix = f' Bridge trace: {trace}.' if trace else ''
     degree = result.human_case_2557_2558_degree_pattern
     degree_suffix = f', degree={degree}' if degree is not None else ''
-    if result.human_case_2557_2558_marked_seam and result.human_case_over_cap_exception_used:
-        human_status = f'marked by over-cap human-case exception{degree_suffix}'
-    elif result.human_case_2557_2558_marked_seam:
+    if result.human_case_2557_2558_marked_seam:
         human_status = f'marked{degree_suffix}'
     elif result.human_case_2557_2558_found:
         human_status = (
@@ -4208,8 +4180,6 @@ def _format_two_edge_target_status(
     accepted_by_target_over_cap_exception=False,
 ):
     if marked:
-        if accepted_by_target_over_cap_exception:
-            return 'marked by over-cap target exception'
         if tangent_alignments is not None and straightness is not None:
             return f'marked, alignments={tangent_alignments}, straightness={straightness}'
         return 'marked'
