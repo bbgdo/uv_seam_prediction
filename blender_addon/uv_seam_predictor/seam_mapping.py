@@ -85,6 +85,7 @@ class SeamApplyResult:
     production_hardcoded_path_exceptions_removed: bool = True
     diagnostic_path_labels_read_only: bool = True
     unified_local_continuity_simulation_phase2h_r: dict | None = None
+    phase2h_r3_visual_review: dict | None = None
 
 
 def load_predicted_edge_keys(json_path):
@@ -327,6 +328,9 @@ def apply_seam_keys(
         endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
         residual_payload=residual_gap_phase2e_debug,
     )
+    phase2h_r3_visual_review = build_phase2h_r3_visual_review(
+        unified_local_continuity_simulation_phase2h_r,
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -485,6 +489,7 @@ def apply_seam_keys(
         production_hardcoded_path_exceptions_removed=True,
         diagnostic_path_labels_read_only=True,
         unified_local_continuity_simulation_phase2h_r=unified_local_continuity_simulation_phase2h_r,
+        phase2h_r3_visual_review=phase2h_r3_visual_review,
     )
 
 
@@ -3897,6 +3902,327 @@ def _phase2hr_open_label_sort_key(label):
     return order.get(label, len(order))
 
 
+PHASE2HR3_HIGH_RISK_CLASSES = {
+    'two_edge_same_component_local_closure',
+    'one_edge_endpoint_to_skeleton',
+    'two_edge_endpoint_to_skeleton_or_near_junction',
+    'three_edge_local_bridge',
+    'two_edge_tangent_failed_endpoint_bridge',
+    'non_original_or_missing_blender_edge',
+}
+
+
+def build_phase2h_r3_visual_review(simulation_payload):
+    payload = simulation_payload or {}
+    candidates_by_id, selected_policy_by_id = _phase2hr3_candidate_index(payload)
+    selected_candidates = list(selected_policy_by_id)
+    low_straightness = [
+        _phase2hr3_low_straightness_report(candidates_by_id[candidate_id], policies)
+        for candidate_id, policies in selected_policy_by_id.items()
+        if _phase2hr3_is_low_straightness_selected(candidates_by_id[candidate_id])
+    ]
+    tangent_weak = [
+        _phase2hr3_tangent_weak_report(candidate)
+        for candidate in _phase2hr3_all_candidates(payload).values()
+        if _phase2hr3_is_straight_but_tangent_weak(candidate)
+    ]
+    high_risk = [
+        _phase2hr3_high_risk_report(candidates_by_id[candidate_id], policies, payload)
+        for candidate_id, policies in selected_policy_by_id.items()
+        if _phase2hr3_is_high_risk_probe_candidate(candidates_by_id[candidate_id], policies)
+    ]
+    rejected_tangent = _phase2hr3_rejected_tangent_failed_residuals(payload, selected_policy_by_id)
+    counts = {
+        'low_straightness_selected_candidates': len(low_straightness),
+        'straight_but_tangent_weak_candidates': len(tangent_weak),
+        'high_risk_probe_selected_candidates': len(high_risk),
+        'rejected_tangent_failed_residuals': len(rejected_tangent),
+    }
+    decision_summary = _phase2hr3_decision_summary(
+        payload,
+        counts,
+        low_straightness,
+        tangent_weak,
+        high_risk,
+        rejected_tangent,
+    )
+    total_reported = sum(counts.values())
+    return {
+        'phase': '2H-R.3',
+        'name': 'visual_review_local_continuity_candidates',
+        'read_only': True,
+        'seam_flags_unchanged': bool(payload.get('seam_flags_unchanged', True)),
+        'not_applied_to_mesh': True,
+        'probabilities_used': False,
+        'diagnostic_paths_are_labels_only': True,
+        'active_phase2j_allowed': False,
+        'source_simulation_sidecar': 'prediction_unified_local_continuity_simulation_phase2h_r.json',
+        'compact_sidecar': True,
+        'low_straightness_selected_candidates': low_straightness,
+        'straight_but_tangent_weak_candidates': tangent_weak,
+        'high_risk_probe_selected_candidates': high_risk,
+        'rejected_tangent_failed_residuals': rejected_tangent,
+        'normalized_decision_summary': decision_summary,
+        'compactness_summary': {
+            'total_review_candidates_reported': total_reported,
+            'counts_by_review_group': counts,
+            'omitted_candidate_count_if_any': 0,
+            'report_caps_if_any': {},
+        },
+    }
+
+
+def _phase2hr3_candidate_index(payload):
+    candidates = {}
+    selected_policy_by_id = {}
+    for policy in payload.get('policies', ()):
+        policy_name = policy.get('policy_name')
+        for candidate in policy.get('selected_candidates', ()):
+            candidate_id = candidate.get('candidate_id')
+            if candidate_id is None:
+                continue
+            candidates[candidate_id] = candidate
+            selected_policy_by_id.setdefault(candidate_id, []).append(policy_name)
+        for candidate in policy.get('residual_matched_candidates', ()):
+            candidate_id = candidate.get('candidate_id')
+            if candidate_id is not None:
+                candidates.setdefault(candidate_id, candidate)
+        for reports in policy.get('top_rejected_candidates_by_class', {}).values():
+            for candidate in reports:
+                candidate_id = candidate.get('candidate_id')
+                if candidate_id is not None:
+                    candidates.setdefault(candidate_id, candidate)
+    for candidate in payload.get('straight_but_tangent_weak_candidates', ()):
+        candidate_id = candidate.get('candidate_id')
+        if candidate_id is not None:
+            candidates.setdefault(candidate_id, candidate)
+    return candidates, selected_policy_by_id
+
+
+def _phase2hr3_all_candidates(payload):
+    candidates, _ = _phase2hr3_candidate_index(payload)
+    return candidates
+
+
+def _phase2hr3_is_low_straightness_selected(candidate):
+    return bool(
+        candidate.get('candidate_class') == 'two_edge_inter_component_endpoint_bridge'
+        and not candidate.get('already_all_marked', False)
+        and candidate.get('path_straightness') is not None
+        and candidate['path_straightness'] < 0.50
+    )
+
+
+def _phase2hr3_is_straight_but_tangent_weak(candidate):
+    return bool(
+        candidate.get('all_edges_exist_in_blender', True)
+        and not candidate.get('already_all_marked', False)
+        and candidate.get('path_straightness') is not None
+        and candidate.get('min_endpoint_tangent_alignment') is not None
+        and candidate['path_straightness'] >= 0.85
+        and candidate['min_endpoint_tangent_alignment'] < 0.30
+    )
+
+
+def _phase2hr3_is_high_risk_probe_candidate(candidate, policies):
+    return bool(
+        candidate.get('candidate_class') in PHASE2HR3_HIGH_RISK_CLASSES
+        and (
+            'class_balanced_probe' in policies
+            or 'conservative_length1_to_3' in policies
+        )
+    )
+
+
+def _phase2hr3_low_straightness_report(candidate, selected_by_policies):
+    report = _phase2hr3_common_candidate_report(candidate)
+    severe = bool(candidate.get('path_straightness') is not None and candidate['path_straightness'] < 0.25)
+    report.update({
+        'selected_by_policies': list(selected_by_policies),
+        'current_pipeline_rank_if_available': candidate.get('rank_v2_if_available'),
+        'current_pipeline_skip_reason': candidate.get('simulated_skip_reason'),
+        'low_straightness_warning': True,
+        'severe_low_straightness_warning': severe,
+        'visual_review_priority': 'highest' if severe else 'high',
+        'active_repair_blocked': True,
+        'recommended_architect_action': 'manual_visual_review_low_straightness_do_not_auto_select',
+    })
+    return report
+
+
+def _phase2hr3_tangent_weak_report(candidate):
+    report = _phase2hr3_common_candidate_report(candidate)
+    report.update({
+        'weak_endpoint_index': _phase2hr3_weak_endpoint_index(candidate),
+        'seam_neighbor_used_for_tangent_if_available': None,
+        'tangent_model_audit_needed': True,
+        'do_not_select_automatically': True,
+        'active_repair_blocked': True,
+        'recommended_architect_action': 'audit_tangent_estimator_do_not_auto_select',
+    })
+    return report
+
+
+def _phase2hr3_high_risk_report(candidate, selected_by_policies, payload):
+    report = _phase2hr3_common_candidate_report(candidate)
+    class_name = candidate.get('candidate_class')
+    report.update({
+        'candidate_class': class_name,
+        'selected_by_policies': list(selected_by_policies),
+        'candidate_pool_size_for_that_class': (
+            payload.get('summary', {}).get('candidates_discovered_by_class', {}).get(class_name, 0)
+        ),
+        'would_require_new_repair_class': bool(candidate.get('would_require_new_repair_class', False)),
+        'why_not_active_repair': _phase2hr3_high_risk_reason(class_name),
+        'active_repair_blocked': True,
+        'recommended_architect_action': _phase2hr3_high_risk_action(class_name),
+    })
+    return report
+
+
+def _phase2hr3_rejected_tangent_failed_residuals(payload, selected_policy_by_id):
+    details = payload.get('normalized_residual_coverage', {}).get('open_residual_details', ())
+    reports = []
+    candidate_by_path = {
+        tuple(candidate.get('path_vertex_ids', ())): candidate
+        for candidate in _phase2hr3_all_candidates(payload).values()
+    }
+    for detail in details:
+        if detail.get('current_rejection_or_skip_reason') != 'tangent_alignment_failed':
+            continue
+        candidate = candidate_by_path.get(tuple(detail.get('path_vertex_ids', ())))
+        base = _phase2hr3_common_candidate_report(candidate or detail)
+        selected_by_probe = bool(
+            candidate is not None
+            and 'class_balanced_probe' in selected_policy_by_id.get(candidate.get('candidate_id'), ())
+        )
+        base.update({
+            'residual_labels': list(detail.get('aliases', ())),
+            'whether_one_sided_or_both_sided_tangent_failure': _phase2hr3_tangent_failure_sidedness(candidate),
+            'whether_class_balanced_probe_selected_it': selected_by_probe,
+            'reason_not_selected': None if selected_by_probe else _phase2hr3_detail_skip_reason(
+                detail,
+                'class_balanced_probe',
+            ),
+            'active_repair_blocked': True,
+        })
+        reports.append(base)
+    return reports
+
+
+def _phase2hr3_common_candidate_report(candidate):
+    candidate = candidate or {}
+    return {
+        'path_vertex_ids': list(candidate.get('path_vertex_ids', ())),
+        'path_edge_keys': list(candidate.get('path_edge_keys', ())),
+        'blender_edge_indices': list(candidate.get('blender_edge_indices', ())),
+        'residual_labels': list(candidate.get('residual_match_labels', ())),
+        'residual_aliases': list(candidate.get('residual_match_labels', ())),
+        'path_straightness': candidate.get('path_straightness'),
+        'min_endpoint_tangent_alignment': candidate.get('min_endpoint_tangent_alignment'),
+        'endpoint_tangent_alignments': candidate.get('endpoint_tangent_alignments'),
+        'total_path_length': candidate.get('total_path_length'),
+        'endpoint_distance': candidate.get('endpoint_distance'),
+        'normalized_total_path_length': candidate.get('normalized_total_path_length_if_mesh_scale_available'),
+        'normalized_endpoint_distance': candidate.get('normalized_endpoint_distance_if_mesh_scale_available'),
+        'component_relation': candidate.get('component_relation'),
+        'degree_pattern': list(candidate.get('degree_pattern', ())),
+        'loop_risk': candidate.get('loop_risk'),
+        'topology_risk': candidate.get('topology_risk'),
+    }
+
+
+def _phase2hr3_weak_endpoint_index(candidate):
+    alignments = candidate.get('endpoint_tangent_alignments')
+    if not alignments:
+        return None
+    values = [
+        (index, value) for index, value in enumerate(alignments)
+        if value is not None
+    ]
+    if not values:
+        return None
+    return min(values, key=lambda item: item[1])[0]
+
+
+def _phase2hr3_tangent_failure_sidedness(candidate):
+    if not candidate:
+        return 'unknown'
+    alignments = candidate.get('endpoint_tangent_alignments') or ()
+    failed = [value for value in alignments if value is not None and value < 0.30]
+    if len(failed) >= 2:
+        return 'both_sided'
+    if len(failed) == 1:
+        return 'one_sided'
+    return 'unknown'
+
+
+def _phase2hr3_detail_skip_reason(detail, policy_name):
+    reasons = detail.get('reason_selected_or_skipped_by_policy', {})
+    return reasons.get(policy_name) or 'not_selected_by_simulation_policy'
+
+
+def _phase2hr3_high_risk_reason(class_name):
+    return {
+        'two_edge_same_component_local_closure': 'same_component_closure_has_loop_risk',
+        'one_edge_endpoint_to_skeleton': 'endpoint_to_skeleton_repair_not_designed',
+        'two_edge_endpoint_to_skeleton_or_near_junction': 'endpoint_to_skeleton_or_junction_repair_not_designed',
+        'three_edge_local_bridge': 'three_edge_repair_not_designed',
+        'two_edge_tangent_failed_endpoint_bridge': 'tangent_failed_bridge_not_safe_for_auto_repair',
+        'non_original_or_missing_blender_edge': 'candidate_is_not_editable_in_blender',
+    }.get(class_name, 'high_risk_class_not_active_repair')
+
+
+def _phase2hr3_high_risk_action(class_name):
+    return {
+        'two_edge_same_component_local_closure': 'review_loop_risk_do_not_auto_select',
+        'one_edge_endpoint_to_skeleton': 'design_endpoint_to_skeleton_repair_before_selection',
+        'two_edge_endpoint_to_skeleton_or_near_junction': 'design_endpoint_to_skeleton_repair_before_selection',
+        'three_edge_local_bridge': 'design_three_edge_repair_before_selection',
+        'two_edge_tangent_failed_endpoint_bridge': 'audit_tangent_failure_do_not_auto_select',
+        'non_original_or_missing_blender_edge': 'inspect_topology_remapping_not_editable',
+    }.get(class_name, 'manual_architect_review_required')
+
+
+def _phase2hr3_decision_summary(
+    simulation_payload,
+    counts,
+    low_straightness,
+    tangent_weak,
+    high_risk,
+    rejected_tangent,
+):
+    normalized = simulation_payload.get('normalized_summary', {})
+    coverage = simulation_payload.get('normalized_residual_coverage', {}).get(
+        'normalized_open_residual_coverage_by_policy',
+        {},
+    )
+    blocking_reasons = []
+    if low_straightness:
+        blocking_reasons.append('low_straightness_selected_candidates_require_manual_review')
+    if tangent_weak:
+        blocking_reasons.append('straight_but_tangent_weak_candidates_require_tangent_audit')
+    if high_risk:
+        blocking_reasons.append('high_risk_probe_candidates_require_new_repair_design')
+    if rejected_tangent:
+        blocking_reasons.append('tangent_failed_residuals_remain_rejected')
+    return {
+        'canonical_open_residual_paths_total': normalized.get('canonical_open_residual_paths_total', 0),
+        'normalized_coverage_by_policy': coverage,
+        'policies_production_ready': list(normalized.get('policies_production_ready', ())),
+        'active_phase2j_allowed': False,
+        'blocking_reasons': blocking_reasons,
+        'low_straightness_selected_count': counts['low_straightness_selected_candidates'],
+        'severe_low_straightness_selected_count': sum(
+            1 for item in low_straightness if item['severe_low_straightness_warning']
+        ),
+        'straight_but_tangent_weak_count': counts['straight_but_tangent_weak_candidates'],
+        'high_risk_probe_selected_count': counts['high_risk_probe_selected_candidates'],
+        'rejected_tangent_failed_residual_count': counts['rejected_tangent_failed_residuals'],
+        'recommended_next_action': 'manual_visual_review_low_straightness_and_tangent_audit',
+    }
+
+
 def _safe_ratio(value, denominator):
     if value is None or denominator in (None, 0):
         return None
@@ -4385,6 +4711,29 @@ def write_unified_local_continuity_simulation_phase2h_r(json_path, result):
         json.dump(payload, file, indent=2)
         file.write('\n')
     return debug_path
+
+
+def write_phase2h_r3_visual_review(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_phase2h_r3_visual_review.json'
+    payload = result.phase2h_r3_visual_review or build_phase2h_r3_visual_review(
+        result.unified_local_continuity_simulation_phase2h_r or {}
+    )
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_phase2h_r3_visual_review_summary(payload, debug_path):
+    summary = payload.get('normalized_decision_summary', {})
+    return (
+        f"Phase 2H-R.3 visual review: "
+        f"low_straightness={summary.get('low_straightness_selected_count', 0)}, "
+        f"straight_but_tangent_weak={summary.get('straight_but_tangent_weak_count', 0)}, "
+        f"high_risk_probe={summary.get('high_risk_probe_selected_count', 0)}, "
+        f"active_phase2j_allowed={str(payload.get('active_phase2j_allowed', False)).lower()}. "
+        f"Sidecar: {debug_path}"
+    )
 
 
 def format_unified_local_continuity_simulation_phase2h_r_summary(payload, debug_path):
