@@ -1364,6 +1364,130 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(len(conflict_reports), 1)
         self.assertEqual(conflict_reports[0]['skipped_reason'], 'conflict_shared_edge')
 
+    def test_endpoint_bridge_ranking_debug_emits_full_top_and_selected_reports(self):
+        seam_mapping = load_module('uvsp_endpoint_bridge_ranking_debug_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = []
+        predicted_keys = []
+        coords = {9999: (1.0, 1.0, 1.0)}
+        for index in range(9):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 700 + index * 10)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
+
+        self.assertEqual(debug['phase_2b1_ranking_summary']['selected_rank_threshold'], 8)
+        self.assertEqual(len(debug['full_ranked_allowed_candidates']), 9)
+        self.assertEqual(len(debug['top_12_ranked_allowed_candidates']), 9)
+        self.assertEqual(len(debug['selected_top_k_candidates']), 8)
+        self.assertEqual(debug['full_ranked_allowed_candidates'][0]['rank'], 1)
+        self.assertIn('candidate_score_tuple', debug['full_ranked_allowed_candidates'][0])
+        self.assertEqual(
+            debug['phase_2b1_ranking_summary']['score_tuple_definition'],
+            [
+                'total_path_length',
+                'endpoint_distance',
+                '-min_endpoint_tangent_alignment',
+                '-path_straightness',
+                'path_vertex_ids',
+            ],
+        )
+
+    def test_endpoint_bridge_ranking_debug_reports_skipped_human_rank(self):
+        seam_mapping = load_module('uvsp_endpoint_bridge_ranking_human_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [(3083, 3085), (3190, 3191), (3085, 3084), (3084, 3190)]
+        predicted_keys = [(3083, 3085), (3190, 3191)]
+        coords = {
+            3083: (0.05, 0.0, 0.0),
+            3085: (0.06, 0.0, 0.0),
+            3084: (0.075, 0.0, 0.0),
+            3190: (0.09, 0.0, 0.0),
+            3191: (0.10, 0.0, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        for index in range(8):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 800 + index * 10, total_span=0.02, y=index + 1)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
+        skipped = debug['skipped_human_phase_2b1_candidates']
+
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]['human_path_label'], '1')
+        self.assertEqual(skipped[0]['rank'], 9)
+        self.assertEqual(skipped[0]['rank_delta_from_threshold'], 1)
+        self.assertEqual(skipped[0]['skipped_reason'], 'over_cap_ranked_below_threshold')
+        self.assertIsInstance(skipped[0]['candidate_score_tuple'], list)
+
+    def test_endpoint_bridge_ranking_debug_reports_old_target_penalty_and_bias(self):
+        seam_mapping = load_module('uvsp_endpoint_bridge_ranking_old_target_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [(2044, 2045), (4884, 4885), (2045, 2541), (2541, 4884)]
+        predicted_keys = [(2044, 2045), (4884, 4885)]
+        coords = {
+            2044: (0.05, 0.0, 0.0),
+            2045: (0.06, 0.0, 0.0),
+            2541: (0.075, 0.0, 0.0),
+            4884: (0.09, 0.0, 0.0),
+            4885: (0.10, 0.0, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        for index in range(8):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 900 + index * 10, total_span=0.02, y=index + 1)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
+        target = debug['old_validation_target_reports']['target_a_2045_2541_4884']
+
+        self.assertTrue(target['found_in_allowed_candidates'])
+        self.assertEqual(target['rank'], 9)
+        self.assertEqual(target['rank_delta_from_threshold'], 1)
+        self.assertEqual(target['skipped_reason'], 'over_cap_ranked_below_threshold')
+        self.assertEqual(target['primary_penalty_component'], 'total_path_length')
+        self.assertTrue(debug['ranking_diagnosis']['length_first_bias_suspected'])
+        self.assertEqual(
+            debug['ranking_diagnosis']['recommended_next_action'],
+            'revise_phase_2b1_ranking_formula',
+        )
+
+    def test_endpoint_bridge_ranking_debug_sidecar_is_read_only_and_has_no_probabilities(self):
+        seam_mapping = load_module('uvsp_endpoint_bridge_ranking_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+        debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prediction_path = str(Path(temp_dir) / 'prediction.json')
+            Path(prediction_path).write_text('{}', encoding='utf-8')
+            sidecar = seam_mapping.write_endpoint_bridge_ranking_debug(prediction_path, result)
+            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
+
+        self.assertTrue(sidecar.endswith('_endpoint_bridge_ranking_debug.json'))
+        self.assertTrue(debug['read_only'])
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertNotIn('probability', json.dumps(payload).lower())
+
     def test_human_gap_classifier_reports_editable_and_missing_edges(self):
         seam_mapping = load_module('uvsp_gap_classifier_edges_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=4)

@@ -1424,6 +1424,21 @@ HUMAN_GAP_REGRESSION_PATHS = (
 )
 
 
+OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS = (
+    ('target_a_2045_2541_4884', (2045, 2541, 4884)),
+    ('target_b_2540_2541_2544', (2540, 2541, 2544)),
+)
+
+
+ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION = [
+    'total_path_length',
+    'endpoint_distance',
+    '-min_endpoint_tangent_alignment',
+    '-path_straightness',
+    'path_vertex_ids',
+]
+
+
 def classify_human_gap_regressions(
     mesh,
     paths=HUMAN_GAP_REGRESSION_PATHS,
@@ -2095,6 +2110,322 @@ def write_human_gap_classification(json_path, result):
         json.dump(payload, file, indent=2)
         file.write('\n')
     return debug_path
+
+
+def build_endpoint_bridge_ranking_debug(result):
+    allowed = [
+        dict(report)
+        for report in result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
+    ]
+    selected = [report for report in allowed if report.get('selected_for_marking')]
+    selected.sort(key=lambda report: report.get('rank') or 10**9)
+    top_12 = allowed[:12]
+    threshold = result.blender_two_edge_endpoint_bridge_selected_rank_threshold
+    human_reports = _endpoint_bridge_debug_human_reports(allowed, threshold)
+    old_target_reports = _endpoint_bridge_debug_old_target_reports(allowed, threshold)
+    diagnosis = _endpoint_bridge_ranking_diagnosis(
+        allowed,
+        selected,
+        human_reports,
+        old_target_reports,
+    )
+    summary = {
+        'selection_policy': result.blender_two_edge_endpoint_bridge_selection_policy,
+        'safety_cap': result.blender_two_edge_endpoint_bridge_safety_cap,
+        'allowed_total': result.blender_two_edge_endpoint_bridge_allowed_total,
+        'selected_total': result.blender_two_edge_endpoint_bridge_paths_marked,
+        'over_cap': result.blender_two_edge_endpoint_bridge_over_cap,
+        'selected_rank_threshold': threshold,
+        'score_tuple_definition': list(ENDPOINT_BRIDGE_SCORE_TUPLE_DEFINITION),
+        'human_phase_2b1_total': len(human_reports),
+        'human_phase_2b1_selected': sum(
+            1 for report in human_reports if report['selected_for_marking']
+        ),
+        'human_phase_2b1_skipped_below_threshold': sum(
+            1 for report in human_reports
+            if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
+        ),
+        'old_validation_targets_selected': sum(
+            1 for report in old_target_reports.values()
+            if report['selected_for_marking']
+        ),
+        'old_validation_targets_skipped': sum(
+            1 for report in old_target_reports.values()
+            if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
+        ),
+    }
+    return {
+        'phase_2b1_ranking_summary': summary,
+        'full_ranked_allowed_candidates': allowed,
+        'top_12_ranked_allowed_candidates': top_12,
+        'selected_top_k_candidates': selected,
+        'skipped_human_phase_2b1_candidates': [
+            report for report in human_reports
+            if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
+        ],
+        'old_validation_target_reports': old_target_reports,
+        'ranking_diagnosis': diagnosis,
+        'read_only': True,
+    }
+
+
+def write_endpoint_bridge_ranking_debug(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_endpoint_bridge_ranking_debug.json'
+    payload = build_endpoint_bridge_ranking_debug(result)
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_endpoint_bridge_ranking_debug_summary(payload, debug_path):
+    summary = payload['phase_2b1_ranking_summary']
+    old_targets = payload['old_validation_target_reports']
+    target_bits = []
+    for _, path in OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+        label = _old_validation_target_label(path)
+        report = old_targets[label]
+        state = 'selected' if report['selected_for_marking'] else report['skipped_reason']
+        target_bits.append(f"{list(path)}={report['rank']} {state}")
+    diagnosis = payload['ranking_diagnosis']
+    return (
+        f"Endpoint bridge ranking debug: {summary['allowed_total']} allowed, "
+        f"cap={summary['safety_cap']}, {summary['selected_total']} selected. "
+        f"Old targets ranks: {', '.join(target_bits)}. "
+        f"Human Phase 2B.1 selected: {summary['human_phase_2b1_selected']}/"
+        f"{summary['human_phase_2b1_total']}. "
+        f"Recommended next action: {diagnosis['recommended_next_action']}. "
+        f"Sidecar: {debug_path}"
+    )
+
+
+def _endpoint_bridge_debug_human_reports(allowed, threshold):
+    by_path = {
+        tuple(report['path_vertex_ids']): report
+        for report in allowed
+    }
+    reports = []
+    for label, group_id, alternative_id, path in HUMAN_GAP_REGRESSION_PATHS:
+        if len(path) != 3:
+            continue
+        report = by_path.get(_canonical_two_edge_path(path))
+        if report is None:
+            continue
+        reports.append({
+            'human_path_label': label,
+            'preferred_group_id': group_id,
+            'alternative_id': alternative_id,
+            'path_vertex_ids': list(report['path_vertex_ids']),
+            'rank': report.get('rank'),
+            'selected_for_marking': bool(report.get('selected_for_marking', False)),
+            'marked': bool(report.get('marked', False)),
+            'skipped_reason': report.get('skipped_reason'),
+            'candidate_score_tuple': report.get('candidate_score_tuple'),
+            'total_path_length': report.get('total_path_length'),
+            'endpoint_distance': report.get('endpoint_distance'),
+            'min_endpoint_tangent_alignment': report.get('min_endpoint_tangent_alignment'),
+            'path_straightness': report.get('path_straightness'),
+            'rank_delta_from_threshold': _rank_delta(report.get('rank'), threshold),
+        })
+    return reports
+
+
+def _endpoint_bridge_debug_old_target_reports(allowed, threshold):
+    by_path = {
+        tuple(report['path_vertex_ids']): report
+        for report in allowed
+    }
+    selected = [report for report in allowed if report.get('selected_for_marking')]
+    threshold_report = _threshold_report(allowed, threshold)
+    reports = {}
+    for label, path in OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+        target_label = _old_validation_target_label(path)
+        report = by_path.get(_canonical_two_edge_path(path))
+        if report is None:
+            reports[target_label] = {
+                'found_in_allowed_candidates': False,
+                'rank': None,
+                'selected_for_marking': False,
+                'marked': False,
+                'skipped_reason': 'not_found',
+                'candidate_score_tuple': None,
+                'total_path_length': None,
+                'endpoint_distance': None,
+                'endpoint_tangent_alignment_u': None,
+                'endpoint_tangent_alignment_v': None,
+                'min_endpoint_tangent_alignment': None,
+                'path_straightness': None,
+                'rank_delta_from_threshold': None,
+                'primary_penalty_component': 'not_found',
+            }
+            continue
+        reports[target_label] = {
+            'found_in_allowed_candidates': True,
+            'rank': report.get('rank'),
+            'selected_for_marking': bool(report.get('selected_for_marking', False)),
+            'marked': bool(report.get('marked', False)),
+            'skipped_reason': report.get('skipped_reason'),
+            'candidate_score_tuple': report.get('candidate_score_tuple'),
+            'total_path_length': report.get('total_path_length'),
+            'endpoint_distance': report.get('endpoint_distance'),
+            'endpoint_tangent_alignment_u': report.get('endpoint_tangent_alignment_u'),
+            'endpoint_tangent_alignment_v': report.get('endpoint_tangent_alignment_v'),
+            'min_endpoint_tangent_alignment': report.get('min_endpoint_tangent_alignment'),
+            'path_straightness': report.get('path_straightness'),
+            'rank_delta_from_threshold': _rank_delta(report.get('rank'), threshold),
+            'primary_penalty_component': _primary_penalty_component(
+                report,
+                threshold_report,
+                selected,
+            ),
+        }
+    return reports
+
+
+def _endpoint_bridge_ranking_diagnosis(allowed, selected, human_reports, old_target_reports):
+    selected_labels = sorted({
+        label for report in selected
+        for label in report.get('human_gap_match_labels', [])
+    })
+    skipped_labels = sorted({
+        report['human_path_label'] for report in human_reports
+        if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
+    })
+    selected_straightness = [
+        report['path_straightness'] for report in selected
+        if report.get('path_straightness') is not None
+    ]
+    selected_tangent = [
+        report['min_endpoint_tangent_alignment'] for report in selected
+        if report.get('min_endpoint_tangent_alignment') is not None
+    ]
+    median_straightness = _median(selected_straightness)
+    median_tangent = _median(selected_tangent)
+    worst_selected_length = max(
+        (report['total_path_length'] for report in selected if report.get('total_path_length') is not None),
+        default=None,
+    )
+    skipped_human = [
+        report for report in human_reports
+        if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
+    ]
+    old_below = {
+        label: report['primary_penalty_component']
+        for label, report in old_target_reports.items()
+        if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
+    }
+    strong_skipped = [
+        report for report in skipped_human
+        if (
+            median_straightness is not None
+            and report.get('path_straightness') is not None
+            and report['path_straightness'] >= median_straightness
+            and median_tangent is not None
+            and report.get('min_endpoint_tangent_alignment') is not None
+            and report['min_endpoint_tangent_alignment'] >= median_tangent
+        )
+    ]
+    length_first_bias = bool(
+        old_below
+        and all(value in ('total_path_length', 'endpoint_distance') for value in old_below.values())
+    ) or bool(strong_skipped and any(
+        report['total_path_length'] is not None
+        and worst_selected_length is not None
+        and report['total_path_length'] <= worst_selected_length
+        for report in strong_skipped
+    ))
+    if length_first_bias:
+        recommended = 'revise_phase_2b1_ranking_formula'
+    elif selected_labels and len(selected_labels) >= max(1, len(human_reports) // 2):
+        recommended = 'inspect_selected_candidates_visually'
+    elif allowed:
+        recommended = 'keep_ranking_collect_visual_feedback'
+    else:
+        recommended = 'no_action'
+    return {
+        'selected_human_match_labels': selected_labels,
+        'skipped_human_match_labels': skipped_labels,
+        'skipped_human_paths_above_median_selected_straightness': [
+            report['human_path_label'] for report in skipped_human
+            if (
+                median_straightness is not None
+                and report.get('path_straightness') is not None
+                and report['path_straightness'] >= median_straightness
+            )
+        ],
+        'skipped_human_paths_above_median_selected_tangent': [
+            report['human_path_label'] for report in skipped_human
+            if (
+                median_tangent is not None
+                and report.get('min_endpoint_tangent_alignment') is not None
+                and report['min_endpoint_tangent_alignment'] >= median_tangent
+            )
+        ],
+        'skipped_human_paths_shorter_than_worst_selected': [
+            report['human_path_label'] for report in skipped_human
+            if (
+                worst_selected_length is not None
+                and report.get('total_path_length') is not None
+                and report['total_path_length'] <= worst_selected_length
+            )
+        ],
+        'old_targets_ranked_below_threshold_because': old_below,
+        'length_first_bias_suspected': bool(length_first_bias),
+        'recommended_next_action': recommended,
+    }
+
+
+def _old_validation_target_label(path):
+    for label, target_path in OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS:
+        if _canonical_two_edge_path(path) == _canonical_two_edge_path(target_path):
+            return label
+    return None
+
+
+def _threshold_report(allowed, threshold):
+    if threshold is None or threshold < 1 or threshold > len(allowed):
+        return None
+    return allowed[threshold - 1]
+
+
+def _primary_penalty_component(report, threshold_report, selected):
+    if report.get('conflict_reason'):
+        return 'conflict'
+    if threshold_report is None or report.get('candidate_score_tuple') is None:
+        return 'unknown'
+    score = report['candidate_score_tuple']
+    threshold_score = threshold_report.get('candidate_score_tuple')
+    if threshold_score is None:
+        return 'unknown'
+    labels = (
+        'total_path_length',
+        'endpoint_distance',
+        'tangent_alignment',
+        'path_straightness',
+        'tie_break',
+    )
+    for index, label in enumerate(labels):
+        if score[index] > threshold_score[index]:
+            return label
+        if score[index] < threshold_score[index]:
+            return 'unknown'
+    return 'unknown'
+
+
+def _rank_delta(rank, threshold):
+    if rank is None or threshold is None:
+        return None
+    return int(rank) - int(threshold)
+
+
+def _median(values):
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[middle]
+    return (sorted_values[middle - 1] + sorted_values[middle]) / 2.0
 
 
 def format_apply_summary(result):
