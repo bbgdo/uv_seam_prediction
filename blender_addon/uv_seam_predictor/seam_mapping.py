@@ -80,6 +80,7 @@ class SeamApplyResult:
     target_path_2540_2541_2544_accepted_by_target_over_cap_exception: bool = False
     human_gap_classification: dict | None = None
     residual_gap_phase2e_debug: dict | None = None
+    general_residual_candidates_phase2h: dict | None = None
 
 
 def load_predicted_edge_keys(json_path):
@@ -306,6 +307,14 @@ def apply_seam_keys(
         two_edge_reports=two_edge_repair['candidate_reports'],
         endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
     )
+    general_residual_candidates_phase2h = collect_general_residual_candidates_phase2h(
+        mesh,
+        predicted_keys=applied_keys,
+        local_repair_reports=repair['candidate_reports'],
+        two_edge_reports=two_edge_repair['candidate_reports'],
+        endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
+        residual_payload=residual_gap_phase2e_debug,
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -459,6 +468,7 @@ def apply_seam_keys(
         ]),
         human_gap_classification=human_gap_classification,
         residual_gap_phase2e_debug=residual_gap_phase2e_debug,
+        general_residual_candidates_phase2h=general_residual_candidates_phase2h,
     )
 
 
@@ -1455,8 +1465,11 @@ def _mesh_edge_lookup(mesh):
 
 
 def _mesh_bbox_diagonal(mesh):
+    vertices = getattr(mesh, 'vertices', None)
+    if vertices is None:
+        return None
     positions = [
-        position for position in (_vertex_position(mesh, index) for index in range(len(mesh.vertices)))
+        position for position in (_vertex_position(mesh, index) for index in range(len(vertices)))
         if position is not None
     ]
     if not positions:
@@ -2366,6 +2379,598 @@ def _recommended_residual_phase2e_next_action(summary):
     return best_action
 
 
+PHASE2H_CANDIDATE_DETAIL_CAPS = {
+    'residual_matched': None,
+    'current_selected_repair': 50,
+    'high_priority_unselected': 50,
+    'medium_priority_unselected': 25,
+    'low_priority_or_unsafe_per_class': 10,
+    'three_edge_local_bridge': 50,
+}
+
+
+def collect_general_residual_candidates_phase2h(
+    mesh,
+    predicted_keys=None,
+    local_repair_reports=(),
+    two_edge_reports=(),
+    endpoint_bridge_reports=(),
+    residual_payload=None,
+):
+    seam_flags_before = tuple(bool(edge.use_seam) for edge in mesh.edges)
+    edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
+    seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    component_id_of = _seam_component_ids(seam_adjacency)
+    bbox_diagonal = _mesh_bbox_diagonal(mesh)
+    predicted_key_set = set(predicted_keys or ())
+    local_marked = _marked_edge_key_set(local_repair_reports)
+    two_edge_marked = _marked_edge_key_set(two_edge_reports)
+    endpoint_bridge_marked = _marked_edge_key_set(endpoint_bridge_reports)
+    two_edge_report_by_path = _report_by_path(two_edge_reports)
+    endpoint_bridge_report_by_path = _report_by_path(endpoint_bridge_reports)
+    residual_by_path = _phase2h_residual_reports_by_path(residual_payload)
+    discovered = {}
+
+    def add_path(path, source):
+        key = _phase2h_path_key(path)
+        if key not in discovered:
+            discovered[key] = {
+                'path': key,
+                'sources': set(),
+            }
+        discovered[key]['sources'].add(source)
+
+    for _, key, edge in edge_items:
+        if edge.use_seam:
+            continue
+        if seam_degree.get(key[0], 0) > 0 or seam_degree.get(key[1], 0) > 0:
+            add_path(key, 'length_1_unmarked')
+
+    for middle in sorted(adjacency):
+        neighbors = sorted(adjacency[middle])
+        for left_index in range(len(neighbors)):
+            for right_index in range(left_index + 1, len(neighbors)):
+                path = _canonical_two_edge_path((neighbors[left_index], middle, neighbors[right_index]))
+                edge_keys = _two_edge_path_edge_keys(path)
+                if all(edge_by_key[edge_key][1].use_seam is False for edge_key in edge_keys):
+                    add_path(path, 'length_2_unmarked')
+
+    seam_vertices = sorted(vertex for vertex, degree in seam_degree.items() if degree > 0)
+    for u in seam_vertices:
+        for a in sorted(adjacency.get(u, ())):
+            edge_ua = (min(u, a), max(u, a))
+            if edge_by_key[edge_ua][1].use_seam:
+                continue
+            for b in sorted(adjacency.get(a, ())):
+                if b in (u, a):
+                    continue
+                edge_ab = (min(a, b), max(a, b))
+                if edge_by_key[edge_ab][1].use_seam:
+                    continue
+                for v in sorted(adjacency.get(b, ())):
+                    if v in (u, a, b) or seam_degree.get(v, 0) <= 0:
+                        continue
+                    edge_bv = (min(b, v), max(b, v))
+                    if edge_by_key[edge_bv][1].use_seam:
+                        continue
+                    add_path(_phase2h_canonical_path((u, a, b, v)), 'length_3_unmarked')
+
+    for report in local_repair_reports:
+        if isinstance(report, dict) and report.get('accepted') and report.get('vertex_ids_0based'):
+            add_path(tuple(report['vertex_ids_0based']), 'current_selected_repair')
+    for report in tuple(two_edge_reports) + tuple(endpoint_bridge_reports):
+        if isinstance(report, dict) and report.get('accepted') and report.get('path_vertex_ids'):
+            add_path(tuple(report['path_vertex_ids']), 'current_selected_repair')
+
+    for residual in residual_by_path.values():
+        path = tuple(residual.get('path_vertex_ids', ()))
+        if path:
+            add_path(path, 'residual_path')
+
+    reports = []
+    for index, item in enumerate(sorted(discovered.values(), key=lambda entry: entry['path']), start=1):
+        reports.append(_phase2h_candidate_report(
+            mesh=mesh,
+            candidate_index=index,
+            path=item['path'],
+            sources=item['sources'],
+            edge_by_key=edge_by_key,
+            seam_degree=seam_degree,
+            seam_adjacency=seam_adjacency,
+            component_id_of=component_id_of,
+            bbox_diagonal=bbox_diagonal,
+            predicted_key_set=predicted_key_set,
+            local_marked=local_marked,
+            two_edge_marked=two_edge_marked,
+            endpoint_bridge_marked=endpoint_bridge_marked,
+            two_edge_report_by_path=two_edge_report_by_path,
+            endpoint_bridge_report_by_path=endpoint_bridge_report_by_path,
+            residual_by_path=residual_by_path,
+        ))
+
+    stored_reports, truncation = _phase2h_apply_detail_caps(reports)
+    residual_mapping = _phase2h_residual_mapping(residual_by_path, reports, stored_reports)
+    summary = _phase2h_summary(reports, stored_reports, truncation, residual_mapping)
+    if tuple(bool(edge.use_seam) for edge in mesh.edges) != seam_flags_before:
+        raise RuntimeError('Phase 2H candidate collector modified seam flags.')
+    return {
+        'summary': summary,
+        'candidate_detail_caps': dict(PHASE2H_CANDIDATE_DETAIL_CAPS),
+        'candidates': stored_reports,
+        'human_residual_mapping': residual_mapping,
+        'r_bridge_value_if_available': None,
+        'r_bridge_source_if_available': None,
+        'bridge_radius_related_fields_if_available': {},
+        'read_only': True,
+    }
+
+
+def _phase2h_candidate_report(
+    *,
+    mesh,
+    candidate_index,
+    path,
+    sources,
+    edge_by_key,
+    seam_degree,
+    seam_adjacency,
+    component_id_of,
+    bbox_diagonal,
+    predicted_key_set,
+    local_marked,
+    two_edge_marked,
+    endpoint_bridge_marked,
+    two_edge_report_by_path,
+    endpoint_bridge_report_by_path,
+    residual_by_path,
+):
+    edge_keys = _path_edge_keys(path)
+    edge_records = [edge_by_key.get(edge_key) for edge_key in edge_keys]
+    edge_flags = [None if record is None else bool(record[1].use_seam) for record in edge_records]
+    all_edges_exist = all(record is not None for record in edge_records)
+    endpoint_vertices = (path[0], path[-1])
+    intermediate_vertices = path[1:-1]
+    component_ids = [component_id_of.get(vertex) for vertex in path]
+    relation = _phase2h_component_relation(endpoint_vertices, component_id_of, seam_degree)
+    seam_distance = None
+    if relation == 'same_component':
+        seam_distance = _shortest_seam_path_length(seam_adjacency, path[0], path[-1])
+    total_path_length, endpoint_distance, straightness = _path_geometry(mesh, path)
+    tangent_alignments, tangent_flags = _phase2h_tangent_alignments(mesh, path, seam_adjacency)
+    min_alignment = None
+    if tangent_alignments is not None and all(value is not None for value in tangent_alignments):
+        min_alignment = min(tangent_alignments)
+    q_floor, q_sum, continuity_tier = _phase2h_quality(min_alignment, straightness)
+    endpoint_report = None
+    phase_2b1_allowed = False
+    phase_2b1_reason = 'path_length_not_supported'
+    rank_v2 = None
+    if len(path) == 3:
+        canonical = _canonical_two_edge_path(path)
+        endpoint_report = endpoint_bridge_report_by_path.get(canonical)
+        phase_2b1_allowed, phase_2b1_reason = _classification_phase_2b1(
+            canonical,
+            endpoint_bridge_report_by_path,
+            edge_records,
+            seam_degree,
+            component_id_of,
+        )
+        if endpoint_report is not None:
+            rank_v2 = endpoint_report.get('rank_v2')
+    selected_by_current = bool(
+        'current_selected_repair' in sources
+        or (endpoint_report is not None and endpoint_report.get('accepted', False))
+    )
+    marked_trace = bool(
+        any(edge_key in local_marked for edge_key in edge_keys)
+        or any(edge_key in two_edge_marked for edge_key in edge_keys)
+        or any(edge_key in endpoint_bridge_marked for edge_key in edge_keys)
+    )
+    residual = residual_by_path.get(_phase2h_path_key(path))
+    candidate_class = _phase2h_candidate_class(
+        path=path,
+        all_edges_exist=all_edges_exist,
+        selected_by_current=selected_by_current,
+        relation=relation,
+        seam_degree=seam_degree,
+        endpoint_report=endpoint_report,
+        phase_2b1_reason=phase_2b1_reason,
+    )
+    priority = _phase2h_priority(candidate_class, residual, continuity_tier, q_floor)
+    return {
+        'candidate_id': f"phase2h_{candidate_index:05d}",
+        'path_vertex_ids': [int(vertex) for vertex in path],
+        'path_length_edges': len(edge_keys),
+        'path_edge_keys': [[int(a), int(b)] for a, b in edge_keys],
+        'blender_edge_indices': [None if record is None else int(record[0]) for record in edge_records],
+        'edge_seam_flags_after_all_repairs': edge_flags,
+        'endpoint_seam_vertex_flags': [bool(seam_degree.get(vertex, 0) > 0) for vertex in endpoint_vertices],
+        'intermediate_seam_vertex_flags': [
+            bool(seam_degree.get(vertex, 0) > 0) for vertex in intermediate_vertices
+        ],
+        'vertex_seam_degrees': [int(seam_degree.get(vertex, 0)) for vertex in path],
+        'degree_pattern': [int(seam_degree.get(vertex, 0)) for vertex in path],
+        'component_ids': component_ids,
+        'component_relation': relation,
+        'would_create_loop': relation == 'same_component',
+        'existing_seam_distance_between_endpoints_if_available': seam_distance,
+        'duplicate_endpoint_pair_key': sorted([int(path[0]), int(path[-1])]),
+        'duplicate_group_rank_if_available': None if endpoint_report is None else endpoint_report.get('rank_v2'),
+        'total_path_length': total_path_length,
+        'endpoint_distance': endpoint_distance,
+        'normalized_total_path_length_if_mesh_scale_available': _safe_ratio(total_path_length, bbox_diagonal),
+        'normalized_endpoint_distance_if_mesh_scale_available': _safe_ratio(endpoint_distance, bbox_diagonal),
+        'path_straightness': straightness,
+        'endpoint_tangent_alignments': tangent_alignments,
+        'min_endpoint_tangent_alignment': min_alignment,
+        'tangent_available_flags': tangent_flags,
+        'matches_phase_2a1_one_edge_missing_continuity': bool(
+            len(path) == 2 and candidate_class == 'one_edge_missing_continuity'
+        ),
+        'matches_phase_2b1_inter_component_two_edge_endpoint_bridge': bool(
+            len(path) == 3 and candidate_class == 'two_edge_inter_component_endpoint_bridge'
+        ),
+        'would_be_allowed_by_phase_2b1_current_predicate': bool(phase_2b1_allowed),
+        'phase_2b1_rejection_reason_if_any': phase_2b1_reason,
+        'rank_v2_if_available': rank_v2,
+        'selected_by_current_pipeline': selected_by_current,
+        'marked_by_current_pipeline_if_traceable': marked_trace,
+        'marked_by_prediction_if_traceable': bool(any(edge_key in predicted_key_set for edge_key in edge_keys)),
+        'candidate_class_phase2h': candidate_class,
+        'continuity_tier_general': continuity_tier,
+        'q_floor_general': q_floor,
+        'q_sum_general': q_sum,
+        'loop_risk': _phase2h_loop_risk(relation, seam_distance),
+        'tangent_risk': _phase2h_tangent_risk(tangent_flags, min_alignment),
+        'length_risk': _phase2h_length_risk(total_path_length, bbox_diagonal),
+        'topology_risk': _phase2h_topology_risk(candidate_class),
+        'candidate_priority': priority,
+        'would_require_new_repair_class': candidate_class in {
+            'one_edge_endpoint_to_skeleton',
+            'two_edge_same_component_local_closure',
+            'two_edge_endpoint_to_skeleton_or_near_junction',
+            'three_edge_local_bridge',
+        },
+        'would_require_parameter_or_cap_change': candidate_class in {
+            'two_edge_duplicate_alternative',
+            'two_edge_tangent_failed_endpoint_bridge',
+        },
+        'would_require_topology_remapping': candidate_class == 'non_original_or_missing_blender_edge',
+        'residual_match_labels': [] if residual is None else [residual.get('label')],
+        'source_tags': sorted(sources),
+    }
+
+
+def _phase2h_candidate_class(*, path, all_edges_exist, selected_by_current, relation, seam_degree, endpoint_report, phase_2b1_reason):
+    if not all_edges_exist:
+        return 'non_original_or_missing_blender_edge'
+    if selected_by_current:
+        return 'current_selected_repair'
+    if len(path) == 1:
+        return 'unsupported_or_unknown'
+    if len(path) == 2:
+        endpoint_seams = [seam_degree.get(path[0], 0) > 0, seam_degree.get(path[-1], 0) > 0]
+        if all(endpoint_seams):
+            return 'one_edge_missing_continuity'
+        if any(endpoint_seams):
+            return 'one_edge_endpoint_to_skeleton'
+        return 'unsupported_or_unknown'
+    if len(path) == 3:
+        if endpoint_report is not None and endpoint_report.get('duplicate_endpoint_pair_suppressed', False):
+            return 'two_edge_duplicate_alternative'
+        if phase_2b1_reason == 'tangent_alignment_failed':
+            return 'two_edge_tangent_failed_endpoint_bridge'
+        middle_degree = seam_degree.get(path[1], 0)
+        endpoint_degrees = (seam_degree.get(path[0], 0), seam_degree.get(path[-1], 0))
+        if endpoint_degrees == (1, 1) and middle_degree == 0 and relation == 'different_components':
+            return 'two_edge_inter_component_endpoint_bridge'
+        if relation == 'same_component':
+            return 'two_edge_same_component_local_closure'
+        if middle_degree > 0 or any(degree > 0 for degree in endpoint_degrees):
+            return 'two_edge_endpoint_to_skeleton_or_near_junction'
+        return 'unsupported_or_unknown'
+    if len(path) == 4:
+        return 'three_edge_local_bridge'
+    return 'unsupported_or_unknown'
+
+
+def _phase2h_apply_detail_caps(reports):
+    reports = sorted(reports, key=_phase2h_sort_key)
+    stored = []
+    stored_ids = set()
+    per_class_stored = {}
+    for report in reports:
+        if report['residual_match_labels']:
+            stored.append(report)
+            stored_ids.add(report['candidate_id'])
+            per_class_stored[report['candidate_class_phase2h']] = (
+                per_class_stored.get(report['candidate_class_phase2h'], 0) + 1
+            )
+    for report in reports:
+        if report['candidate_id'] in stored_ids:
+            continue
+        class_name = report['candidate_class_phase2h']
+        cap = _phase2h_cap_for_report(report)
+        current = per_class_stored.get(class_name, 0)
+        if cap is not None and current >= cap:
+            continue
+        stored.append(report)
+        stored_ids.add(report['candidate_id'])
+        per_class_stored[class_name] = current + 1
+    stored.sort(key=_phase2h_sort_key)
+    discovered_counts = _count_by_key(reports, 'candidate_class_phase2h')
+    stored_counts = _count_by_key(stored, 'candidate_class_phase2h')
+    truncation = {
+        class_name: max(0, count - stored_counts.get(class_name, 0))
+        for class_name, count in discovered_counts.items()
+    }
+    return stored, {
+        'per_class_discovered_counts': discovered_counts,
+        'per_class_stored_counts': stored_counts,
+        'per_class_truncation_counts': truncation,
+    }
+
+
+def _phase2h_cap_for_report(report):
+    if report['candidate_class_phase2h'] == 'current_selected_repair':
+        return PHASE2H_CANDIDATE_DETAIL_CAPS['current_selected_repair']
+    if report['candidate_class_phase2h'] == 'three_edge_local_bridge':
+        return PHASE2H_CANDIDATE_DETAIL_CAPS['three_edge_local_bridge']
+    if report['candidate_priority'] == 'high':
+        return PHASE2H_CANDIDATE_DETAIL_CAPS['high_priority_unselected']
+    if report['candidate_priority'] == 'medium':
+        return PHASE2H_CANDIDATE_DETAIL_CAPS['medium_priority_unselected']
+    return PHASE2H_CANDIDATE_DETAIL_CAPS['low_priority_or_unsafe_per_class']
+
+
+def _phase2h_residual_mapping(residual_by_path, reports, stored_reports):
+    by_path = {}
+    for report in reports:
+        by_path.setdefault(_phase2h_path_key(report['path_vertex_ids']), []).append(report)
+    stored_ids = {report['candidate_id'] for report in stored_reports}
+    mappings = []
+    for path, residual in sorted(residual_by_path.items()):
+        matches = sorted(by_path.get(path, []), key=_phase2h_sort_key)
+        best = matches[0] if matches else None
+        class_name = None if best is None else best['candidate_class_phase2h']
+        mappings.append({
+            'residual_label': residual.get('label'),
+            'path_vertex_ids': list(path),
+            'matched_candidate_ids': [report['candidate_id'] for report in matches],
+            'best_matching_candidate_id': None if best is None else best['candidate_id'],
+            'current_status': residual.get('candidate_class_phase2e'),
+            'current_rejection_or_skip_reason': (
+                residual.get('phase_2b1_rejection_reason')
+                or residual.get('skipped_reason')
+                or residual.get('phase_2b_rejection_reason')
+                or residual.get('phase_2a1_rejection_reason')
+            ),
+            'generalized_candidate_class': class_name,
+            'whether_similar_candidates_exist_beyond_the_listed_residual': bool(
+                class_name and sum(1 for report in reports if report['candidate_class_phase2h'] == class_name) > len(matches)
+            ),
+            'count_of_similar_candidates': 0 if class_name is None else sum(
+                1 for report in reports if report['candidate_class_phase2h'] == class_name
+            ),
+            'recommended_followup': residual.get('recommended_followup') or _phase2h_followup_for_class(class_name),
+            'candidate_generation_cap_truncated': bool(
+                best is not None and best['candidate_id'] not in stored_ids
+            ),
+            'unmatched_reason': _phase2h_unmatched_reason(residual, matches),
+        })
+    return mappings
+
+
+def _phase2h_summary(reports, stored_reports, truncation, residual_mapping):
+    candidates_by_length = _count_by_key(reports, 'path_length_edges')
+    candidates_by_class = _count_by_key(reports, 'candidate_class_phase2h')
+    candidates_by_relation = _count_by_key(reports, 'component_relation')
+    candidates_by_priority = _count_by_key(reports, 'candidate_priority')
+    residual_coverage = {}
+    for mapping in residual_mapping:
+        class_name = mapping.get('generalized_candidate_class') or 'unmatched'
+        residual_coverage[class_name] = residual_coverage.get(class_name, 0) + 1
+    total_truncated = sum(truncation['per_class_truncation_counts'].values())
+    summary = {
+        'total_candidates_discovered_before_truncation': len(reports),
+        'total_candidates_stored_after_truncation': len(stored_reports),
+        'total_candidates_truncated': total_truncated,
+        'candidates_by_path_length': candidates_by_length,
+        'candidates_by_class': candidates_by_class,
+        'candidates_by_component_relation': candidates_by_relation,
+        'candidates_by_priority': candidates_by_priority,
+        'candidates_matching_existing_repairs': candidates_by_class.get('current_selected_repair', 0),
+        'candidates_requiring_new_repair_class': sum(
+            1 for report in reports if report['would_require_new_repair_class']
+        ),
+        'candidates_requiring_cap_or_ranking_change': sum(
+            1 for report in reports if report['would_require_parameter_or_cap_change']
+        ),
+        'candidates_requiring_topology_remapping': sum(
+            1 for report in reports if report['would_require_topology_remapping']
+        ),
+        'residual_paths_total': len(residual_mapping),
+        'residual_paths_matched': sum(1 for mapping in residual_mapping if mapping['matched_candidate_ids']),
+        'residual_paths_unmatched': sum(1 for mapping in residual_mapping if not mapping['matched_candidate_ids']),
+        'residual_coverage_by_class': residual_coverage,
+        'per_class_discovered_counts': truncation['per_class_discovered_counts'],
+        'per_class_stored_counts': truncation['per_class_stored_counts'],
+        'per_class_truncation_counts': truncation['per_class_truncation_counts'],
+        'candidate_detail_caps': dict(PHASE2H_CANDIDATE_DETAIL_CAPS),
+    }
+    summary['recommended_next_action'] = _phase2h_recommendation(summary)
+    return summary
+
+
+def _phase2h_recommendation(summary):
+    residual_total = max(1, summary['residual_paths_total'])
+    coverage = summary['residual_coverage_by_class']
+    if coverage.get('non_original_or_missing_blender_edge', 0) >= residual_total * 0.4:
+        return 'investigate_non_original_edges'
+    dominant = max(coverage.items(), key=lambda item: item[1], default=(None, 0))
+    if dominant[1] >= residual_total * 0.4:
+        class_name = dominant[0]
+        if class_name == 'three_edge_local_bridge':
+            return 'consider_three_edge_classifier'
+        if class_name in ('one_edge_endpoint_to_skeleton', 'two_edge_endpoint_to_skeleton_or_near_junction'):
+            return 'consider_endpoint_to_skeleton_classifier'
+        if class_name == 'two_edge_same_component_local_closure':
+            return 'consider_same_component_local_closure_classifier'
+        if class_name in ('two_edge_inter_component_endpoint_bridge', 'two_edge_duplicate_alternative', 'two_edge_tangent_failed_endpoint_bridge'):
+            return 'review_phase_2b1_cap_or_ranking'
+    if len([value for value in coverage.values() if value > 0]) > 2:
+        return 'no_single_dominant_next_action'
+    return 'review_general_candidate_distribution'
+
+
+def _phase2h_residual_reports_by_path(residual_payload):
+    result = {}
+    for report in (residual_payload or {}).get('paths', []):
+        path = report.get('path_vertex_ids')
+        if isinstance(path, list) and len(path) >= 2:
+            result[_phase2h_path_key(path)] = report
+    return result
+
+
+def _phase2h_path_key(path):
+    path = tuple(int(vertex) for vertex in path)
+    if len(path) == 3:
+        return _canonical_two_edge_path(path)
+    return _phase2h_canonical_path(path)
+
+
+def _phase2h_canonical_path(path):
+    path = tuple(int(vertex) for vertex in path)
+    reverse = tuple(reversed(path))
+    return path if path <= reverse else reverse
+
+
+def _phase2h_component_relation(endpoint_vertices, component_id_of, seam_degree):
+    endpoint_flags = [seam_degree.get(vertex, 0) > 0 for vertex in endpoint_vertices]
+    if not any(endpoint_flags):
+        return 'no_endpoint_seam'
+    if not all(endpoint_flags):
+        return 'endpoint_not_seam'
+    return _component_relation(endpoint_vertices, component_id_of, seam_degree)
+
+
+def _phase2h_tangent_alignments(mesh, path, seam_adjacency):
+    if len(path) == 3:
+        return _classification_tangent_alignments(mesh, path, seam_adjacency)
+    return None, [False, False]
+
+
+def _phase2h_quality(min_alignment, straightness):
+    if min_alignment is None or straightness is None:
+        return None, None, None
+    q_floor = min(min_alignment, straightness)
+    q_sum = min_alignment + straightness
+    report = {
+        'min_endpoint_tangent_alignment': min_alignment,
+        'path_straightness': straightness,
+    }
+    return q_floor, q_sum, _endpoint_bridge_continuity_tier(report)
+
+
+def _phase2h_priority(candidate_class, residual, continuity_tier, q_floor):
+    if candidate_class == 'current_selected_repair':
+        return 'high'
+    if candidate_class == 'non_original_or_missing_blender_edge':
+        return 'unsafe'
+    if residual is not None:
+        return 'high'
+    if continuity_tier is not None and continuity_tier <= 1 and (q_floor is None or q_floor >= 0.7):
+        return 'high'
+    if candidate_class in ('unsupported_or_unknown', 'two_edge_tangent_failed_endpoint_bridge'):
+        return 'low'
+    if candidate_class == 'three_edge_local_bridge':
+        return 'medium'
+    return 'medium'
+
+
+def _phase2h_sort_key(report):
+    priority_order = {'high': 0, 'medium': 1, 'low': 2, 'unsafe': 3}
+    return (
+        priority_order.get(report.get('candidate_priority'), 4),
+        report.get('path_length_edges', 99),
+        report.get('continuity_tier_general') if report.get('continuity_tier_general') is not None else 99,
+        report.get('total_path_length') if report.get('total_path_length') is not None else 10**9,
+        tuple(report.get('path_vertex_ids', ())),
+    )
+
+
+def _phase2h_loop_risk(relation, seam_distance):
+    if relation != 'same_component':
+        return 'none'
+    if seam_distance is None:
+        return 'unknown'
+    if seam_distance <= 3:
+        return 'local_loop'
+    return 'loop'
+
+
+def _phase2h_tangent_risk(tangent_flags, min_alignment):
+    if not any(tangent_flags):
+        return 'unavailable'
+    if min_alignment is None:
+        return 'unknown'
+    if min_alignment < 0:
+        return 'failed'
+    if min_alignment < 0.5:
+        return 'weak'
+    return 'low'
+
+
+def _phase2h_length_risk(total_path_length, bbox_diagonal):
+    ratio = _safe_ratio(total_path_length, bbox_diagonal)
+    if ratio is None:
+        return 'unknown'
+    if ratio > 0.03:
+        return 'long'
+    return 'local'
+
+
+def _phase2h_topology_risk(candidate_class):
+    if candidate_class in ('current_selected_repair', 'one_edge_missing_continuity', 'two_edge_inter_component_endpoint_bridge'):
+        return 'accepted_pattern'
+    if candidate_class == 'non_original_or_missing_blender_edge':
+        return 'not_editable'
+    if candidate_class == 'unsupported_or_unknown':
+        return 'unknown'
+    return 'new_pattern'
+
+
+def _phase2h_followup_for_class(class_name):
+    return {
+        'three_edge_local_bridge': 'consider_three_edge_classifier',
+        'one_edge_endpoint_to_skeleton': 'consider_endpoint_to_skeleton_classifier',
+        'two_edge_endpoint_to_skeleton_or_near_junction': 'consider_endpoint_to_skeleton_classifier',
+        'two_edge_same_component_local_closure': 'consider_same_component_local_closure_classifier',
+        'two_edge_inter_component_endpoint_bridge': 'review_phase_2b1_cap_or_ranking',
+        'two_edge_duplicate_alternative': 'review_phase_2b1_cap_or_ranking',
+        'two_edge_tangent_failed_endpoint_bridge': 'review_phase_2b1_cap_or_ranking',
+        'non_original_or_missing_blender_edge': 'investigate_non_original_edges',
+    }.get(class_name, 'review_general_candidate_distribution')
+
+
+def _phase2h_unmatched_reason(residual, matches):
+    if matches:
+        return None
+    if not residual.get('all_edges_exist_in_blender', True):
+        return 'missing_blender_edge'
+    if residual.get('path_length_edges', 0) > 3:
+        return 'path_length_out_of_scope'
+    if residual.get('already_all_marked', False):
+        return 'current_seam_state_already_marked'
+    return 'unknown'
+
+
+def _safe_ratio(value, denominator):
+    if value is None or denominator in (None, 0):
+        return None
+    return value / denominator
+
+
 def _count_by_key(reports, key):
     counts = {}
     for report in reports:
@@ -2797,6 +3402,41 @@ def format_rank_9_to_16_review_summary(payload, debug_path):
         f"cap=9 would add "
         f"{_rank_review_cap_added_count(payload, 9)} candidate(s), "
         f"recommended_next_action={summary.get('recommended_next_action', 'keep_cap_8')}. "
+        f"Sidecar: {debug_path}"
+    )
+
+
+def write_general_residual_candidates_phase2h(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_general_residual_candidates_phase2h.json'
+    payload = result.general_residual_candidates_phase2h or {
+        'summary': {
+            'total_candidates_discovered_before_truncation': 0,
+            'recommended_next_action': 'review_general_candidate_distribution',
+        },
+        'candidates': [],
+        'human_residual_mapping': [],
+        'read_only': True,
+    }
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_general_residual_candidates_phase2h_summary(payload, debug_path):
+    summary = payload.get('summary', {})
+    by_length = summary.get('candidates_by_path_length', {})
+    coverage = summary.get('residual_coverage_by_class', {})
+    return (
+        f"Phase 2H candidate collector: "
+        f"{summary.get('total_candidates_stored_after_truncation', 0)} stored / "
+        f"{summary.get('total_candidates_discovered_before_truncation', 0)} discovered local candidates, "
+        f"length1={by_length.get(1, by_length.get('1', 0))}, "
+        f"length2={by_length.get(2, by_length.get('2', 0))}, "
+        f"length3={by_length.get(3, by_length.get('3', 0))} discovered, "
+        f"truncated={summary.get('total_candidates_truncated', 0)}. "
+        f"Residual coverage: {coverage}. "
+        f"Recommended next action: {summary.get('recommended_next_action', 'review_general_candidate_distribution')}. "
         f"Sidecar: {debug_path}"
     )
 

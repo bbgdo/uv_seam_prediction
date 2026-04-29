@@ -235,12 +235,21 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 rank_review,
                 rank_review_path,
             )
+            general_candidates_path = seam_mapping.write_general_residual_candidates_phase2h(
+                self._job.json_path,
+                result,
+            )
+            general_candidates_summary = seam_mapping.format_general_residual_candidates_phase2h_summary(
+                result.general_residual_candidates_phase2h or {},
+                general_candidates_path,
+            )
             summary = (
                 f'{summary} Bridge apply debug: {debug_path}. '
                 f'Human gap classification: {human_gap_path}. '
                 f'{residual_summary}. '
                 f'{ranking_summary}. '
-                f'{rank_review_summary}'
+                f'{rank_review_summary}. '
+                f'{general_candidates_summary}'
             )
         except Exception as exc:
             return self._finish(context, error=str(exc))

@@ -2132,6 +2132,217 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
 
         self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
 
+    def test_phase2h_sidecar_is_emitted_and_read_only(self):
+        seam_mapping = load_module('uvsp_phase2h_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=3)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prediction_path = str(Path(temp_dir) / 'prediction.json')
+            Path(prediction_path).write_text('{}', encoding='utf-8')
+            sidecar = seam_mapping.write_general_residual_candidates_phase2h(prediction_path, result)
+            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
+
+        self.assertTrue(sidecar.endswith('_general_residual_candidates_phase2h.json'))
+        self.assertTrue(payload['read_only'])
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertIn('write_general_residual_candidates_phase2h', read_addon_file('operators.py'))
+
+    def test_phase2h_collects_length1_length2_length3_and_missing_residuals(self):
+        seam_mapping = load_module('uvsp_phase2h_classes_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [
+            (0, 1), (2, 3), (1, 2),
+            (10, 11), (13, 14), (11, 12), (12, 13),
+            (20, 21), (21, 22), (20, 23), (22, 24), (20, 25), (25, 22),
+            (30, 31), (34, 35), (31, 32), (32, 33), (33, 34),
+            (40, 41), (41, 42),
+        ]
+        coords = {
+            10: (-0.01, 0.0, 0.0), 11: (0.0, 0.0, 0.0), 12: (0.01, 0.0, 0.0),
+            13: (0.02, 0.0, 0.0), 14: (0.03, 0.0, 0.0),
+            20: (0.0, 1.0, 0.0), 21: (0.01, 1.01, 0.0), 22: (0.02, 1.0, 0.0),
+            23: (-0.01, 1.0, 0.0), 24: (0.03, 1.0, 0.0), 25: (0.01, 1.0, 0.0),
+            30: (0.0, 2.0, 0.0), 31: (0.01, 2.0, 0.0), 32: (0.02, 2.0, 0.0),
+            33: (0.03, 2.0, 0.0), 34: (0.04, 2.0, 0.0), 35: (0.05, 2.0, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (2, 3), (10, 11), (13, 14), (20, 23), (22, 24), (30, 31), (34, 35), (40, 41)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        residual_payload = {
+            'paths': [
+                {'label': 'one', 'path_vertex_ids': [1, 2], 'candidate_class_phase2e': 'one'},
+                {'label': 'bridge', 'path_vertex_ids': [11, 12, 13], 'candidate_class_phase2e': 'bridge'},
+                {'label': 'duplicate', 'path_vertex_ids': [20, 21, 22], 'candidate_class_phase2e': 'duplicate'},
+                {'label': 'three', 'path_vertex_ids': [31, 32, 33, 34], 'candidate_class_phase2e': 'three'},
+                {'label': 'missing', 'path_vertex_ids': [70, 71], 'candidate_class_phase2e': 'missing', 'all_edges_exist_in_blender': False},
+            ],
+            'read_only': True,
+        }
+        endpoint_reports = (
+            {'path_vertex_ids': [20, 21, 22], 'duplicate_endpoint_pair_suppressed': True, 'rejection_reason': None, 'rank_v2': 7},
+        )
+
+        payload = seam_mapping.collect_general_residual_candidates_phase2h(
+            mesh,
+            predicted_keys={(0, 1), (2, 3), (10, 11), (13, 14), (20, 23), (22, 24), (30, 31), (34, 35), (40, 41)},
+            endpoint_bridge_reports=endpoint_reports,
+            residual_payload=residual_payload,
+        )
+        by_path = {
+            tuple(report['path_vertex_ids']): report
+            for report in payload['candidates']
+        }
+
+        self.assertEqual(by_path[(1, 2)]['candidate_class_phase2h'], 'one_edge_missing_continuity')
+        self.assertEqual(
+            by_path[(11, 12, 13)]['candidate_class_phase2h'],
+            'two_edge_inter_component_endpoint_bridge',
+        )
+        self.assertEqual(by_path[(20, 21, 22)]['candidate_class_phase2h'], 'two_edge_duplicate_alternative')
+        self.assertEqual(by_path[(31, 32, 33, 34)]['candidate_class_phase2h'], 'three_edge_local_bridge')
+        self.assertEqual(by_path[(70, 71)]['candidate_class_phase2h'], 'non_original_or_missing_blender_edge')
+        self.assertGreaterEqual(payload['summary']['candidates_by_path_length'][1], 1)
+        self.assertGreaterEqual(payload['summary']['candidates_by_path_length'][2], 1)
+        self.assertGreaterEqual(payload['summary']['candidates_by_path_length'][3], 1)
+
+    def test_phase2h_classifies_same_component_endpoint_to_skeleton_and_tangent_failed(self):
+        seam_mapping = load_module('uvsp_phase2h_topology_smoke', ADDON_DIR / 'seam_mapping.py')
+        coords = {
+            100: (0.0, 0.0, 0.0), 101: (0.01, 0.0, 0.0), 102: (0.02, 0.0, 0.0),
+            103: (0.03, 0.0, 0.0), 104: (0.04, 0.0, 0.0), 105: (0.05, 0.0, 0.0),
+            200: (0.0, 1.0, 0.0), 201: (0.01, 1.0, 0.0), 202: (0.02, 1.0, 0.0),
+            210: (0.0, 2.0, 0.0), 211: (0.01, 2.0, 0.0), 212: (0.02, 2.0, 0.0),
+            213: (0.03, 2.0, 0.0), 9999: (1.0, 1.0, 1.0),
+        }
+        mesh = FakeMesh(
+            edges=[
+                (100, 101), (104, 105), (100, 105), (101, 102), (102, 104),
+                (200, 201), (201, 202),
+                (210, 211), (212, 213), (211, 202), (202, 212),
+            ],
+            vertex_count=10000,
+            coords=coords,
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(100, 101), (104, 105), (100, 105), (200, 201), (210, 211), (212, 213)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        residual_payload = {
+            'paths': [
+                {'label': 'same', 'path_vertex_ids': [101, 102, 104], 'candidate_class_phase2e': 'same'},
+                {'label': 'junction', 'path_vertex_ids': [200, 201, 202], 'candidate_class_phase2e': 'junction'},
+                {'label': 'tangent', 'path_vertex_ids': [211, 202, 212], 'candidate_class_phase2e': 'tangent'},
+            ],
+            'read_only': True,
+        }
+        endpoint_reports = (
+            {'path_vertex_ids': [211, 202, 212], 'rejection_reason': 'tangent_alignment_failed', 'rank_v2': None},
+        )
+
+        payload = seam_mapping.collect_general_residual_candidates_phase2h(
+            mesh,
+            endpoint_bridge_reports=endpoint_reports,
+            residual_payload=residual_payload,
+        )
+        by_path = {tuple(report['path_vertex_ids']): report for report in payload['candidates']}
+
+        self.assertEqual(
+            by_path[(101, 102, 104)]['candidate_class_phase2h'],
+            'two_edge_same_component_local_closure',
+        )
+        self.assertEqual(
+            by_path[(200, 201, 202)]['candidate_class_phase2h'],
+            'two_edge_endpoint_to_skeleton_or_near_junction',
+        )
+        self.assertEqual(
+            by_path[(211, 202, 212)]['candidate_class_phase2h'],
+            'two_edge_tangent_failed_endpoint_bridge',
+        )
+
+    def test_phase2h_residual_mapping_recommendations_and_truncation(self):
+        seam_mapping = load_module('uvsp_phase2h_summary_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = []
+        residual_paths = []
+        for index in range(12):
+            base = index * 10
+            edges.extend([(base, base + 1), (base + 1, base + 2)])
+        residual_paths.append({
+            'label': 'truncated_residual',
+            'path_vertex_ids': [110, 111, 112],
+            'candidate_class_phase2e': 'unknown',
+        })
+        mesh = FakeMesh(edges=edges, vertex_count=200)
+
+        payload = seam_mapping.collect_general_residual_candidates_phase2h(
+            mesh,
+            residual_payload={'paths': residual_paths, 'read_only': True},
+        )
+
+        self.assertGreater(payload['summary']['per_class_truncation_counts']['unsupported_or_unknown'], 0)
+        mapping = payload['human_residual_mapping'][0]
+        self.assertEqual(mapping['residual_label'], 'truncated_residual')
+        self.assertTrue(mapping['matched_candidate_ids'])
+        self.assertFalse(mapping['candidate_generation_cap_truncated'])
+        self.assertIn(mapping['best_matching_candidate_id'], {
+            report['candidate_id'] for report in payload['candidates']
+        })
+
+    def test_phase2h_recommendation_heuristics_for_mixed_and_dominant_classes(self):
+        seam_mapping = load_module('uvsp_phase2h_recommendation_smoke', ADDON_DIR / 'seam_mapping.py')
+        mixed_summary = {
+            'residual_paths_total': 3,
+            'residual_coverage_by_class': {
+                'three_edge_local_bridge': 1,
+                'one_edge_endpoint_to_skeleton': 1,
+                'non_original_or_missing_blender_edge': 1,
+            },
+        }
+        three_summary = {
+            'residual_paths_total': 5,
+            'residual_coverage_by_class': {'three_edge_local_bridge': 3},
+        }
+        endpoint_summary = {
+            'residual_paths_total': 5,
+            'residual_coverage_by_class': {'one_edge_endpoint_to_skeleton': 3},
+        }
+
+        self.assertEqual(
+            seam_mapping._phase2h_recommendation(mixed_summary),
+            'no_single_dominant_next_action',
+        )
+        self.assertEqual(
+            seam_mapping._phase2h_recommendation(three_summary),
+            'consider_three_edge_classifier',
+        )
+        self.assertEqual(
+            seam_mapping._phase2h_recommendation(endpoint_summary),
+            'consider_endpoint_to_skeleton_classifier',
+        )
+
+    def test_phase2h_collection_is_deterministic(self):
+        seam_mapping = load_module('uvsp_phase2h_deterministic_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (3, 4), (2, 3)], vertex_count=5)
+        seam_mapping.apply_seam_keys(mesh, [(0, 1), (3, 4)], clear_existing=True, enable_local_repair=False)
+
+        first = seam_mapping.collect_general_residual_candidates_phase2h(mesh)
+        second = seam_mapping.collect_general_residual_candidates_phase2h(mesh)
+
+        self.assertEqual(first['summary'], second['summary'])
+        self.assertEqual(first['candidates'], second['candidates'])
+
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
         result = seam_mapping.SeamApplyResult(
