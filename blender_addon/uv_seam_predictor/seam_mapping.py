@@ -63,6 +63,19 @@ class SeamApplyResult:
     blender_two_edge_endpoint_bridge_added_candidate_due_to_cap_increase: bool = False
     blender_two_edge_endpoint_bridge_previous_rank_9_selected: bool = False
     blender_two_edge_endpoint_bridge_selected_rank_9_candidate: dict | None = None
+    blender_curved_two_edge_endpoint_bridge_enabled: bool = False
+    blender_curved_two_edge_endpoint_bridge_candidates_total: int = 0
+    blender_curved_two_edge_endpoint_bridge_eligible_total: int = 0
+    blender_curved_two_edge_endpoint_bridge_paths_marked: int = 0
+    blender_curved_two_edge_endpoint_bridge_edges_marked: int = 0
+    blender_curved_two_edge_endpoint_bridge_over_cap: bool = False
+    blender_curved_two_edge_endpoint_bridge_safety_cap: int = 6
+    blender_curved_two_edge_endpoint_bridge_candidate_reports: tuple = ()
+    selected_curved_two_edge_endpoint_bridge_reports: tuple = ()
+    rejected_curved_two_edge_endpoint_bridge_reports: tuple = ()
+    probabilities_used_for_curved_repair: bool = False
+    phase2j_curved_repair_uses_hardcoded_paths: bool = False
+    phase2j_curved_repair_uses_probabilities: bool = False
     target_path_2045_2541_4884_found: bool = False
     target_path_2045_2541_4884_allowed: bool = False
     target_path_2045_2541_4884_marked: bool = False
@@ -341,6 +354,10 @@ def apply_seam_keys(
         endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
         residual_payload=residual_gap_phase2e_debug,
     )
+    curved_endpoint_bridge_repair = apply_curved_two_edge_endpoint_bridge_repair(
+        mesh,
+        enabled=bool(enable_local_repair),
+    )
     mesh.update()
 
     return SeamApplyResult(
@@ -444,6 +461,37 @@ def apply_seam_keys(
         blender_two_edge_endpoint_bridge_selected_rank_9_candidate=endpoint_bridge_repair[
             'selected_rank_9_candidate'
         ],
+        blender_curved_two_edge_endpoint_bridge_enabled=bool(curved_endpoint_bridge_repair['enabled']),
+        blender_curved_two_edge_endpoint_bridge_candidates_total=int(
+            curved_endpoint_bridge_repair['candidates_total']
+        ),
+        blender_curved_two_edge_endpoint_bridge_eligible_total=int(
+            curved_endpoint_bridge_repair['eligible_total']
+        ),
+        blender_curved_two_edge_endpoint_bridge_paths_marked=int(
+            curved_endpoint_bridge_repair['paths_marked']
+        ),
+        blender_curved_two_edge_endpoint_bridge_edges_marked=int(
+            curved_endpoint_bridge_repair['edges_marked']
+        ),
+        blender_curved_two_edge_endpoint_bridge_over_cap=bool(
+            curved_endpoint_bridge_repair['over_cap']
+        ),
+        blender_curved_two_edge_endpoint_bridge_safety_cap=int(
+            curved_endpoint_bridge_repair['safety_cap']
+        ),
+        blender_curved_two_edge_endpoint_bridge_candidate_reports=tuple(
+            curved_endpoint_bridge_repair['candidate_reports']
+        ),
+        selected_curved_two_edge_endpoint_bridge_reports=tuple(
+            curved_endpoint_bridge_repair['selected_reports']
+        ),
+        rejected_curved_two_edge_endpoint_bridge_reports=tuple(
+            curved_endpoint_bridge_repair['rejected_reports']
+        ),
+        probabilities_used_for_curved_repair=False,
+        phase2j_curved_repair_uses_hardcoded_paths=False,
+        phase2j_curved_repair_uses_probabilities=False,
         target_path_2045_2541_4884_found=bool(target_status[
             'target_path_2045_2541_4884_found'
         ]),
@@ -1121,6 +1169,283 @@ def _two_edge_endpoint_bridge_result(
             report and report.get('accepted_by_target_over_cap_exception', False)
         )
     return result
+
+
+def apply_curved_two_edge_endpoint_bridge_repair(mesh, enabled=True, max_repair_paths=6):
+    edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
+    if not enabled:
+        return {
+            'enabled': False,
+            'candidates_total': 0,
+            'eligible_total': 0,
+            'paths_marked': 0,
+            'edges_marked': 0,
+            'over_cap': False,
+            'safety_cap': int(max_repair_paths),
+            'candidate_reports': tuple(),
+            'selected_reports': tuple(),
+            'rejected_reports': tuple(),
+        }
+
+    seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    component_id_of = _seam_component_ids(seam_adjacency)
+    bbox_diagonal = _mesh_bbox_diagonal(mesh)
+    candidate_reports = []
+    report_by_path = {}
+
+    for middle in sorted(adjacency):
+        neighbors = sorted(adjacency[middle])
+        for left_index in range(len(neighbors)):
+            for right_index in range(left_index + 1, len(neighbors)):
+                path = _canonical_two_edge_path((
+                    neighbors[left_index],
+                    middle,
+                    neighbors[right_index],
+                ))
+                if path[1] != middle:
+                    continue
+                report = _curved_two_edge_endpoint_bridge_report(
+                    mesh=mesh,
+                    path=path,
+                    edge_by_key=edge_by_key,
+                    seam_degree=seam_degree,
+                    seam_adjacency=seam_adjacency,
+                    component_id_of=component_id_of,
+                    bbox_diagonal=bbox_diagonal,
+                )
+                candidate_reports.append(report)
+                report_by_path[path] = report
+
+    raw_eligible = [
+        report for report in candidate_reports
+        if report['rejection_reason'] is None
+    ]
+    raw_eligible.sort(key=_curved_endpoint_bridge_sort_key)
+    for rank, report in enumerate(raw_eligible, start=1):
+        report['rank_if_eligible'] = rank
+
+    deduplicated = []
+    seen_endpoint_pairs = set()
+    for report in raw_eligible:
+        pair = tuple(report['duplicate_endpoint_pair_key'])
+        if pair in seen_endpoint_pairs:
+            report['rejection_reason'] = 'duplicate_endpoint_pair_suppressed'
+            report['selected_for_marking'] = False
+            report['marked'] = False
+            continue
+        seen_endpoint_pairs.add(pair)
+        deduplicated.append(report)
+
+    over_cap = len(deduplicated) > int(max_repair_paths)
+    selected_reports = list(deduplicated[:int(max_repair_paths)])
+    selected_ids = {id(report) for report in selected_reports}
+    if over_cap:
+        for report in deduplicated:
+            if id(report) not in selected_ids:
+                report['rejection_reason'] = 'repair_over_cap'
+
+    marked_edge_keys = set()
+    for report in selected_reports:
+        report['selected_for_marking'] = True
+        marked_for_path = []
+        for edge_key in [tuple(edge_key) for edge_key in report['path_edge_keys']]:
+            edge = edge_by_key.get(edge_key, (None, None))[1]
+            if edge is None:
+                continue
+            edge.use_seam = True
+            marked_edge_keys.add(edge_key)
+            marked_for_path.append([int(edge_key[0]), int(edge_key[1])])
+        report['marked'] = True
+        report['accepted'] = True
+        report['marked_edge_count'] = len(marked_for_path)
+        report['marked_seam_edges'] = marked_for_path
+        report['rejection_reason'] = None
+        report['accepted_by_normal_rule'] = True
+
+    rejected_reports = [
+        report for report in candidate_reports
+        if not report.get('marked', False)
+    ]
+    return {
+        'enabled': True,
+        'candidates_total': len(candidate_reports),
+        'eligible_total': len(deduplicated),
+        'paths_marked': sum(1 for report in selected_reports if report.get('marked', False)),
+        'edges_marked': len(marked_edge_keys),
+        'over_cap': bool(over_cap),
+        'safety_cap': int(max_repair_paths),
+        'candidate_reports': tuple(candidate_reports),
+        'selected_reports': tuple(selected_reports),
+        'rejected_reports': tuple(rejected_reports),
+    }
+
+
+def _curved_two_edge_endpoint_bridge_report(
+    *,
+    mesh,
+    path,
+    edge_by_key,
+    seam_degree,
+    seam_adjacency,
+    component_id_of,
+    bbox_diagonal,
+):
+    u, middle, v = path
+    edge_keys = _two_edge_path_edge_keys(path)
+    edge_records = [edge_by_key.get(edge_key) for edge_key in edge_keys]
+    edge_indices = [None if record is None else int(record[0]) for record in edge_records]
+    edge_flags = [None if record is None else bool(record[1].use_seam) for record in edge_records]
+    all_edges_exist = all(record is not None for record in edge_records)
+    degree_pattern = [int(seam_degree.get(vertex, 0)) for vertex in path]
+    endpoint_seam_flags = [degree_pattern[0] > 0, degree_pattern[-1] > 0]
+    intermediate_seam_flag = degree_pattern[1] > 0
+    component_ids = [component_id_of.get(vertex) for vertex in path]
+    component_relation = _phase2h_component_relation((u, v), component_id_of, seam_degree)
+    would_create_loop = component_relation == 'same_component'
+    seam_distance = None
+    if would_create_loop:
+        seam_distance = _shortest_seam_path_length(seam_adjacency, u, v)
+    loop_risk = _phase2h_loop_risk(component_relation, seam_distance)
+    topology_risk = (
+        'accepted_pattern'
+        if degree_pattern == [1, 0, 1] and component_relation == 'different_components'
+        else _phase2h_topology_risk('two_edge_same_component_local_closure' if would_create_loop else 'unsupported_or_unknown')
+    )
+    geometry = None
+    total_path_length = None
+    endpoint_distance = None
+    normalized_total = None
+    normalized_endpoint = None
+    path_straightness = None
+    alignments = None
+    min_alignment = None
+    segment_length_ratio = None
+    turn_angle = None
+
+    if all_edges_exist:
+        geometry = _two_edge_endpoint_bridge_geometry(mesh, path, seam_adjacency)
+    if geometry is not None:
+        total_path_length = geometry['total_path_length']
+        endpoint_distance = geometry['endpoint_distance']
+        normalized_total = _safe_ratio(total_path_length, bbox_diagonal)
+        normalized_endpoint = _safe_ratio(endpoint_distance, bbox_diagonal)
+        path_straightness = geometry['path_straightness']
+        alignments = (geometry['alignment_u'], geometry['alignment_v'])
+        min_alignment = min(alignments)
+        segment_length_ratio = _safe_ratio(endpoint_distance, total_path_length)
+        turn_angle = _turn_angle_from_straightness(path_straightness)
+
+    rejection_reason = _curved_endpoint_bridge_rejection_reason(
+        all_edges_exist=all_edges_exist,
+        edge_flags=edge_flags,
+        degree_pattern=degree_pattern,
+        component_relation=component_relation,
+        loop_risk=loop_risk,
+        topology_risk=topology_risk,
+        geometry=geometry,
+        normalized_total=normalized_total,
+        min_alignment=min_alignment,
+        path_straightness=path_straightness,
+        segment_length_ratio=segment_length_ratio,
+    )
+    return {
+        'path_vertex_ids': [int(u), int(middle), int(v)],
+        'path_edge_keys': [[int(a), int(b)] for a, b in edge_keys],
+        'path_edge_indices_blender': edge_indices,
+        'blender_edge_indices': edge_indices,
+        'degree_pattern': degree_pattern,
+        'endpoint_seam_vertex_flags': endpoint_seam_flags,
+        'intermediate_seam_vertex_flag': bool(intermediate_seam_flag),
+        'component_ids': component_ids,
+        'component_ids_before': [component_ids[0], component_ids[-1]],
+        'component_relation': component_relation,
+        'would_create_loop': bool(would_create_loop),
+        'loop_risk': loop_risk,
+        'topology_risk': topology_risk,
+        'total_path_length': total_path_length,
+        'endpoint_distance': endpoint_distance,
+        'normalized_total_path_length': normalized_total,
+        'normalized_endpoint_distance': normalized_endpoint,
+        'path_straightness': path_straightness,
+        'endpoint_tangent_alignments': alignments,
+        'endpoint_tangent_alignment_u': None if alignments is None else alignments[0],
+        'endpoint_tangent_alignment_v': None if alignments is None else alignments[1],
+        'min_endpoint_tangent_alignment': min_alignment,
+        'segment_length_ratio': segment_length_ratio,
+        'turn_angle_degrees': turn_angle,
+        'bend_angle_degrees': turn_angle,
+        'duplicate_endpoint_pair_key': sorted([int(u), int(v)]),
+        'endpoint_pair_key': sorted([int(u), int(v)]),
+        'selected_for_marking': False,
+        'marked': False,
+        'accepted': False,
+        'accepted_by_normal_rule': False,
+        'marked_edge_count': 0,
+        'marked_seam_edges': [],
+        'rejection_reason': rejection_reason,
+        'rank_if_eligible': None,
+        'diagnostic_residual_labels_if_any': [],
+        'diagnostic_labels_used_for_selection': False,
+        'probabilities_used_for_selection': False,
+    }
+
+
+def _curved_endpoint_bridge_rejection_reason(
+    *,
+    all_edges_exist,
+    edge_flags,
+    degree_pattern,
+    component_relation,
+    loop_risk,
+    topology_risk,
+    geometry,
+    normalized_total,
+    min_alignment,
+    path_straightness,
+    segment_length_ratio,
+):
+    if not all_edges_exist:
+        return 'edge_not_found'
+    if any(flag is True for flag in edge_flags):
+        return 'edge_already_seam'
+    if degree_pattern != [1, 0, 1]:
+        if degree_pattern[1] != 0:
+            return 'intermediate_not_degree_0'
+        return 'endpoint_not_degree_1'
+    if component_relation != 'different_components':
+        return 'same_component_not_endpoint_bridge'
+    if loop_risk != 'none':
+        return 'would_create_loop'
+    if topology_risk != 'accepted_pattern':
+        return 'topology_not_accepted_pattern'
+    if geometry is None:
+        return 'tangent_unavailable'
+    if normalized_total is None or normalized_total > 0.015:
+        return 'path_too_long'
+    if min_alignment is None or min_alignment < 0.75:
+        return 'tangent_alignment_below_threshold'
+    if path_straightness is None or path_straightness >= 0.50:
+        return 'not_curved_low_straightness'
+    if segment_length_ratio is not None and segment_length_ratio < 0.70:
+        return 'segment_length_ratio_below_threshold'
+    return None
+
+
+def _curved_endpoint_bridge_sort_key(report):
+    return (
+        -float(report['min_endpoint_tangent_alignment']),
+        float(report['normalized_total_path_length']),
+        -float(report['segment_length_ratio']),
+        -float(report['path_straightness']),
+        list(report['path_vertex_ids']),
+    )
+
+
+def _turn_angle_from_straightness(straightness):
+    if straightness is None:
+        return None
+    clamped = max(-1.0, min(1.0, float(straightness)))
+    return math.degrees(math.acos(clamped))
 
 
 def _annotate_endpoint_bridge_v1_reports(allowed_reports):
@@ -4984,6 +5309,43 @@ def write_bridge_apply_debug(json_path, result):
         'blender_two_edge_endpoint_bridge_selected_rank_9_candidate': (
             result.blender_two_edge_endpoint_bridge_selected_rank_9_candidate
         ),
+        'blender_curved_two_edge_endpoint_bridge_enabled': (
+            result.blender_curved_two_edge_endpoint_bridge_enabled
+        ),
+        'blender_curved_two_edge_endpoint_bridge_candidates_total': (
+            result.blender_curved_two_edge_endpoint_bridge_candidates_total
+        ),
+        'blender_curved_two_edge_endpoint_bridge_eligible_total': (
+            result.blender_curved_two_edge_endpoint_bridge_eligible_total
+        ),
+        'blender_curved_two_edge_endpoint_bridge_paths_marked': (
+            result.blender_curved_two_edge_endpoint_bridge_paths_marked
+        ),
+        'blender_curved_two_edge_endpoint_bridge_edges_marked': (
+            result.blender_curved_two_edge_endpoint_bridge_edges_marked
+        ),
+        'blender_curved_two_edge_endpoint_bridge_over_cap': (
+            result.blender_curved_two_edge_endpoint_bridge_over_cap
+        ),
+        'blender_curved_two_edge_endpoint_bridge_safety_cap': (
+            result.blender_curved_two_edge_endpoint_bridge_safety_cap
+        ),
+        'blender_curved_two_edge_endpoint_bridge_candidate_reports': list(
+            result.blender_curved_two_edge_endpoint_bridge_candidate_reports
+        ),
+        'selected_curved_two_edge_endpoint_bridge_reports': list(
+            result.selected_curved_two_edge_endpoint_bridge_reports
+        ),
+        'rejected_curved_two_edge_endpoint_bridge_reports': list(
+            result.rejected_curved_two_edge_endpoint_bridge_reports
+        ),
+        'probabilities_used_for_curved_repair': result.probabilities_used_for_curved_repair,
+        'phase2j_curved_repair_uses_hardcoded_paths': (
+            result.phase2j_curved_repair_uses_hardcoded_paths
+        ),
+        'phase2j_curved_repair_uses_probabilities': (
+            result.phase2j_curved_repair_uses_probabilities
+        ),
         'target_path_2045_2541_4884_found': result.target_path_2045_2541_4884_found,
         'target_path_2045_2541_4884_allowed': result.target_path_2045_2541_4884_allowed,
         'target_path_2045_2541_4884_marked': result.target_path_2045_2541_4884_marked,
@@ -6028,6 +6390,12 @@ def format_apply_summary(result):
         f'dedup_allowed={result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total}, '
         f'over_cap={str(result.blender_two_edge_endpoint_bridge_over_cap).lower()}, '
         f'policy={result.blender_two_edge_endpoint_bridge_selection_policy}. '
+        f'Curved two-edge endpoint bridge: '
+        f'{result.blender_curved_two_edge_endpoint_bridge_paths_marked} paths marked, '
+        f'{result.blender_curved_two_edge_endpoint_bridge_edges_marked} edges marked, '
+        f'eligible={result.blender_curved_two_edge_endpoint_bridge_eligible_total}, '
+        f'over_cap={str(result.blender_curved_two_edge_endpoint_bridge_over_cap).lower()}, '
+        f'cap={result.blender_curved_two_edge_endpoint_bridge_safety_cap}. '
         f'Human Phase 2B.1 paths selected: '
         f'{result.blender_two_edge_endpoint_bridge_human_paths_selected_by_rank}/'
         f'{len(result.blender_two_edge_endpoint_bridge_human_path_reports)}. '

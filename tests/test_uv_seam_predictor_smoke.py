@@ -271,6 +271,41 @@ def append_endpoint_bridge_candidate(edges, predicted_keys, coords, base, total_
     return path_edge_indices, (u, middle, v)
 
 
+def append_curved_endpoint_bridge_candidate(edges, predicted_keys, coords, base, y=0.0):
+    left_neighbor = base - 1
+    u = base
+    middle = base + 1
+    v = base + 2
+    right_neighbor = base + 3
+    coords[left_neighbor] = (-1.0, y, 0.0)
+    coords[u] = (0.0, y, 0.0)
+    coords[middle] = (1.0, y, 0.0)
+    coords[v] = (1.2, y + 0.98, 0.0)
+    coords[right_neighbor] = (1.4, y + 1.96, 0.0)
+    edges.extend([(left_neighbor, u), (v, right_neighbor)])
+    predicted_keys.extend([(left_neighbor, u), (v, right_neighbor)])
+    path_edge_indices = (len(edges), len(edges) + 1)
+    edges.extend([(u, middle), (middle, v)])
+    return path_edge_indices, (u, middle, v)
+
+
+def build_curved_endpoint_bridge_mesh(count=1, *, vertex_count=10000):
+    edges = []
+    predicted_keys = []
+    coords = {9999: (1000.0, 1000.0, 1000.0)}
+    paths = []
+    for index in range(count):
+        _, path = append_curved_endpoint_bridge_candidate(
+            edges,
+            predicted_keys,
+            coords,
+            100 + index * 10,
+            y=0.0,
+        )
+        paths.append(path)
+    return FakeMesh(edges=edges, vertex_count=vertex_count, coords=coords), predicted_keys, paths
+
+
 def rank_review_allowed_report(rank, path, *, human_labels=(), duplicate=False, weak=False, selected=False):
     u, middle, v = path
     tier = 3 if weak else 1
@@ -1339,10 +1374,10 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
         self.assertFalse(result.target_path_2045_2541_4884_marked)
         self.assertFalse(result.target_path_2540_2541_2544_marked)
-        self.assertFalse(mesh.edges[4].use_seam)
-        self.assertFalse(mesh.edges[5].use_seam)
-        self.assertFalse(mesh.edges[6].use_seam)
-        self.assertFalse(mesh.edges[7].use_seam)
+        self.assertFalse(any(
+            report['diagnostic_labels_used_for_selection']
+            for report in result.blender_curved_two_edge_endpoint_bridge_candidate_reports
+        ))
         for first_index, second_index in non_target_indices[:9]:
             self.assertTrue(mesh.edges[first_index].use_seam)
             self.assertTrue(mesh.edges[second_index].use_seam)
@@ -3353,6 +3388,317 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             'max_repair_paths'
         ].default, 9)
 
+    def test_phase2j_curved_endpoint_bridge_marks_generic_candidate(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_mark_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, paths = build_curved_endpoint_bridge_mesh()
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(mesh)
+        selected = repair['selected_reports']
+
+        self.assertEqual(repair['eligible_total'], 1)
+        self.assertEqual(repair['paths_marked'], 1)
+        self.assertEqual(repair['edges_marked'], 2)
+        self.assertEqual(selected[0]['path_vertex_ids'], list(paths[0]))
+        self.assertTrue(selected[0]['marked'])
+        self.assertTrue(selected[0]['selected_for_marking'])
+        self.assertIsNone(selected[0]['rejection_reason'])
+        for edge_index in selected[0]['blender_edge_indices']:
+            self.assertTrue(mesh.edges[edge_index].use_seam)
+        self.assertFalse(selected[0]['diagnostic_labels_used_for_selection'])
+        self.assertFalse(selected[0]['probabilities_used_for_selection'])
+
+    def test_phase2j_curved_endpoint_bridge_rejects_unsafe_classes(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_reject_classes_smoke', ADDON_DIR / 'seam_mapping.py')
+        same_component_mesh, predicted_keys, _ = build_endpoint_bridge_mesh(same_component=True)
+        seam_mapping.apply_seam_keys(
+            same_component_mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        same_component = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(same_component_mesh)
+
+        length3_mesh = FakeMesh(
+            edges=[(0, 1), (4, 5), (1, 2), (2, 3), (3, 4)],
+            vertex_count=10000,
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.01, 0.0, 0.0),
+                2: (0.02, 0.0, 0.0),
+                3: (0.03, 0.0, 0.0),
+                4: (0.04, 0.0, 0.0),
+                5: (0.05, 0.0, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            length3_mesh,
+            [(0, 1), (4, 5)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        length3 = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(length3_mesh)
+
+        missing_mesh = FakeMesh(
+            edges=[(0, 1), (3, 4)],
+            vertex_count=5,
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.01, 0.0, 0.0),
+                3: (0.03, 0.0, 0.0),
+                4: (0.04, 0.0, 0.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            missing_mesh,
+            [(0, 1), (3, 4)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        missing = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(missing_mesh)
+
+        self.assertEqual(same_component['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'same_component_not_endpoint_bridge'
+            for report in same_component['candidate_reports']
+        ))
+        self.assertEqual(length3['paths_marked'], 0)
+        self.assertFalse(any(len(report['path_vertex_ids']) == 4 for report in length3['candidate_reports']))
+        self.assertEqual(missing['paths_marked'], 0)
+
+    def test_phase2j_curved_endpoint_bridge_rejects_metric_failures_and_already_seam_edges(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_metric_reject_smoke', ADDON_DIR / 'seam_mapping.py')
+        weak_tangent_mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                99: (-1.0, 0.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (1.2, 0.98, 0.0),
+                103: (2.2, 0.98, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            weak_tangent_mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        weak_tangent = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(weak_tangent_mesh)
+
+        long_mesh, predicted_keys, _ = build_curved_endpoint_bridge_mesh()
+        long_mesh.vertices[9999].co = (1.3, 1.0, 0.0)
+        seam_mapping.apply_seam_keys(
+            long_mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        too_long = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(long_mesh)
+
+        low_ratio_mesh = FakeMesh(
+            edges=[(99, 100), (102, 103), (100, 101), (101, 102)],
+            vertex_count=10000,
+            coords={
+                99: (-1.0, 0.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (0.2, 0.6, 0.0),
+                103: (-0.6, 1.2, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            low_ratio_mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        low_ratio = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(low_ratio_mesh)
+
+        already_mesh, predicted_keys, _ = build_curved_endpoint_bridge_mesh()
+        predicted_keys = list(predicted_keys) + [(100, 101)]
+        seam_mapping.apply_seam_keys(
+            already_mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+        already = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(already_mesh)
+
+        self.assertEqual(weak_tangent['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'tangent_alignment_below_threshold'
+            for report in weak_tangent['candidate_reports']
+        ))
+        self.assertEqual(too_long['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'path_too_long'
+            for report in too_long['candidate_reports']
+        ))
+        self.assertEqual(low_ratio['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'segment_length_ratio_below_threshold'
+            for report in low_ratio['candidate_reports']
+        ))
+        self.assertEqual(already['paths_marked'], 0)
+        self.assertTrue(any(
+            report['rejection_reason'] == 'edge_already_seam'
+            for report in already['candidate_reports']
+        ))
+
+    def test_phase2j_curved_endpoint_bridge_duplicate_endpoint_pair_keeps_best_ranked(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_duplicate_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (99, 100),
+                (102, 103),
+                (100, 101),
+                (101, 102),
+                (100, 104),
+                (104, 102),
+            ],
+            vertex_count=10000,
+            coords={
+                99: (-1.0, 0.0, 0.0),
+                100: (0.0, 0.0, 0.0),
+                101: (1.0, 0.0, 0.0),
+                102: (1.2, 0.98, 0.0),
+                103: (1.4, 1.96, 0.0),
+                104: (0.9, 0.1, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(99, 100), (102, 103)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(mesh)
+
+        self.assertEqual(repair['eligible_total'], 1)
+        self.assertEqual(repair['paths_marked'], 1)
+        self.assertEqual(repair['selected_reports'][0]['path_vertex_ids'], [100, 101, 102])
+        self.assertTrue(any(
+            report['path_vertex_ids'] == [100, 104, 102]
+            and report['rejection_reason'] == 'duplicate_endpoint_pair_suppressed'
+            for report in repair['candidate_reports']
+        ))
+
+    def test_phase2j_curved_endpoint_bridge_shared_intermediate_vertex_does_not_suppress(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_shared_middle_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (90, 100),
+                (102, 112),
+                (100, 101),
+                (101, 102),
+                (210, 200),
+                (202, 212),
+                (200, 101),
+                (101, 202),
+            ],
+            vertex_count=10000,
+            coords={
+                90: (-2.0, 0.0, 0.0),
+                100: (-1.0, 0.0, 0.0),
+                101: (0.0, 0.0, 0.0),
+                102: (-0.2, 0.98, 0.0),
+                112: (-0.4, 1.96, 0.0),
+                210: (2.0, 0.0, 0.0),
+                200: (1.0, 0.0, 0.0),
+                202: (0.2, -0.98, 0.0),
+                212: (0.4, -1.96, 0.0),
+                9999: (1000.0, 1000.0, 1000.0),
+            },
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(90, 100), (102, 112), (210, 200), (202, 212)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(mesh)
+        selected_paths = {tuple(report['path_vertex_ids']) for report in repair['selected_reports']}
+
+        self.assertEqual(repair['paths_marked'], 2)
+        self.assertEqual({path[1] for path in selected_paths}, {101})
+        self.assertEqual(len({(path[0], path[2]) for path in selected_paths}), 2)
+        self.assertFalse(any(
+            report['rejection_reason'] == 'duplicate_endpoint_pair_suppressed'
+            for report in repair['candidate_reports']
+        ))
+
+    def test_phase2j_curved_endpoint_bridge_cap_and_ranking_are_deterministic(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_cap_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, paths = build_curved_endpoint_bridge_mesh(count=8)
+        seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        repair = seam_mapping.apply_curved_two_edge_endpoint_bridge_repair(mesh)
+        selected_paths = [tuple(report['path_vertex_ids']) for report in repair['selected_reports']]
+
+        self.assertTrue(repair['over_cap'])
+        self.assertEqual(repair['eligible_total'], 8)
+        self.assertEqual(repair['paths_marked'], 6)
+        self.assertEqual(repair['edges_marked'], 12)
+        self.assertEqual(selected_paths, [tuple(path) for path in paths[:6]])
+        self.assertTrue(any(
+            report['rejection_reason'] == 'repair_over_cap'
+            for report in repair['candidate_reports']
+        ))
+
+    def test_phase2j_curved_endpoint_bridge_diagnostic_labels_and_probabilities_are_not_used(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_integrity_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh, predicted_keys, _ = build_curved_endpoint_bridge_mesh()
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        source = inspect.getsource(seam_mapping.apply_curved_two_edge_endpoint_bridge_repair)
+        source += inspect.getsource(seam_mapping._curved_two_edge_endpoint_bridge_report)
+        self.assertNotIn('DIAGNOSTIC_HUMAN_GAP_REGRESSION_PATHS', source)
+        self.assertNotIn('DIAGNOSTIC_RESIDUAL_GAP_PHASE2E_PATHS', source)
+        self.assertNotIn('DIAGNOSTIC_OLD_ENDPOINT_BRIDGE_VALIDATION_TARGETS', source)
+        self.assertFalse(result.probabilities_used_for_curved_repair)
+        self.assertFalse(result.phase2j_curved_repair_uses_hardcoded_paths)
+        self.assertFalse(result.phase2j_curved_repair_uses_probabilities)
+        self.assertTrue(all(
+            report['diagnostic_labels_used_for_selection'] is False
+            for report in result.blender_curved_two_edge_endpoint_bridge_candidate_reports
+        ))
+
+    def test_phase2j_curved_endpoint_bridge_keeps_existing_phase2_constraints_intact(self):
+        seam_mapping = load_module('uvsp_phase2j_curved_constraints_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        self.assertEqual(inspect.signature(seam_mapping.apply_curved_two_edge_endpoint_bridge_repair).parameters[
+            'max_repair_paths'
+        ].default, 6)
+        self.assertNotIn('human_case', inspect.signature(seam_mapping.apply_missing_edge_continuity_repair).parameters)
+        self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_local_continuity_repair).parameters)
+        self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters)
+        self.assertEqual(inspect.signature(seam_mapping.apply_two_edge_endpoint_bridge_repair).parameters[
+            'max_repair_paths'
+        ].default, 9)
+
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
         result = seam_mapping.SeamApplyResult(
@@ -3401,6 +3747,11 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn(
             'Two-edge endpoint bridge: 2 paths marked, 4 edges marked, raw_allowed=2, '
             'dedup_allowed=2, over_cap=false, policy=top_k_ranked_continuity_tier_v2.',
+            summary,
+        )
+        self.assertIn(
+            'Curved two-edge endpoint bridge: 0 paths marked, 0 edges marked, eligible=0, '
+            'over_cap=false, cap=6.',
             summary,
         )
         self.assertIn('Human Phase 2B.1 paths selected: 1/2.', summary)
