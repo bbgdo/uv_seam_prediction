@@ -51,7 +51,7 @@ class SeamApplyResult:
     blender_two_edge_endpoint_bridge_paths_marked: int = 0
     blender_two_edge_endpoint_bridge_edges_marked: int = 0
     blender_two_edge_endpoint_bridge_over_cap: bool = False
-    blender_two_edge_endpoint_bridge_safety_cap: int = 8
+    blender_two_edge_endpoint_bridge_safety_cap: int = 9
     blender_two_edge_endpoint_bridge_selected_rank_threshold: int | None = None
     blender_two_edge_endpoint_bridge_duplicate_endpoint_pairs_suppressed: int = 0
     blender_two_edge_endpoint_bridge_candidate_reports: tuple = ()
@@ -59,6 +59,9 @@ class SeamApplyResult:
     blender_two_edge_endpoint_bridge_human_paths_selected_by_rank: int = 0
     blender_two_edge_endpoint_bridge_human_paths_skipped_below_threshold: int = 0
     blender_two_edge_endpoint_bridge_human_path_reports: tuple = ()
+    blender_two_edge_endpoint_bridge_added_candidate_due_to_cap_increase: bool = False
+    blender_two_edge_endpoint_bridge_previous_rank_9_selected: bool = False
+    blender_two_edge_endpoint_bridge_selected_rank_9_candidate: dict | None = None
     target_path_2045_2541_4884_found: bool = False
     target_path_2045_2541_4884_allowed: bool = False
     target_path_2045_2541_4884_marked: bool = False
@@ -397,6 +400,15 @@ def apply_seam_keys(
         blender_two_edge_endpoint_bridge_human_path_reports=tuple(endpoint_bridge_repair[
             'human_path_reports'
         ]),
+        blender_two_edge_endpoint_bridge_added_candidate_due_to_cap_increase=bool(
+            endpoint_bridge_repair['added_candidate_due_to_cap_increase']
+        ),
+        blender_two_edge_endpoint_bridge_previous_rank_9_selected=bool(
+            endpoint_bridge_repair['previous_rank_9_selected']
+        ),
+        blender_two_edge_endpoint_bridge_selected_rank_9_candidate=endpoint_bridge_repair[
+            'selected_rank_9_candidate'
+        ],
         target_path_2045_2541_4884_found=bool(target_status[
             'target_path_2045_2541_4884_found'
         ]),
@@ -902,7 +914,7 @@ def apply_two_edge_endpoint_bridge_repair(
     mesh,
     enabled=True,
     target_paths=((2045, 2541, 4884), (2540, 2541, 2544)),
-    max_repair_paths=8,
+    max_repair_paths=9,
 ):
     edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
     target_keys = {_canonical_two_edge_path(path) for path in target_paths}
@@ -1055,6 +1067,13 @@ def _two_edge_endpoint_bridge_result(
 ):
     allowed_candidate_reports = tuple(_allowed_endpoint_bridge_report(report) for report in allowed_reports)
     human_path_reports = _endpoint_bridge_human_path_reports(allowed_reports)
+    selected_rank_9_candidate = next(
+        (
+            report for report in allowed_candidate_reports
+            if report.get('rank_v2') == 9 and report.get('selected_for_marking')
+        ),
+        None,
+    )
     result = {
         'enabled': bool(enabled),
         'selection_policy': 'top_k_ranked_continuity_tier_v2',
@@ -1079,6 +1098,9 @@ def _two_edge_endpoint_bridge_result(
             1 for report in human_path_reports
             if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
         ),
+        'added_candidate_due_to_cap_increase': bool(selected_rank_9_candidate),
+        'previous_rank_9_selected': bool(selected_rank_9_candidate),
+        'selected_rank_9_candidate': selected_rank_9_candidate,
     }
     report_by_path = {
         tuple(report['path_vertex_ids']): report
@@ -2093,7 +2115,7 @@ def _classify_residual_gap_phase2e_path(
     skipped_reason = None if endpoint_report is None else endpoint_report.get('skipped_reason')
     rank_delta = None
     if rank_v2 is not None:
-        rank_delta = rank_v2 - 8
+        rank_delta = rank_v2 - 9
 
     report = {
         'label': label,
@@ -2609,6 +2631,15 @@ def write_bridge_apply_debug(json_path, result):
         'blender_two_edge_endpoint_bridge_human_paths_skipped_below_threshold': (
             result.blender_two_edge_endpoint_bridge_human_paths_skipped_below_threshold
         ),
+        'blender_two_edge_endpoint_bridge_added_candidate_due_to_cap_increase': (
+            result.blender_two_edge_endpoint_bridge_added_candidate_due_to_cap_increase
+        ),
+        'blender_two_edge_endpoint_bridge_previous_rank_9_selected': (
+            result.blender_two_edge_endpoint_bridge_previous_rank_9_selected
+        ),
+        'blender_two_edge_endpoint_bridge_selected_rank_9_candidate': (
+            result.blender_two_edge_endpoint_bridge_selected_rank_9_candidate
+        ),
         'target_path_2045_2541_4884_found': result.target_path_2045_2541_4884_found,
         'target_path_2045_2541_4884_allowed': result.target_path_2045_2541_4884_allowed,
         'target_path_2045_2541_4884_marked': result.target_path_2045_2541_4884_marked,
@@ -2701,6 +2732,396 @@ def format_residual_gap_phase2e_summary(payload, debug_path):
     )
 
 
+def build_rank_9_to_16_review(result):
+    allowed = [
+        dict(report)
+        for report in result.blender_two_edge_endpoint_bridge_allowed_candidate_reports
+    ]
+    allowed.sort(key=lambda report: report.get('rank_v2') or 10**9)
+    residual_by_path = _residual_phase2e_reports_by_path(result.residual_gap_phase2e_debug)
+    cap_selections = {
+        cap: _rank_review_simulated_selection(allowed, cap)
+        for cap in (8, 9, 10, 12, 16)
+    }
+    current_cap = int(result.blender_two_edge_endpoint_bridge_safety_cap)
+    current_selected = cap_selections.get(current_cap, cap_selections[9])
+    current_keys = {_rank_review_path_key(report) for report in current_selected}
+    review_reports = [
+        _rank_review_candidate_report(report, residual_by_path, cap_selections)
+        for report in allowed
+        if 9 <= int(report.get('rank_v2') or 0) <= 16
+    ]
+    cap_summaries = [
+        _rank_review_cap_summary(cap, cap_selections[cap], current_keys, current_cap)
+        for cap in (8, 9, 10, 12, 16)
+    ]
+    special = _rank_review_special_path_report(review_reports, (5149, 3003, 3005))
+    summary = _rank_review_summary(result, review_reports, cap_summaries)
+    return {
+        'summary': summary,
+        'rank_9_to_16_candidates': review_reports,
+        'hypothetical_cap_summaries': cap_summaries,
+        'special_reports': {
+            'path_5149_3003_3005': special,
+        },
+        'rank_9_to_16_debug_edge_indices_by_rank': {
+            str(report['rank_v2']): report['path_edge_indices_blender']
+            for report in review_reports
+        },
+        'read_only': True,
+    }
+
+
+def write_rank_9_to_16_review(json_path, result):
+    debug_path = json_path.rsplit('.', 1)[0] + '_rank_9_to_16_review.json'
+    payload = build_rank_9_to_16_review(result)
+    with open(debug_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2)
+        file.write('\n')
+    return debug_path
+
+
+def format_rank_9_to_16_review_summary(payload, debug_path):
+    summary = payload.get('summary', {})
+    special = payload.get('special_reports', {}).get('path_5149_3003_3005', {})
+    path_status = 'not found'
+    if special.get('found_in_review'):
+        path_status = (
+            f"rank {special.get('rank_v2')} "
+            f"{'cap9-selectable' if special.get('would_be_selected_if_cap_9') else 'not-cap9-selectable'}"
+        )
+    return (
+        f"Phase 2F rank review: ranks {summary.get('review_rank_start', 9)}-"
+        f"{summary.get('review_rank_end', 16)} analyzed, "
+        f"rank 9 candidate status for [5149,3003,3005]: {path_status}, "
+        f"cap=9 would add "
+        f"{_rank_review_cap_added_count(payload, 9)} candidate(s), "
+        f"recommended_next_action={summary.get('recommended_next_action', 'keep_cap_8')}. "
+        f"Sidecar: {debug_path}"
+    )
+
+
+def _residual_phase2e_reports_by_path(residual_payload):
+    result = {}
+    for report in (residual_payload or {}).get('paths', []):
+        path = report.get('path_vertex_ids')
+        if isinstance(path, list) and len(path) == 3:
+            result[_canonical_two_edge_path(path)] = report
+    return result
+
+
+def _rank_review_simulated_selection(allowed, cap):
+    selected = []
+    reserved_edges = set()
+    for report in allowed:
+        if report.get('duplicate_endpoint_pair_suppressed', False):
+            continue
+        path_edges = {
+            tuple(edge_key)
+            for edge_key in report.get('path_edge_keys', [])
+            if isinstance(edge_key, list) and len(edge_key) == 2
+        }
+        if path_edges.intersection(reserved_edges):
+            continue
+        selected.append(report)
+        reserved_edges.update(path_edges)
+        if len(selected) >= int(cap):
+            break
+    return selected
+
+
+def _rank_review_candidate_report(report, residual_by_path, cap_selections):
+    path = tuple(report['path_vertex_ids'])
+    residual = residual_by_path.get(_canonical_two_edge_path(path), {})
+    weak = _rank_review_is_weak_geometry(report)
+    strong = _rank_review_is_strong_geometry(report)
+    human_labels = list(report.get('human_gap_match_labels', []))
+    residual_label = residual.get('label')
+    is_residual = bool(residual)
+    review_class = _rank_review_candidate_class(report, residual, weak, strong)
+    cap_flags = {
+        cap: _rank_review_path_key(report) in {
+            _rank_review_path_key(selected) for selected in cap_selections[cap]
+        }
+        for cap in (9, 10, 12, 16)
+    }
+    return {
+        'rank': report.get('rank_v2'),
+        'rank_v2': report.get('rank_v2'),
+        'path_vertex_ids': list(report['path_vertex_ids']),
+        'path_edge_keys': [list(edge_key) for edge_key in report.get('path_edge_keys', [])],
+        'path_edge_indices_blender': list(report.get('path_edge_indices_blender', [])),
+        'endpoint_pair_key': list(report.get('endpoint_pair_key', [])),
+        'selected_for_marking': bool(report.get('selected_for_marking', False)),
+        'marked': bool(report.get('marked', False)),
+        'skipped_reason': report.get('skipped_reason'),
+        'duplicate_endpoint_pair_suppressed': bool(report.get('duplicate_endpoint_pair_suppressed', False)),
+        'conflict_reason': report.get('conflict_reason'),
+        'continuity_tier': report.get('continuity_tier'),
+        'q_floor': report.get('q_floor'),
+        'q_sum': report.get('q_sum'),
+        'total_path_length': report.get('total_path_length'),
+        'endpoint_distance': report.get('endpoint_distance'),
+        'path_straightness': report.get('path_straightness'),
+        'endpoint_tangent_alignment_u': report.get('endpoint_tangent_alignment_u'),
+        'endpoint_tangent_alignment_v': report.get('endpoint_tangent_alignment_v'),
+        'min_endpoint_tangent_alignment': report.get('min_endpoint_tangent_alignment'),
+        'degree_pattern': report.get('degree_pattern'),
+        'component_ids_before': list(report.get('component_ids_before', [])),
+        'human_gap_match_labels': human_labels,
+        'old_validation_target_match_label': report.get('old_validation_target_match_label'),
+        'is_residual_human_path': is_residual,
+        'residual_phase2e_class_if_available': residual.get('candidate_class_phase2e'),
+        'residual_recommended_followup_if_available': residual.get('recommended_followup'),
+        'candidate_review_class': review_class,
+        'would_be_selected_if_cap_9': cap_flags[9],
+        'would_be_selected_if_cap_10': cap_flags[10],
+        'would_be_selected_if_cap_12': cap_flags[12],
+        'would_be_selected_if_cap_16': cap_flags[16],
+        'cap_increase_risk': _rank_review_candidate_risk(report, weak, strong),
+        'visual_review_priority': _rank_review_visual_priority(report, residual, weak, strong),
+        'rank_delta_from_cap': None if report.get('rank_v2') is None else int(report['rank_v2']) - 9,
+        'residual_label_if_available': residual_label,
+    }
+
+
+def _rank_review_candidate_class(report, residual, weak, strong):
+    if report.get('duplicate_endpoint_pair_suppressed', False):
+        return 'duplicate_alternative'
+    if weak:
+        return 'weak_geometry_rank_below_cap'
+    if residual and strong:
+        return 'strong_human_rank_below_cap'
+    if not residual and not report.get('human_gap_match_labels'):
+        return 'non_human_rank_below_cap'
+    if report.get('marked', False) and residual:
+        return 'backend_bridge_apply_mismatch_candidate'
+    return 'unknown_review_candidate'
+
+
+def _rank_review_candidate_risk(report, weak, strong):
+    if report.get('duplicate_endpoint_pair_suppressed', False):
+        return 'duplicate_suppressed'
+    if weak:
+        return 'not_recommended'
+    if strong:
+        return 'low'
+    return 'needs_visual_review'
+
+
+def _rank_review_visual_priority(report, residual, weak, strong):
+    if report.get('duplicate_endpoint_pair_suppressed', False):
+        return 'low'
+    if residual and strong:
+        return 'high'
+    if residual and not weak:
+        return 'medium'
+    if weak:
+        return 'low'
+    return 'medium'
+
+
+def _rank_review_is_weak_geometry(report):
+    tier = report.get('continuity_tier')
+    straightness = report.get('path_straightness')
+    q_floor = report.get('q_floor')
+    return bool(
+        (tier is not None and tier >= 3)
+        or (straightness is not None and straightness < 0.5)
+        or (q_floor is not None and q_floor < 0.5)
+    )
+
+
+def _rank_review_is_strong_geometry(report):
+    tier = report.get('continuity_tier')
+    straightness = report.get('path_straightness')
+    q_floor = report.get('q_floor')
+    q_sum = report.get('q_sum')
+    return bool(
+        tier is not None
+        and tier <= 1
+        and q_floor is not None
+        and q_floor >= 0.7
+        and q_sum is not None
+        and q_sum >= 1.4
+        and straightness is not None
+        and straightness >= 0.7
+    )
+
+
+def _rank_review_cap_summary(cap, selected_for_cap, current_keys, current_cap):
+    added = [
+        report for report in selected_for_cap
+        if _rank_review_path_key(report) not in current_keys
+    ]
+    weak_added = [report for report in added if _rank_review_is_weak_geometry(report)]
+    human_added = [
+        report for report in added
+        if report.get('human_gap_match_labels')
+    ]
+    duplicate_added = [
+        report for report in added
+        if report.get('duplicate_endpoint_pair_suppressed', False)
+    ]
+    non_human_added = [
+        report for report in added
+        if not report.get('human_gap_match_labels')
+    ]
+    return {
+        'hypothetical_cap': int(cap),
+        'additional_candidates_selected': len(added),
+        'additional_human_candidates_selected': len(human_added),
+        'additional_duplicate_candidates_selected': len(duplicate_added),
+        'additional_non_human_candidates_selected': len(non_human_added),
+        'min_continuity_tier_added': _min_report_value(added, 'continuity_tier'),
+        'min_q_floor_added': _min_report_value(added, 'q_floor'),
+        'min_q_sum_added': _min_report_value(added, 'q_sum'),
+        'min_path_straightness_added': _min_report_value(added, 'path_straightness'),
+        'candidate_labels_added': [_rank_review_candidate_label(report) for report in added],
+        'path_vertex_ids_added': [list(report['path_vertex_ids']) for report in added],
+        'risk_summary': _rank_review_cap_risk(cap, added, weak_added, human_added, current_cap),
+    }
+
+
+def _rank_review_cap_risk(cap, added, weak_added, human_added, current_cap):
+    if int(cap) == int(current_cap):
+        return 'current'
+    if not added:
+        return 'current'
+    if len(weak_added) >= max(1, len(added) // 2):
+        return 'not_recommended'
+    if int(cap) == 9 and len(added) == 1 and len(human_added) == 1:
+        return 'low'
+    return 'needs_visual_review'
+
+
+def _rank_review_summary(result, review_reports, cap_summaries):
+    human = [report for report in review_reports if report['is_residual_human_path']]
+    duplicates = [report for report in review_reports if report['duplicate_endpoint_pair_suppressed']]
+    weak = [report for report in review_reports if _rank_review_report_is_weak(report)]
+    strong = [report for report in review_reports if _rank_review_report_is_strong(report)]
+    summary = {
+        'selection_policy': result.blender_two_edge_endpoint_bridge_selection_policy,
+        'current_safety_cap': result.blender_two_edge_endpoint_bridge_safety_cap,
+        'selected_rank_threshold': result.blender_two_edge_endpoint_bridge_selected_rank_threshold,
+        'raw_allowed_total': result.blender_two_edge_endpoint_bridge_raw_allowed_total,
+        'deduplicated_allowed_total': result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total,
+        'selected_total': result.blender_two_edge_endpoint_bridge_paths_marked,
+        'review_rank_start': 9,
+        'review_rank_end': 16,
+        'reviewed_candidate_count': len(review_reports),
+        'human_matched_review_candidates': len(human),
+        'duplicate_suppressed_review_candidates': len(duplicates),
+        'non_human_review_candidates': len(review_reports) - len(human),
+        'weak_geometry_review_candidates': len(weak),
+        'strong_geometry_review_candidates': len(strong),
+    }
+    summary['recommended_next_action'] = _rank_review_recommendation(review_reports, cap_summaries)
+    return summary
+
+
+def _rank_review_recommendation(review_reports, cap_summaries):
+    rank_9 = next((report for report in review_reports if report['rank_v2'] == 9), None)
+    cap_9 = next((summary for summary in cap_summaries if summary['hypothetical_cap'] == 9), None)
+    if rank_9 and rank_9.get('selected_for_marking'):
+        if any(report['candidate_review_class'] == 'weak_geometry_rank_below_cap' for report in review_reports):
+            return 'do_not_increase_cap_due_to_weak_candidates'
+        return 'keep_cap_8'
+    if rank_9 and rank_9['candidate_review_class'] == 'strong_human_rank_below_cap':
+        return 'visually_review_rank_9_only'
+    if cap_9 and cap_9['risk_summary'] == 'low':
+        return 'consider_cap_9_after_visual_confirmation'
+    if any(report['candidate_review_class'] == 'weak_geometry_rank_below_cap' for report in review_reports):
+        return 'do_not_increase_cap_due_to_weak_candidates'
+    if any(report['candidate_review_class'] == 'strong_human_rank_below_cap' for report in review_reports[:4]):
+        return 'visually_review_rank_9_to_12'
+    return 'keep_cap_8'
+
+
+def _rank_review_special_path_report(review_reports, path):
+    canonical = _canonical_two_edge_path(path)
+    report = next(
+        (item for item in review_reports if _canonical_two_edge_path(item['path_vertex_ids']) == canonical),
+        None,
+    )
+    if report is None:
+        return {
+            'found_in_review': False,
+            'path_vertex_ids': list(path),
+            'rank_v2': None,
+            'continuity_tier': None,
+            'q_floor': None,
+            'q_sum': None,
+            'rank_delta_from_cap': None,
+            'is_highest_ranked_unselected_human_candidate': False,
+            'would_be_selected_if_cap_9': False,
+            'duplicate_endpoint_pair_suppressed': None,
+            'visual_review_priority': None,
+        }
+    human_unselected = [
+        item for item in review_reports
+        if item['is_residual_human_path'] and not item['selected_for_marking']
+    ]
+    best_human_rank = min((item['rank_v2'] for item in human_unselected), default=None)
+    result = dict(report)
+    result.update({
+        'found_in_review': True,
+        'is_highest_ranked_unselected_human_candidate': bool(
+            best_human_rank is not None and report['rank_v2'] == best_human_rank
+        ),
+    })
+    return result
+
+
+def _rank_review_path_key(report):
+    return tuple(report.get('path_vertex_ids', ()))
+
+
+def _rank_review_candidate_label(report):
+    labels = report.get('human_gap_match_labels') or []
+    if labels:
+        return labels[0]
+    target = report.get('old_validation_target_match_label')
+    if target:
+        return target
+    return 'non_human'
+
+
+def _rank_review_report_is_weak(report):
+    return bool(
+        (report.get('continuity_tier') is not None and report['continuity_tier'] >= 3)
+        or (report.get('path_straightness') is not None and report['path_straightness'] < 0.5)
+        or (report.get('q_floor') is not None and report['q_floor'] < 0.5)
+    )
+
+
+def _rank_review_report_is_strong(report):
+    return bool(
+        report.get('continuity_tier') is not None
+        and report['continuity_tier'] <= 1
+        and report.get('q_floor') is not None
+        and report['q_floor'] >= 0.7
+        and report.get('q_sum') is not None
+        and report['q_sum'] >= 1.4
+        and report.get('path_straightness') is not None
+        and report['path_straightness'] >= 0.7
+    )
+
+
+def _min_report_value(reports, key):
+    values = [report.get(key) for report in reports if report.get(key) is not None]
+    if not values:
+        return None
+    return min(values)
+
+
+def _rank_review_cap_added_count(payload, cap):
+    for summary in payload.get('hypothetical_cap_summaries', []):
+        if summary.get('hypothetical_cap') == cap:
+            return summary.get('additional_candidates_selected', 0)
+    return 0
+
+
 def build_endpoint_bridge_ranking_debug(result):
     allowed = [
         dict(report)
@@ -2751,6 +3172,11 @@ def build_endpoint_bridge_ranking_debug(result):
             1 for report in old_target_reports.values()
             if report['skipped_reason'] == 'over_cap_ranked_below_threshold'
         ),
+        'added_candidate_due_to_cap_increase': (
+            result.blender_two_edge_endpoint_bridge_added_candidate_due_to_cap_increase
+        ),
+        'previous_rank_9_selected': result.blender_two_edge_endpoint_bridge_previous_rank_9_selected,
+        'selected_rank_9_candidate': result.blender_two_edge_endpoint_bridge_selected_rank_9_candidate,
     }
     return {
         'phase_2b1_ranking_summary': summary,
