@@ -73,6 +73,18 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         description='If enabled, mesh boundary vertices are treated as structural '
                     'anchors throughout all three stages.',
     )
+    postprocess_fill_small_gaps: bpy.props.BoolProperty(
+        name='Fill Small Gaps',
+        default=True,
+        description='Fill small seam gaps on the editable Blender mesh after prediction.',
+    )
+    postprocess_fill_gap_max_hops: bpy.props.IntProperty(
+        name='Max Gap Hops',
+        default=2,
+        min=1,
+        max=3,
+        description='Maximum editable mesh edge hops used to fill small seam gaps.',
+    )
     clear_existing_seams: bpy.props.BoolProperty(
         name='Clear Existing Seams',
         default=True,

@@ -115,6 +115,7 @@ class SeamApplyResult:
     phase2h_r3_visual_review: dict | None = None
     phase2j_r_small_gap_rule_simulation: dict | None = None
     phase2k_r_tangent_audit_rescue: dict | None = None
+    editable_gap_fill_result: dict | None = None
 
 
 def load_predicted_edge_keys(json_path):
@@ -210,6 +211,281 @@ def load_accepted_bridge_debug_entries(json_path):
     return entries
 
 
+def apply_editable_shortest_path_gap_fill(
+    mesh,
+    *,
+    enabled=True,
+    max_gap_hops=2,
+    allow_same_component=False,
+    min_same_component_loop_size=8,
+):
+    if isinstance(max_gap_hops, bool) or int(max_gap_hops) < 1:
+        raise ValueError('max_gap_hops must be an integer greater than or equal to 1')
+    if isinstance(min_same_component_loop_size, bool) or int(min_same_component_loop_size) < 1:
+        raise ValueError('min_same_component_loop_size must be an integer greater than or equal to 1')
+
+    max_hops = int(max_gap_hops)
+    min_loop = int(min_same_component_loop_size)
+    if not enabled:
+        return _editable_gap_fill_empty_result(False, max_hops)
+
+    edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
+    seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    endpoints = sorted(vertex for vertex, degree in seam_degree.items() if int(degree) == 1)
+    seam_vertices = {int(vertex) for vertex, degree in seam_degree.items() if int(degree) > 0}
+    component_id_of = _seam_component_ids(seam_adjacency)
+
+    counters = {
+        'rejected_same_component': 0,
+        'rejected_existing_seam_internal': 0,
+        'rejected_internal_seam_vertex': 0,
+        'rejected_no_path': 0,
+    }
+    candidates = []
+    for left_index, left in enumerate(endpoints):
+        for right in endpoints[left_index + 1:]:
+            same_component = component_id_of.get(left) == component_id_of.get(right)
+            if same_component and not allow_same_component:
+                counters['rejected_same_component'] += 1
+                continue
+
+            paths = _bounded_editable_paths(adjacency, left, right, max_hops)
+            if not paths:
+                counters['rejected_no_path'] += 1
+                continue
+
+            valid_paths = []
+            for path in paths:
+                path_edges = _path_edge_keys(path)
+                if any(bool(edge_by_key[edge_key][1].use_seam) for edge_key in path_edges):
+                    counters['rejected_existing_seam_internal'] += 1
+                    continue
+                if any(int(vertex) in seam_vertices for vertex in path[1:-1]):
+                    counters['rejected_internal_seam_vertex'] += 1
+                    continue
+                if same_component:
+                    seam_distance = _shortest_seam_path_length(seam_adjacency, left, right)
+                    if seam_distance is None or seam_distance + len(path_edges) < min_loop:
+                        counters['rejected_same_component'] += 1
+                        continue
+                valid_paths.append(path)
+
+            if not valid_paths:
+                continue
+            best_path = min(
+                valid_paths,
+                key=lambda path: (
+                    len(path) - 1,
+                    _editable_path_length(mesh, path),
+                    min(left, right),
+                    max(left, right),
+                    tuple(path),
+                ),
+            )
+            candidates.append(_editable_gap_candidate(mesh, best_path))
+
+    candidates.sort(
+        key=lambda item: (
+            item['hop_count'],
+            item['total_length'],
+            min(item['vertices'][0], item['vertices'][-1]),
+            max(item['vertices'][0], item['vertices'][-1]),
+            tuple(item['vertices']),
+        )
+    )
+
+    consumed_endpoints = set()
+    reserved_edges = set()
+    accepted_paths = []
+    accepted_edge_keys = set()
+    rejected_conflict_consumed_endpoint = 0
+    for candidate in candidates:
+        endpoints_key = (candidate['vertices'][0], candidate['vertices'][-1])
+        edge_keys = {tuple(edge_key) for edge_key in candidate['edges']}
+        if endpoints_key[0] in consumed_endpoints or endpoints_key[1] in consumed_endpoints:
+            rejected_conflict_consumed_endpoint += 1
+            continue
+        if edge_keys & reserved_edges:
+            rejected_conflict_consumed_endpoint += 1
+            continue
+        for edge_key in edge_keys:
+            edge_by_key[edge_key][1].use_seam = True
+            accepted_edge_keys.add(edge_key)
+        consumed_endpoints.update(endpoints_key)
+        reserved_edges.update(edge_keys)
+        accepted_paths.append(candidate)
+
+    return {
+        'enabled': True,
+        'max_gap_hops': max_hops,
+        'allow_same_component': bool(allow_same_component),
+        'min_same_component_loop_size': min_loop,
+        'candidates_total': len(candidates),
+        'accepted_paths_count': len(accepted_paths),
+        'accepted_edges_count': len(accepted_edge_keys),
+        'rejected_same_component': counters['rejected_same_component'],
+        'rejected_existing_seam_internal': counters['rejected_existing_seam_internal'],
+        'rejected_internal_seam_vertex': counters['rejected_internal_seam_vertex'],
+        'rejected_conflict_consumed_endpoint': rejected_conflict_consumed_endpoint,
+        'rejected_no_path': counters['rejected_no_path'],
+        'accepted_paths': tuple(accepted_paths),
+    }
+
+
+def _editable_gap_fill_empty_result(enabled, max_gap_hops):
+    return {
+        'enabled': bool(enabled),
+        'max_gap_hops': int(max_gap_hops),
+        'allow_same_component': False,
+        'min_same_component_loop_size': 8,
+        'candidates_total': 0,
+        'accepted_paths_count': 0,
+        'accepted_edges_count': 0,
+        'rejected_same_component': 0,
+        'rejected_existing_seam_internal': 0,
+        'rejected_internal_seam_vertex': 0,
+        'rejected_conflict_consumed_endpoint': 0,
+        'rejected_no_path': 0,
+        'accepted_paths': tuple(),
+    }
+
+
+def _bounded_editable_paths(adjacency, source, target, max_hops):
+    paths = []
+    stack = [(int(source), (int(source),))]
+    while stack:
+        current, path = stack.pop()
+        hops = len(path) - 1
+        if hops >= max_hops:
+            continue
+        for neighbor in sorted(adjacency.get(current, ())):
+            neighbor = int(neighbor)
+            if neighbor in path:
+                continue
+            next_path = path + (neighbor,)
+            if neighbor == int(target):
+                paths.append(next_path)
+            else:
+                stack.append((neighbor, next_path))
+    return paths
+
+
+def _editable_gap_candidate(mesh, path):
+    edge_keys = _path_edge_keys(path)
+    return {
+        'vertices': [int(vertex) for vertex in path],
+        'edges': [[int(edge_key[0]), int(edge_key[1])] for edge_key in edge_keys],
+        'hop_count': len(edge_keys),
+        'total_length': _editable_path_length(mesh, path),
+    }
+
+
+def _editable_path_length(mesh, path):
+    total = 0.0
+    for left, right in zip(path, path[1:]):
+        left_position = _vertex_position(mesh, int(left))
+        right_position = _vertex_position(mesh, int(right))
+        if left_position is None or right_position is None:
+            total += 1.0
+        else:
+            total += _distance(left_position, right_position)
+    return float(total)
+
+
+def _disabled_one_edge_repair_result():
+    return {
+        'enabled': False,
+        'candidates_total': 0,
+        'allowed_candidates_total': 0,
+        'safety_cap': 32,
+        'repair_over_cap': False,
+        'edges_marked': 0,
+        'edges_rejected': 0,
+        'candidate_reports': tuple(),
+        'human_case_2557_2558_found': False,
+        'human_case_2557_2558_edge_exists': False,
+        'human_case_2557_2558_accepted': False,
+        'human_case_2557_2558_seam_degree_u_before': None,
+        'human_case_2557_2558_seam_degree_v_before': None,
+        'human_case_2557_2558_endpoint_u_is_seam_vertex': False,
+        'human_case_2557_2558_endpoint_v_is_seam_vertex': False,
+        'human_case_2557_2558_degree_pattern': None,
+        'human_case_2557_2558_allowed_by_degree_rule': False,
+        'human_case_over_cap_exception_used': False,
+        'human_case_2557_2558_marked_seam': False,
+        'human_case_2557_2558_rejection_reason': 'legacy_repair_disabled',
+    }
+
+
+def _disabled_two_edge_repair_result():
+    return {
+        'enabled': False,
+        'candidates_total': 0,
+        'allowed_candidates_total': 0,
+        'edges_marked': 0,
+        'paths_marked': 0,
+        'paths_rejected': 0,
+        'over_cap': False,
+        'safety_cap': 16,
+        'candidate_reports': tuple(),
+    }
+
+
+def _disabled_endpoint_bridge_repair_result():
+    return {
+        'enabled': False,
+        'selection_policy': 'disabled',
+        'candidates_total': 0,
+        'raw_allowed_total': 0,
+        'deduplicated_allowed_total': 0,
+        'allowed_total': 0,
+        'paths_marked': 0,
+        'edges_marked': 0,
+        'over_cap': False,
+        'safety_cap': 9,
+        'selected_rank_threshold': None,
+        'duplicate_endpoint_pairs_suppressed': 0,
+        'candidate_reports': tuple(),
+        'allowed_candidate_reports': tuple(),
+        'human_path_reports': tuple(),
+        'human_paths_selected_by_rank': 0,
+        'human_paths_skipped_below_threshold': 0,
+        'added_candidate_due_to_cap_increase': False,
+        'previous_rank_9_selected': False,
+        'selected_rank_9_candidate': None,
+    }
+
+
+def _disabled_curved_bridge_repair_result():
+    return {
+        'enabled': False,
+        'candidates_total': 0,
+        'eligible_total': 0,
+        'paths_marked': 0,
+        'edges_marked': 0,
+        'over_cap': False,
+        'safety_cap': 6,
+        'candidate_reports': tuple(),
+        'selected_reports': tuple(),
+        'rejected_reports': tuple(),
+    }
+
+
+def _disabled_tangent_bridge_repair_result():
+    return {
+        'enabled': False,
+        'candidates_total': 0,
+        'eligible_total': 0,
+        'paths_marked': 0,
+        'edges_marked': 0,
+        'over_cap': False,
+        'safety_cap': 1,
+        'candidate_reports': tuple(),
+        'selected_reports': tuple(),
+        'rejected_reports': tuple(),
+    }
+
+
 def apply_seam_keys(
     mesh,
     predicted_keys,
@@ -217,6 +493,8 @@ def apply_seam_keys(
     accepted_bridge_keys=None,
     accepted_bridge_entries=None,
     enable_local_repair=False,
+    fill_small_gaps=True,
+    fill_gap_max_hops=2,
 ):
     edge_by_key = {}
     for edge in mesh.edges:
@@ -314,18 +592,14 @@ def apply_seam_keys(
             'duplicate_or_already_marked': duplicate_or_already_marked,
         })
 
-    repair = apply_missing_edge_continuity_repair(
+    editable_gap_fill_result = apply_editable_shortest_path_gap_fill(
         mesh,
-        enabled=bool(enable_local_repair),
+        enabled=bool(enable_local_repair and fill_small_gaps),
+        max_gap_hops=fill_gap_max_hops,
     )
-    two_edge_repair = apply_two_edge_local_continuity_repair(
-        mesh,
-        enabled=bool(enable_local_repair),
-    )
-    endpoint_bridge_repair = apply_two_edge_endpoint_bridge_repair(
-        mesh,
-        enabled=bool(enable_local_repair),
-    )
+    repair = _disabled_one_edge_repair_result()
+    two_edge_repair = _disabled_two_edge_repair_result()
+    endpoint_bridge_repair = _disabled_endpoint_bridge_repair_result()
     target_status = _combined_two_edge_target_status(two_edge_repair, endpoint_bridge_repair)
     human_gap_classification = classify_human_gap_regressions(
         mesh,
@@ -368,10 +642,7 @@ def apply_seam_keys(
         endpoint_bridge_reports=endpoint_bridge_repair['candidate_reports'],
         residual_payload=residual_gap_phase2e_debug,
     )
-    curved_endpoint_bridge_repair = apply_curved_two_edge_endpoint_bridge_repair(
-        mesh,
-        enabled=bool(enable_local_repair),
-    )
+    curved_endpoint_bridge_repair = _disabled_curved_bridge_repair_result()
     phase2k_r_tangent_audit_rescue = simulate_phase2k_r_tangent_audit_rescue(
         mesh,
         predicted_keys=applied_keys,
@@ -381,10 +652,7 @@ def apply_seam_keys(
         residual_payload=residual_gap_phase2e_debug,
         curved_repair=curved_endpoint_bridge_repair,
     )
-    tangent_audit_endpoint_bridge_repair = apply_tangent_audit_endpoint_bridge_rescue(
-        mesh,
-        enabled=bool(enable_local_repair),
-    )
+    tangent_audit_endpoint_bridge_repair = _disabled_tangent_bridge_repair_result()
     mesh.update()
 
     return SeamApplyResult(
@@ -610,6 +878,7 @@ def apply_seam_keys(
         phase2h_r3_visual_review=phase2h_r3_visual_review,
         phase2j_r_small_gap_rule_simulation=phase2j_r_small_gap_rule_simulation,
         phase2k_r_tangent_audit_rescue=phase2k_r_tangent_audit_rescue,
+        editable_gap_fill_result=editable_gap_fill_result,
     )
 
 

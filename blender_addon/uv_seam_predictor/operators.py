@@ -59,6 +59,8 @@ def _resolved_run_settings(settings):
         postprocess_l_min=settings.postprocess_l_min,
         postprocess_epsilon=settings.postprocess_epsilon,
         postprocess_anchor_boundary=settings.postprocess_anchor_boundary,
+        postprocess_fill_small_gaps=settings.postprocess_fill_small_gaps,
+        postprocess_fill_gap_max_hops=settings.postprocess_fill_gap_max_hops,
         clear_existing_seams=settings.clear_existing_seams,
     )
 
@@ -205,6 +207,8 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 clear_existing=self._run_settings.clear_existing_seams,
                 accepted_bridge_entries=accepted_bridge_entries,
                 enable_local_repair=self._run_settings.use_post_processing,
+                fill_small_gaps=self._run_settings.postprocess_fill_small_gaps,
+                fill_gap_max_hops=self._run_settings.postprocess_fill_gap_max_hops,
             )
             summary = seam_mapping.format_apply_summary(result)
             debug_path = seam_mapping.write_bridge_apply_debug(self._job.json_path, result)

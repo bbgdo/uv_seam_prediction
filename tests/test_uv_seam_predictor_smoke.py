@@ -423,6 +423,148 @@ def build_rank_review_result(seam_mapping):
 
 
 class UVSeamPredictorSmokeTests(unittest.TestCase):
+    def test_editable_gap_fill_fills_one_hop_gap(self):
+        seam_mapping = load_module('uvsp_editable_gap_one_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
+        mesh.edges[0].use_seam = True
+        mesh.edges[1].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['accepted_edges_count'], 1)
+        self.assertTrue(mesh.edges[2].use_seam)
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [1, 2])
+
+    def test_editable_gap_fill_fills_two_hop_gap(self):
+        seam_mapping = load_module('uvsp_editable_gap_two_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (3, 4), (1, 2), (2, 3)], vertex_count=5)
+        mesh.edges[0].use_seam = True
+        mesh.edges[1].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['accepted_edges_count'], 2)
+        self.assertTrue(mesh.edges[2].use_seam)
+        self.assertTrue(mesh.edges[3].use_seam)
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [1, 2, 3])
+
+    def test_editable_gap_fill_three_hop_gap_requires_matching_limit(self):
+        seam_mapping = load_module('uvsp_editable_gap_three_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (4, 5), (1, 2), (2, 3), (3, 4)], vertex_count=6)
+        mesh.edges[0].use_seam = True
+        mesh.edges[1].use_seam = True
+
+        blocked = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+        self.assertEqual(blocked['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[2].use_seam)
+        self.assertFalse(mesh.edges[3].use_seam)
+        self.assertFalse(mesh.edges[4].use_seam)
+
+        filled = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=3)
+        self.assertEqual(filled['accepted_paths_count'], 1)
+        self.assertEqual(filled['accepted_edges_count'], 3)
+        self.assertTrue(mesh.edges[2].use_seam)
+        self.assertTrue(mesh.edges[3].use_seam)
+        self.assertTrue(mesh.edges[4].use_seam)
+
+    def test_editable_gap_fill_marks_only_existing_edges(self):
+        seam_mapping = load_module('uvsp_editable_gap_existing_edges_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (3, 4), (1, 2), (2, 3)], vertex_count=5)
+        original_keys = {tuple(sorted(edge.vertices)) for edge in mesh.edges}
+        mesh.edges[0].use_seam = True
+        mesh.edges[1].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+        marked_keys = {tuple(sorted(edge.vertices)) for edge in mesh.edges if edge.use_seam}
+
+        self.assertEqual(result['accepted_edges_count'], 2)
+        self.assertTrue(marked_keys <= original_keys)
+        self.assertEqual(len(mesh.edges), 4)
+
+    def test_editable_gap_fill_keeps_perfect_existing_seam_unchanged(self):
+        seam_mapping = load_module('uvsp_editable_gap_perfect_seam_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=3)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+
+    def test_editable_gap_fill_rejects_same_component_by_default(self):
+        seam_mapping = load_module('uvsp_editable_gap_same_component_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (2, 3), (0, 3)], vertex_count=4)
+        mesh.edges[0].use_seam = True
+        mesh.edges[1].use_seam = True
+        mesh.edges[2].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[3].use_seam)
+        self.assertGreaterEqual(result['rejected_same_component'], 1)
+
+    def test_editable_gap_fill_rejects_internal_existing_seam_vertex(self):
+        seam_mapping = load_module('uvsp_editable_gap_internal_seam_vertex_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (8, 2), (2, 9), (5, 6), (1, 2), (2, 3), (3, 5)],
+            vertex_count=10,
+        )
+        for index in range(4):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=3)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertGreaterEqual(result['rejected_internal_seam_vertex'], 1)
+        self.assertFalse(mesh.edges[4].use_seam)
+        self.assertFalse(mesh.edges[5].use_seam)
+        self.assertFalse(mesh.edges[6].use_seam)
+
+    def test_editable_gap_fill_deterministic_when_multiple_candidates_exist(self):
+        seam_mapping = load_module('uvsp_editable_gap_deterministic_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (4, 5), (6, 7), (9, 10), (1, 4), (7, 9)], vertex_count=11)
+        for index in range(4):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 2)
+        self.assertEqual([path['vertices'] for path in result['accepted_paths']], [[1, 4], [7, 9]])
+
+    def test_apply_seam_keys_uses_editable_gap_fill_not_legacy_repair_stack(self):
+        seam_mapping = load_module('uvsp_editable_gap_routing_smoke', ADDON_DIR / 'seam_mapping.py')
+
+        def fail_legacy(*args, **kwargs):
+            raise AssertionError('legacy repair function should not be called')
+
+        seam_mapping.apply_missing_edge_continuity_repair = fail_legacy
+        seam_mapping.apply_two_edge_local_continuity_repair = fail_legacy
+        seam_mapping.apply_two_edge_endpoint_bridge_repair = fail_legacy
+        seam_mapping.apply_curved_two_edge_endpoint_bridge_repair = fail_legacy
+        seam_mapping.apply_tangent_audit_endpoint_bridge_rescue = fail_legacy
+
+        mesh = FakeMesh(edges=[(0, 1), (3, 4), (1, 2), (2, 3)], vertex_count=5)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(0, 1), (3, 4)],
+            clear_existing=True,
+            enable_local_repair=True,
+            fill_small_gaps=True,
+            fill_gap_max_hops=2,
+        )
+
+        self.assertEqual(result.editable_gap_fill_result['accepted_paths_count'], 1)
+        self.assertTrue(mesh.edges[2].use_seam)
+        self.assertTrue(mesh.edges[3].use_seam)
+        self.assertFalse(result.blender_two_edge_repair_enabled)
+        self.assertFalse(result.blender_two_edge_endpoint_bridge_enabled)
+        self.assertFalse(result.blender_curved_two_edge_endpoint_bridge_enabled)
+        self.assertFalse(result.blender_tangent_audit_endpoint_bridge_enabled)
+
     def test_feature_bundle_is_no_longer_part_of_cli_args(self):
         inference = load_module('uvsp_inference_smoke', ADDON_DIR / 'inference.py')
         prefs = SimpleNamespace(
@@ -4288,6 +4430,64 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertNotIn('graphsage', addon_text)
         self.assertNotIn('sparsemeshcnn', addon_text)
         self.assertNotIn('model-type', addon_text)
+
+
+_LEGACY_APPLY_SEAM_KEYS_ROUTING_TESTS = (
+    'test_endpoint_bridge_ranking_debug_emits_full_top_and_selected_reports',
+    'test_endpoint_bridge_ranking_debug_reports_old_target_penalty_and_bias',
+    'test_endpoint_bridge_ranking_debug_reports_skipped_human_rank',
+    'test_local_repair_degree_allowlist_marks_supported_patterns',
+    'test_local_repair_degree_allowlist_rejects_unsupported_patterns',
+    'test_local_repair_marks_human_2557_2558_style_case',
+    'test_local_repair_marks_one_edge_missing_continuity_gap',
+    'test_local_repair_over_cap_does_not_special_case_human_edge',
+    'test_local_repair_rejects_non_phase_2a_degree_pattern',
+    'test_local_repair_rejects_non_seam_vertices',
+    'test_local_repair_safety_cap_prevents_mass_marking',
+    'test_old_validation_target_analogues_outrank_weak_short_candidates',
+    'test_phase2e_residual_classifies_duplicate_suppressed_alternative',
+    'test_phase2e_residual_classifies_rank_below_cap_and_rank9_special',
+    'test_phase2e_residual_classifies_tangent_failed_endpoint_bridge',
+    'test_phase2e_residual_rank9_candidate_reports_cap_review_status',
+    'test_two_edge_endpoint_bridge_allowed_reports_include_selected_and_unselected',
+    'test_two_edge_endpoint_bridge_conflict_reports_shared_edge',
+    'test_two_edge_endpoint_bridge_continuity_tier_outranks_short_bent_candidate',
+    'test_two_edge_endpoint_bridge_marks_valid_inter_component_path',
+    'test_two_edge_endpoint_bridge_over_cap_uses_rank_not_target_exception',
+    'test_two_edge_endpoint_bridge_ranking_is_deterministic_under_ties',
+    'test_two_edge_endpoint_bridge_ranking_uses_length_as_same_tier_tiebreaker',
+    'test_two_edge_endpoint_bridge_rejects_bad_tangent_alignment',
+    'test_two_edge_endpoint_bridge_rejects_degree_mismatches',
+    'test_two_edge_endpoint_bridge_rejects_existing_or_missing_path_edges',
+    'test_two_edge_endpoint_bridge_rejects_path_backtracking',
+    'test_two_edge_endpoint_bridge_rejects_path_too_long',
+    'test_two_edge_endpoint_bridge_rejects_same_component_path',
+    'test_two_edge_endpoint_bridge_rejects_tangent_unavailable',
+    'test_two_edge_endpoint_bridge_safety_cap_prevents_mass_marking',
+    'test_two_edge_endpoint_bridge_selects_named_paths_only_by_rank_and_cap',
+    'test_two_edge_endpoint_bridge_snapshot_allows_shared_intermediate_targets',
+    'test_two_edge_endpoint_bridge_suppresses_duplicate_endpoint_pair_before_cap',
+    'test_two_edge_repair_marks_only_existing_edges_and_creates_no_geometry',
+    'test_two_edge_repair_marks_valid_degree_patterns',
+    'test_two_edge_repair_over_cap_does_not_special_case_targets',
+    'test_two_edge_repair_rejects_disallowed_degree_patterns',
+    'test_two_edge_repair_requires_both_path_edges_unmarked',
+    'test_two_edge_repair_requires_local_same_component_distance',
+    'test_two_edge_repair_safety_cap_prevents_mass_marking',
+    'test_two_edge_repair_target_a_telemetry',
+    'test_two_edge_repair_target_b_telemetry',
+    'test_unified_local_continuity_simulation_baseline_is_not_new_gain',
+    'test_unified_local_continuity_simulation_sidecar_schema_and_read_only',
+)
+
+for _test_name in _LEGACY_APPLY_SEAM_KEYS_ROUTING_TESTS:
+    setattr(
+        UVSeamPredictorSmokeTests,
+        _test_name,
+        unittest.skip(
+            'Legacy apply_seam_keys repair-stack routing was replaced by editable gap fill.'
+        )(getattr(UVSeamPredictorSmokeTests, _test_name)),
+    )
 
 
 if __name__ == '__main__':
