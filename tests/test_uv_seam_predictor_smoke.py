@@ -1763,6 +1763,194 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertTrue(payload['read_only'])
         self.assertIn('write_human_gap_classification', read_addon_file('operators.py'))
 
+    def test_phase2e_residual_sidecar_and_already_marked_classification(self):
+        seam_mapping = load_module('uvsp_phase2e_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(234, 319), (319, 318), (318, 214)], vertex_count=400)
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(234, 319), (319, 318), (318, 214)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+        flags_before = [edge.use_seam for edge in mesh.edges]
+        report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '2')
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prediction_path = str(Path(temp_dir) / 'prediction.json')
+            Path(prediction_path).write_text('{}', encoding='utf-8')
+            sidecar = seam_mapping.write_residual_gap_phase2e_debug(prediction_path, result)
+            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
+
+        self.assertTrue(sidecar.endswith('_residual_gap_phase2e_debug.json'))
+        self.assertTrue(payload['read_only'])
+        self.assertEqual(report['candidate_class_phase2e'], 'already_marked_but_human_still_sees_gap')
+        self.assertTrue(report['is_visual_or_apply_verification_issue'])
+        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
+        self.assertIn('write_residual_gap_phase2e_debug', read_addon_file('operators.py'))
+
+    def test_phase2e_residual_classifies_rank_below_cap_and_rank9_special(self):
+        seam_mapping = load_module('uvsp_phase2e_rank_below_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [(3005, 3039), (3006, 3007), (3006, 3008), (3008, 3039)]
+        predicted_keys = [(3005, 3039), (3006, 3007)]
+        coords = {
+            3005: (0.01, 0.02, 0.0),
+            3006: (0.0, 0.0, 0.0),
+            3007: (-0.01, 0.0, 0.0),
+            3008: (0.01, 0.0, 0.0),
+            3039: (0.01, 0.01, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        for index in range(8):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 600 + index * 10, total_span=0.04, y=index + 1)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '9')
+        self.assertEqual(report['candidate_class_phase2e'], 'phase_2b1_rank_below_cap')
+        self.assertFalse(report['already_all_marked'])
+        self.assertIsNotNone(report['rank_v2_if_available'])
+        self.assertGreater(report['rank_v2_if_available'], 8)
+        self.assertEqual(report['continuity_tier_if_available'], 3)
+        self.assertEqual(
+            report['why_selected_before_phase_2d2_but_not_now'],
+            'v2_continuity_ranking_demoted_weak_straightness',
+        )
+        self.assertTrue(report['current_status_is_ranking_outcome'])
+
+    def test_phase2e_residual_classifies_duplicate_suppressed_alternative(self):
+        seam_mapping = load_module('uvsp_phase2e_duplicate_smoke', ADDON_DIR / 'seam_mapping.py')
+        coords = {
+            3098: (0.0, 0.0, 0.0),
+            3185: (0.01, 0.01, 0.0),
+            3097: (0.01, 0.0, 0.0),
+            3192: (0.02, 0.0, 0.0),
+            3193: (0.03, 0.0, 0.0),
+            3096: (-0.01, 0.0, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        mesh = FakeMesh(
+            edges=[
+                (3096, 3098), (3192, 3193),
+                (3098, 3185), (3185, 3192),
+                (3098, 3097), (3097, 3192),
+            ],
+            vertex_count=10000,
+            coords=coords,
+        )
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(3096, 3098), (3192, 3193)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '3a')
+        self.assertEqual(report['candidate_class_phase2e'], 'phase_2b1_duplicate_suppressed')
+        self.assertTrue(report['duplicate_endpoint_pair_suppressed'])
+        self.assertEqual(report['skipped_reason'], 'duplicate_endpoint_pair_suppressed')
+
+    def test_phase2e_residual_classifies_tangent_failed_endpoint_bridge(self):
+        seam_mapping = load_module('uvsp_phase2e_tangent_failed_smoke', ADDON_DIR / 'seam_mapping.py')
+        coords = {
+            671: (-0.01, 0.0, 0.0),
+            670: (0.0, 0.0, 0.0),
+            669: (-0.02, 0.0, 0.0),
+            666: (-0.03, 0.0, 0.0),
+            665: (-0.04, 0.0, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        mesh = FakeMesh(
+            edges=[(671, 670), (666, 665), (670, 669), (669, 666)],
+            vertex_count=10000,
+            coords=coords,
+        )
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            [(671, 670), (666, 665)],
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '13a')
+        self.assertEqual(report['candidate_class_phase2e'], 'phase_2b1_tangent_failed')
+        self.assertEqual(report['phase_2b1_rejection_reason'], 'tangent_alignment_failed')
+
+    def test_phase2e_residual_classifies_new_repair_classes_and_missing_edge(self):
+        seam_mapping = load_module('uvsp_phase2e_new_classes_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (234, 319), (319, 318), (318, 214),
+                (2391, 2000), (2391, 1723),
+                (1734, 1700), (1700, 1722), (1734, 1800), (1722, 1801),
+                (1734, 1723), (1723, 1722),
+            ],
+            vertex_count=2500,
+        )
+        seam_mapping.apply_seam_keys(
+            mesh,
+            [(2391, 2000), (1734, 1700), (1700, 1722), (1734, 1800), (1722, 1801)],
+            clear_existing=True,
+            enable_local_repair=False,
+        )
+
+        classification = seam_mapping.classify_residual_gap_phase2e(mesh)
+        by_label = {report['label']: report for report in classification['paths']}
+
+        self.assertEqual(by_label['2']['candidate_class_phase2e'], 'three_edge_local_bridge')
+        self.assertEqual(
+            by_label['15a']['candidate_class_phase2e'],
+            'endpoint_to_skeleton_or_near_junction',
+        )
+        self.assertTrue(by_label['15a']['one_endpoint_is_non_seam'])
+        self.assertEqual(by_label['15a']['why_phase_2a1_does_not_apply'], 'endpoint_not_seam_vertex')
+        self.assertEqual(
+            by_label['15b']['candidate_class_phase2e'],
+            'same_component_two_edge_local_bridge',
+        )
+        self.assertTrue(by_label['15b']['same_component_status'])
+        self.assertEqual(by_label['15b']['why_phase_2b1_rejects_it'], 'endpoint_not_degree_1')
+        self.assertEqual(
+            by_label['14a']['candidate_class_phase2e'],
+            'non_original_or_missing_blender_edge',
+        )
+
+    def test_phase2e_residual_rank9_candidate_reports_cap_review_status(self):
+        seam_mapping = load_module('uvsp_phase2e_rank9_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [(5149, 5100), (3005, 3006), (5149, 3003), (3003, 3005)]
+        predicted_keys = [(5149, 5100), (3005, 3006)]
+        coords = {
+            5100: (-0.01, 0.0, 0.0),
+            5149: (0.0, 0.0, 0.0),
+            3003: (0.01, 0.0, 0.0),
+            3005: (0.02, 0.0, 0.0),
+            3006: (0.03, 0.0, 0.0),
+            9999: (1.0, 1.0, 1.0),
+        }
+        for index in range(8):
+            append_endpoint_bridge_candidate(edges, predicted_keys, coords, 600 + index * 10, total_span=0.02, y=index + 1)
+        mesh = FakeMesh(edges=edges, vertex_count=10000, coords=coords)
+
+        result = seam_mapping.apply_seam_keys(
+            mesh,
+            predicted_keys,
+            clear_existing=True,
+            enable_local_repair=True,
+        )
+
+        report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '8a')
+        self.assertEqual(report['candidate_class_phase2e'], 'phase_2b1_rank_below_cap')
+        self.assertEqual(report['rank_delta_from_cap'], 1)
+        self.assertTrue(report['is_highest_ranked_unselected_human_candidate'])
+        self.assertTrue(report['is_candidate_for_future_cap_rank_visual_review'])
+
     def test_local_repair_summary_reports_telemetry(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
         result = seam_mapping.SeamApplyResult(
