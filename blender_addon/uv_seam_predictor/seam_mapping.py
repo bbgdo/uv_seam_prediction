@@ -232,64 +232,79 @@ def apply_editable_shortest_path_gap_fill(
     edge_items, edge_by_key, adjacency = _mesh_edge_lookup(mesh)
     seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
     endpoints = sorted(vertex for vertex, degree in seam_degree.items() if int(degree) == 1)
+    existing_seam_targets = sorted(
+        vertex for vertex, degree in seam_degree.items() if int(degree) >= 2
+    )
     seam_vertices = {int(vertex) for vertex, degree in seam_degree.items() if int(degree) > 0}
     component_id_of = _seam_component_ids(seam_adjacency)
 
     counters = {
         'rejected_same_component': 0,
+        'rejected_endpoint_to_existing_same_component': 0,
         'rejected_existing_seam_internal': 0,
         'rejected_internal_seam_vertex': 0,
         'rejected_no_path': 0,
     }
     candidates = []
+
+    def add_candidate(start, target, kind):
+        same_component = component_id_of.get(start) == component_id_of.get(target)
+        if same_component and not allow_same_component:
+            counters['rejected_same_component'] += 1
+            if kind == 'endpoint_to_existing_seam_vertex':
+                counters['rejected_endpoint_to_existing_same_component'] += 1
+            return
+
+        paths = _bounded_editable_paths(adjacency, start, target, max_hops)
+        if not paths:
+            counters['rejected_no_path'] += 1
+            return
+
+        valid_paths = []
+        for path in paths:
+            path_edges = _path_edge_keys(path)
+            if any(bool(edge_by_key[edge_key][1].use_seam) for edge_key in path_edges):
+                counters['rejected_existing_seam_internal'] += 1
+                continue
+            if any(int(vertex) in seam_vertices for vertex in path[1:-1]):
+                counters['rejected_internal_seam_vertex'] += 1
+                continue
+            if same_component:
+                seam_distance = _shortest_seam_path_length(seam_adjacency, start, target)
+                if seam_distance is None or seam_distance + len(path_edges) < min_loop:
+                    counters['rejected_same_component'] += 1
+                    if kind == 'endpoint_to_existing_seam_vertex':
+                        counters['rejected_endpoint_to_existing_same_component'] += 1
+                    continue
+            valid_paths.append(path)
+
+        if not valid_paths:
+            return
+        best_path = min(
+            valid_paths,
+            key=lambda path: (
+                len(path) - 1,
+                _editable_path_length(mesh, path),
+                tuple(path),
+            ),
+        )
+        candidates.append(_editable_gap_candidate(mesh, best_path, kind, start, target))
+
     for left_index, left in enumerate(endpoints):
         for right in endpoints[left_index + 1:]:
-            same_component = component_id_of.get(left) == component_id_of.get(right)
-            if same_component and not allow_same_component:
-                counters['rejected_same_component'] += 1
-                continue
+            add_candidate(left, right, 'endpoint_to_endpoint')
 
-            paths = _bounded_editable_paths(adjacency, left, right, max_hops)
-            if not paths:
-                counters['rejected_no_path'] += 1
-                continue
-
-            valid_paths = []
-            for path in paths:
-                path_edges = _path_edge_keys(path)
-                if any(bool(edge_by_key[edge_key][1].use_seam) for edge_key in path_edges):
-                    counters['rejected_existing_seam_internal'] += 1
-                    continue
-                if any(int(vertex) in seam_vertices for vertex in path[1:-1]):
-                    counters['rejected_internal_seam_vertex'] += 1
-                    continue
-                if same_component:
-                    seam_distance = _shortest_seam_path_length(seam_adjacency, left, right)
-                    if seam_distance is None or seam_distance + len(path_edges) < min_loop:
-                        counters['rejected_same_component'] += 1
-                        continue
-                valid_paths.append(path)
-
-            if not valid_paths:
-                continue
-            best_path = min(
-                valid_paths,
-                key=lambda path: (
-                    len(path) - 1,
-                    _editable_path_length(mesh, path),
-                    min(left, right),
-                    max(left, right),
-                    tuple(path),
-                ),
-            )
-            candidates.append(_editable_gap_candidate(mesh, best_path))
+    for start in endpoints:
+        for target in existing_seam_targets:
+            add_candidate(start, target, 'endpoint_to_existing_seam_vertex')
 
     candidates.sort(
         key=lambda item: (
             item['hop_count'],
             item['total_length'],
-            min(item['vertices'][0], item['vertices'][-1]),
-            max(item['vertices'][0], item['vertices'][-1]),
+            0 if item['kind'] == 'endpoint_to_endpoint' else 1,
+            item['start_vertex'],
+            item['target_vertex'],
             tuple(item['vertices']),
         )
     )
@@ -300,9 +315,9 @@ def apply_editable_shortest_path_gap_fill(
     accepted_edge_keys = set()
     rejected_conflict_consumed_endpoint = 0
     for candidate in candidates:
-        endpoints_key = (candidate['vertices'][0], candidate['vertices'][-1])
+        consumed_candidate_endpoints = tuple(candidate['consumed_endpoint_vertices'])
         edge_keys = {tuple(edge_key) for edge_key in candidate['edges']}
-        if endpoints_key[0] in consumed_endpoints or endpoints_key[1] in consumed_endpoints:
+        if any(vertex in consumed_endpoints for vertex in consumed_candidate_endpoints):
             rejected_conflict_consumed_endpoint += 1
             continue
         if edge_keys & reserved_edges:
@@ -311,19 +326,32 @@ def apply_editable_shortest_path_gap_fill(
         for edge_key in edge_keys:
             edge_by_key[edge_key][1].use_seam = True
             accepted_edge_keys.add(edge_key)
-        consumed_endpoints.update(endpoints_key)
+        consumed_endpoints.update(consumed_candidate_endpoints)
         reserved_edges.update(edge_keys)
         accepted_paths.append(candidate)
 
+    endpoint_to_existing_candidates = sum(
+        1 for candidate in candidates
+        if candidate['kind'] == 'endpoint_to_existing_seam_vertex'
+    )
+    endpoint_to_existing_accepted = sum(
+        1 for candidate in accepted_paths
+        if candidate['kind'] == 'endpoint_to_existing_seam_vertex'
+    )
     return {
         'enabled': True,
         'max_gap_hops': max_hops,
         'allow_same_component': bool(allow_same_component),
         'min_same_component_loop_size': min_loop,
         'candidates_total': len(candidates),
+        'endpoint_to_existing_seam_candidates': endpoint_to_existing_candidates,
+        'endpoint_to_existing_seam_accepted': endpoint_to_existing_accepted,
         'accepted_paths_count': len(accepted_paths),
         'accepted_edges_count': len(accepted_edge_keys),
         'rejected_same_component': counters['rejected_same_component'],
+        'rejected_endpoint_to_existing_same_component': counters[
+            'rejected_endpoint_to_existing_same_component'
+        ],
         'rejected_existing_seam_internal': counters['rejected_existing_seam_internal'],
         'rejected_internal_seam_vertex': counters['rejected_internal_seam_vertex'],
         'rejected_conflict_consumed_endpoint': rejected_conflict_consumed_endpoint,
@@ -339,9 +367,12 @@ def _editable_gap_fill_empty_result(enabled, max_gap_hops):
         'allow_same_component': False,
         'min_same_component_loop_size': 8,
         'candidates_total': 0,
+        'endpoint_to_existing_seam_candidates': 0,
+        'endpoint_to_existing_seam_accepted': 0,
         'accepted_paths_count': 0,
         'accepted_edges_count': 0,
         'rejected_same_component': 0,
+        'rejected_endpoint_to_existing_same_component': 0,
         'rejected_existing_seam_internal': 0,
         'rejected_internal_seam_vertex': 0,
         'rejected_conflict_consumed_endpoint': 0,
@@ -370,13 +401,20 @@ def _bounded_editable_paths(adjacency, source, target, max_hops):
     return paths
 
 
-def _editable_gap_candidate(mesh, path):
+def _editable_gap_candidate(mesh, path, kind, start, target):
     edge_keys = _path_edge_keys(path)
+    consumed_endpoint_vertices = [int(start)]
+    if kind == 'endpoint_to_endpoint':
+        consumed_endpoint_vertices.append(int(target))
     return {
+        'kind': str(kind),
+        'start_vertex': int(start),
+        'target_vertex': int(target),
         'vertices': [int(vertex) for vertex in path],
         'edges': [[int(edge_key[0]), int(edge_key[1])] for edge_key in edge_keys],
         'hop_count': len(edge_keys),
         'total_length': _editable_path_length(mesh, path),
+        'consumed_endpoint_vertices': consumed_endpoint_vertices,
     }
 
 

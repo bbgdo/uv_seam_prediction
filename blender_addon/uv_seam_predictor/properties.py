@@ -84,9 +84,9 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         name='Editable Gap Max Hops',
         default=2,
         min=1,
-        max=3,
+        soft_max=3,
         description='Maximum editable mesh edge hops for Blender-side gap filling. '
-                    'Default is 2; valid range is 1 to 3.',
+                    '3 is recommended; higher values may over-connect seams.',
     )
     postprocess_write_debug_sidecars: bpy.props.BoolProperty(
         name='Write Legacy Debug Sidecars',
