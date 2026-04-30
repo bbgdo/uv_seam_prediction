@@ -67,6 +67,10 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         gap_row.enabled = settings.postprocess_fill_small_gaps
         gap_row.prop(settings, 'postprocess_fill_gap_max_hops')
 
+        manual_box = layout.box()
+        manual_box.label(text='Manual Seam Cleanup')
+        manual_box.operator('uv_seam_predictor.fill_current_seam_gaps', icon='MOD_VERTEX_WEIGHT')
+
         legacy_box = layout.box()
         legacy_box.label(text='Legacy / Debug')
         legacy_box.enabled = settings.use_post_processing

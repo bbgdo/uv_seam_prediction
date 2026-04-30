@@ -37,6 +37,7 @@ classes = (
     properties.UVSEAM_Settings,
     operators.UVSEAM_OT_open_preferences,
     operators.UVSEAM_OT_clear_seams,
+    operators.UVSEAM_OT_fill_current_seam_gaps,
     operators.UVSEAM_OT_predict_seams,
     ui.UVSEAM_PT_panel,
 )

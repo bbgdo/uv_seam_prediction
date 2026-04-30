@@ -402,6 +402,50 @@ class UVSEAM_OT_clear_seams(bpy.types.Operator):
             _restore_mode(obj, original_mode)
 
 
+class UVSEAM_OT_fill_current_seam_gaps(bpy.types.Operator):
+    bl_idname = 'uv_seam_predictor.fill_current_seam_gaps'
+    bl_label = 'Fill Gaps on Current Seams'
+    bl_description = 'Fill small gaps in the currently marked seam edges using editable mesh topology'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        settings = _settings(context)
+        obj = None
+        original_mode = 'OBJECT'
+
+        try:
+            obj = validation.require_active_mesh_object(context)
+            original_mode = obj.mode
+            if obj.mode != 'OBJECT':
+                _ensure_object_mode()
+
+            result = seam_mapping.apply_editable_shortest_path_gap_fill(
+                obj.data,
+                enabled=True,
+                max_gap_hops=settings.postprocess_fill_gap_max_hops,
+                allow_same_component=False,
+            )
+            obj.data.update()
+
+            paths = int(result.get('accepted_paths_count', 0))
+            edges = int(result.get('accepted_edges_count', 0))
+            max_hops = int(result.get('max_gap_hops', settings.postprocess_fill_gap_max_hops))
+            if paths:
+                summary = f'Filled {paths} seam gap paths / {edges} edges with max hops {max_hops}.'
+            else:
+                summary = f'No seam gaps filled with max hops {max_hops}.'
+            settings.last_run_summary = summary
+            self.report({'INFO'}, summary)
+            return {'FINISHED'}
+        except Exception as exc:
+            message = str(exc)
+            settings.last_run_summary = message
+            self.report({'WARNING'}, message)
+            return {'CANCELLED'}
+        finally:
+            _restore_mode(obj, original_mode)
+
+
 class UVSEAM_OT_open_preferences(bpy.types.Operator):
     bl_idname = 'uv_seam_predictor.open_preferences'
     bl_label = 'Open Preferences'

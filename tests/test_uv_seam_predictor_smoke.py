@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +54,113 @@ class FakeMesh:
 
 class FakeObject:
     def __init__(self, mesh):
+        self.name = 'FakeObject'
+        self.type = 'MESH'
         self.data = mesh
+        self.mode = 'OBJECT'
+
+    def select_set(self, selected):
+        self.selected = bool(selected)
+
+
+class FakeModeSet:
+    def __init__(self, bpy_module):
+        self.bpy_module = bpy_module
+        self.calls = []
+
+    def __call__(self, *, mode):
+        self.calls.append(mode)
+        obj = self.bpy_module.context.object
+        if obj is not None:
+            obj.mode = mode
+        return {'FINISHED'}
+
+    def poll(self):
+        return True
+
+
+def load_operators_module_with_fakes(name, *, active_obj):
+    package_name = f'{name}_pkg'
+    package = ModuleType(package_name)
+    package.__path__ = [str(ADDON_DIR)]
+    sys.modules[package_name] = package
+
+    bpy_module = ModuleType('bpy')
+    bpy_module.types = SimpleNamespace(Operator=object)
+    mode_set = FakeModeSet(bpy_module)
+    bpy_module.ops = SimpleNamespace(object=SimpleNamespace(mode_set=mode_set))
+    bpy_module.data = SimpleNamespace(objects={})
+    bpy_module.context = SimpleNamespace(
+        object=active_obj,
+        view_layer=SimpleNamespace(objects=SimpleNamespace(active=active_obj)),
+    )
+    if active_obj is not None:
+        bpy_module.data.objects[active_obj.name] = active_obj
+    sys.modules['bpy'] = bpy_module
+
+    calls = {
+        'gap_fill': [],
+        'inference': [],
+        'export': [],
+        'mode_set': mode_set.calls,
+    }
+
+    seam_mapping_module = ModuleType(f'{package_name}.seam_mapping')
+
+    def fake_gap_fill(mesh, **kwargs):
+        calls['gap_fill'].append((mesh, kwargs))
+        return {
+            'accepted_paths_count': 2,
+            'accepted_edges_count': 3,
+            'max_gap_hops': int(kwargs['max_gap_hops']),
+        }
+
+    seam_mapping_module.apply_editable_shortest_path_gap_fill = fake_gap_fill
+    sys.modules[f'{package_name}.seam_mapping'] = seam_mapping_module
+
+    validation_module = ModuleType(f'{package_name}.validation')
+
+    def require_active_mesh_object(context):
+        obj = context.view_layer.objects.active
+        if obj is None:
+            raise ValueError('Select an active mesh object.')
+        if getattr(obj, 'type', None) != 'MESH':
+            raise ValueError('Active object must be a mesh.')
+        if getattr(obj, 'data', None) is None:
+            raise ValueError('Active mesh object has no mesh data.')
+        return obj
+
+    validation_module.require_active_mesh_object = require_active_mesh_object
+    validation_module.bpy_path_to_os_path = lambda path: path
+    sys.modules[f'{package_name}.validation'] = validation_module
+
+    inference_module = ModuleType(f'{package_name}.inference')
+
+    def fail_inference(*args, **kwargs):
+        calls['inference'].append((args, kwargs))
+        raise AssertionError('manual gap fill must not run inference')
+
+    inference_module.create_temp_work_files = fail_inference
+    inference_module.launch_inference = fail_inference
+    inference_module.has_timed_out = fail_inference
+    inference_module.poll_job = fail_inference
+    inference_module.close_log_handles = fail_inference
+    inference_module.read_text_tail = fail_inference
+    inference_module.terminate_job = fail_inference
+    inference_module.cleanup_job = fail_inference
+    sys.modules[f'{package_name}.inference'] = inference_module
+
+    export_module = ModuleType(f'{package_name}.export_obj')
+
+    def fail_export(*args, **kwargs):
+        calls['export'].append((args, kwargs))
+        raise AssertionError('manual gap fill must not export OBJ')
+
+    export_module.export_object_to_obj_with_hidden_triangulation = fail_export
+    sys.modules[f'{package_name}.export_obj'] = export_module
+
+    module = load_module(f'{package_name}.operators', ADDON_DIR / 'operators.py')
+    return module, calls
 
 
 def build_degree_pattern_mesh(degree_u, degree_v, key=(100, 200)):
@@ -795,6 +901,117 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('soft_max=3', gap_hops_source)
         self.assertNotRegex(gap_hops_source, r'(?m)^\s*max=3,')
         self.assertIn('3 is recommended; higher values may over-connect seams.', gap_hops_source)
+
+    def test_manual_fill_current_seams_operator_calls_existing_gap_filler(self):
+        mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
+        obj = FakeObject(mesh)
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_gap_fill_operator_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    postprocess_fill_gap_max_hops=5,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        reports = []
+        operator = operators.UVSEAM_OT_fill_current_seam_gaps()
+        operator.report = lambda levels, message: reports.append((levels, message))
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(len(calls['gap_fill']), 1)
+        called_mesh, kwargs = calls['gap_fill'][0]
+        self.assertIs(called_mesh, mesh)
+        self.assertEqual(kwargs, {
+            'enabled': True,
+            'max_gap_hops': 5,
+            'allow_same_component': False,
+        })
+        self.assertEqual(calls['inference'], [])
+        self.assertEqual(calls['export'], [])
+        self.assertEqual(
+            context.scene.uv_seam_predictor_settings.last_run_summary,
+            'Filled 2 seam gap paths / 3 edges with max hops 5.',
+        )
+        self.assertEqual(reports[-1], ({'INFO'}, 'Filled 2 seam gap paths / 3 edges with max hops 5.'))
+
+    def test_manual_fill_current_seams_operator_restores_edit_mode(self):
+        mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
+        obj = FakeObject(mesh)
+        obj.mode = 'EDIT'
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_gap_fill_edit_mode_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    postprocess_fill_gap_max_hops=2,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        operator = operators.UVSEAM_OT_fill_current_seam_gaps()
+        operator.report = lambda levels, message: None
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(calls['mode_set'], ['OBJECT', 'EDIT'])
+        self.assertEqual(obj.mode, 'EDIT')
+
+    def test_manual_fill_current_seams_operator_cancels_for_non_mesh(self):
+        obj = SimpleNamespace(name='Camera', type='CAMERA', data=None, mode='OBJECT')
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_gap_fill_non_mesh_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    postprocess_fill_gap_max_hops=2,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        reports = []
+        operator = operators.UVSEAM_OT_fill_current_seam_gaps()
+        operator.report = lambda levels, message: reports.append((levels, message))
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'CANCELLED'})
+        self.assertEqual(calls['gap_fill'], [])
+        self.assertEqual(calls['inference'], [])
+        self.assertEqual(calls['export'], [])
+        self.assertEqual(
+            context.scene.uv_seam_predictor_settings.last_run_summary,
+            'Active object must be a mesh.',
+        )
+        self.assertEqual(reports[-1], ({'WARNING'}, 'Active object must be a mesh.'))
+
+    def test_manual_fill_current_seams_button_and_registration_are_wired(self):
+        operators_source = read_addon_file('operators.py')
+        ui_source = read_addon_file('ui.py')
+        init_source = read_addon_file('__init__.py')
+
+        self.assertIn("bl_idname = 'uv_seam_predictor.fill_current_seam_gaps'", operators_source)
+        self.assertIn("bl_label = 'Fill Gaps on Current Seams'", operators_source)
+        self.assertIn(
+            "bl_description = 'Fill small gaps in the currently marked seam edges using editable mesh topology'",
+            operators_source,
+        )
+        self.assertIn("manual_box.label(text='Manual Seam Cleanup')", ui_source)
+        self.assertIn("manual_box.operator('uv_seam_predictor.fill_current_seam_gaps'", ui_source)
+        self.assertIn('operators.UVSEAM_OT_fill_current_seam_gaps', init_source)
 
     def test_apply_seam_keys_skips_legacy_debug_collectors_by_default(self):
         seam_mapping = load_module('uvsp_debug_collectors_default_off_smoke', ADDON_DIR / 'seam_mapping.py')
