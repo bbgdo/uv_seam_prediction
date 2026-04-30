@@ -38,8 +38,7 @@ def _row(mesh_name='mesh.obj', **overrides):
         'seam_count': 2,
         'time_s': 0.2,
         'skeleton_removals': 1,
-        'steiner_calls': 2,
-        'steiner_edges_added': 3,
+        'bridge_edges_added': 3,
         'branches_pruned': 4,
         'pruning_iterations': 5,
         'thick_band_edges_after': 0,
@@ -58,7 +57,7 @@ class EvaluateDirTopologyTests(unittest.TestCase):
             'diagnostics': {
                 'postprocess': {
                     'skeleton': {'removals_committed': 7},
-                    'bridging': {'steiner_calls': 8, 'steiner_edges_added_total': 9},
+                    'bridging': {'added_bridge_edges': 9},
                     'pruning': {'total_branches_pruned': 10, 'total_iterations': 11},
                 }
             }
@@ -68,8 +67,7 @@ class EvaluateDirTopologyTests(unittest.TestCase):
             evaluate_dir_topology._telemetry_fields(payload),
             {
                 'skeleton_removals': 7,
-                'steiner_calls': 8,
-                'steiner_edges_added': 9,
+                'bridge_edges_added': 9,
                 'branches_pruned': 10,
                 'pruning_iterations': 11,
             },
@@ -78,8 +76,7 @@ class EvaluateDirTopologyTests(unittest.TestCase):
     def test_telemetry_fields_without_diagnostics(self):
         expected = {
             'skeleton_removals': None,
-            'steiner_calls': None,
-            'steiner_edges_added': None,
+            'bridge_edges_added': None,
             'branches_pruned': None,
             'pruning_iterations': None,
         }
@@ -98,7 +95,7 @@ class EvaluateDirTopologyTests(unittest.TestCase):
                     'seam_topology': {'thick_band_edge_count': 0},
                     'postprocess': {
                         'skeleton': {'removals_committed': 1},
-                        'bridging': {'steiner_calls': 2, 'steiner_edges_added_total': 3},
+                        'bridging': {'added_bridge_edges': 3},
                         'pruning': {'total_branches_pruned': 4, 'total_iterations': 5},
                     },
                 },
@@ -119,7 +116,7 @@ class EvaluateDirTopologyTests(unittest.TestCase):
         self.assertEqual(row.status, 'ok')
         self.assertGreater(row.seam_count, 0)
         self.assertGreaterEqual(row.time_s, 0.0)
-        self.assertEqual(row.steiner_edges_added, 3)
+        self.assertEqual(row.bridge_edges_added, 3)
         self.assertEqual(len(calls), 1)
 
     def test_evaluate_one_mesh_fails(self):
@@ -169,7 +166,7 @@ class EvaluateDirTopologyTests(unittest.TestCase):
         self.assertTrue(report)
         self.assertIn('ok.obj', report)
         self.assertIn('failed.obj', report)
-        self.assertIn('| mesh | edges | seam count | time | skel removals | steiner edges | spurs pruned | thick after |', report)
+        self.assertIn('| mesh | edges | seam count | time | skel removals | bridge edges | spurs pruned | thick after |', report)
         self.assertIn('FAIL', report)
         self.assertIn('## Aggregate', report)
         self.assertIn('## Failures', report)

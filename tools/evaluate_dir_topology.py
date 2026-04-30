@@ -30,8 +30,7 @@ class MeshTopologyRow:
     seam_count: int
     time_s: float
     skeleton_removals: int | None
-    steiner_calls: int | None
-    steiner_edges_added: int | None
+    bridge_edges_added: int | None
     branches_pruned: int | None
     pruning_iterations: int | None
     thick_band_edges_after: int | None
@@ -173,8 +172,7 @@ def _telemetry_fields(payload: dict[str, Any]) -> dict[str, int | None]:
     if not postprocess:
         return {
             'skeleton_removals': None,
-            'steiner_calls': None,
-            'steiner_edges_added': None,
+            'bridge_edges_added': None,
             'branches_pruned': None,
             'pruning_iterations': None,
         }
@@ -183,8 +181,7 @@ def _telemetry_fields(payload: dict[str, Any]) -> dict[str, int | None]:
     prun = postprocess.get('pruning', {})
     return {
         'skeleton_removals': skel.get('removals_committed'),
-        'steiner_calls': brid.get('steiner_calls'),
-        'steiner_edges_added': brid.get('steiner_edges_added_total'),
+        'bridge_edges_added': brid.get('added_bridge_edges'),
         'branches_pruned': prun.get('total_branches_pruned'),
         'pruning_iterations': prun.get('total_iterations'),
     }
@@ -230,8 +227,7 @@ def evaluate_one_mesh(
     seam_count = -1
     telemetry = {
         'skeleton_removals': None,
-        'steiner_calls': None,
-        'steiner_edges_added': None,
+        'bridge_edges_added': None,
         'branches_pruned': None,
         'pruning_iterations': None,
     }
@@ -254,8 +250,7 @@ def evaluate_one_mesh(
         seam_count=seam_count,
         time_s=elapsed,
         skeleton_removals=telemetry['skeleton_removals'],
-        steiner_calls=telemetry['steiner_calls'],
-        steiner_edges_added=telemetry['steiner_edges_added'],
+        bridge_edges_added=telemetry['bridge_edges_added'],
         branches_pruned=telemetry['branches_pruned'],
         pruning_iterations=telemetry['pruning_iterations'],
         thick_band_edges_after=thick_after,
@@ -282,25 +277,25 @@ def format_markdown_report(rows: list[MeshTopologyRow]) -> str:
     lines.append(f'Failed:    {len(failed)}')
     lines.append('')
 
-    lines.append('| mesh | edges | seam count | time | skel removals | steiner edges | spurs pruned | thick after |')
+    lines.append('| mesh | edges | seam count | time | skel removals | bridge edges | spurs pruned | thick after |')
     lines.append('|------|------:|-----------:|-----:|--------------:|--------------:|-------------:|------------:|')
     for r in rows:
         seams = str(r.seam_count) if r.seam_count >= 0 else 'FAIL'
         elapsed = f'{r.time_s:.2f}s' if r.time_s >= 0 else '-'
         skel = str(r.skeleton_removals) if r.skeleton_removals is not None else '-'
-        steiner = str(r.steiner_edges_added) if r.steiner_edges_added is not None else '-'
+        bridge = str(r.bridge_edges_added) if r.bridge_edges_added is not None else '-'
         spurs = str(r.branches_pruned) if r.branches_pruned is not None else '-'
         thick = str(r.thick_band_edges_after) if r.thick_band_edges_after is not None else '-'
         lines.append(
             f'| {r.mesh_name} | {r.edge_count} | {seams} | {elapsed} | '
-            f'{skel} | {steiner} | {spurs} | {thick} |'
+            f'{skel} | {bridge} | {spurs} | {thick} |'
         )
 
     if ok:
         total_time = sum(r.time_s for r in ok)
         total_seams = sum(r.seam_count for r in ok)
         total_spurs = sum(r.branches_pruned or 0 for r in ok)
-        total_steiner = sum(r.steiner_edges_added or 0 for r in ok)
+        total_bridge = sum(r.bridge_edges_added or 0 for r in ok)
         total_skeleton = sum(r.skeleton_removals or 0 for r in ok)
         lines.append('')
         lines.append('## Aggregate')
@@ -308,7 +303,7 @@ def format_markdown_report(rows: list[MeshTopologyRow]) -> str:
         lines.append(f'- Total time:                 {total_time:.2f}s')
         lines.append(f'- Total seam edges:           {total_seams}')
         lines.append(f'- Total spurs pruned:         {total_spurs}')
-        lines.append(f'- Total Steiner edges added:  {total_steiner}')
+        lines.append(f'- Total bridge edges added:   {total_bridge}')
         lines.append(f'- Total skeleton removals:    {total_skeleton}')
 
     if failed:
@@ -334,8 +329,7 @@ def write_csv(rows: list[MeshTopologyRow], path: Path) -> None:
         'seam_count',
         'time_s',
         'skeleton_removals',
-        'steiner_calls',
-        'steiner_edges_added',
+        'bridge_edges_added',
         'branches_pruned',
         'pruning_iterations',
         'thick_band_edges_after',
