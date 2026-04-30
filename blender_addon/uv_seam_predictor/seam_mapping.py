@@ -7511,6 +7511,22 @@ def _median(values):
 
 
 def format_apply_summary(result):
+    parts = [
+        f'Marked {result.applied} seam edges. '
+        f'Ignored {result.ignored_non_original} triangulation-only edges. '
+        f'Skipped {result.duplicates_skipped} duplicates.'
+    ]
+    if result.accepted_bridge_edges_present_in_json > 0:
+        parts.append(
+            f' Bridge: {result.accepted_bridge_edges_present_in_json} accepted in JSON, '
+            f'{result.accepted_bridge_edges_applied} applied, '
+            f'{result.accepted_bridge_edges_ignored_non_original} ignored as non-original.'
+        )
+    gap = result.editable_gap_fill_result
+    if gap and int(gap.get('accepted_paths_count', 0)) > 0:
+        paths = int(gap['accepted_paths_count'])
+        edges = int(gap['accepted_edges_count'])
+        parts.append(f' Gap fill: {paths} paths filled, {edges} edges added.')
     trace = '; '.join(
         (
             f"#{entry['canonical_edge_index']} "
@@ -7519,101 +7535,9 @@ def format_apply_summary(result):
         )
         for entry in result.accepted_bridge_apply_trace
     )
-    trace_suffix = f' Bridge trace: {trace}.' if trace else ''
-    degree = result.human_case_2557_2558_degree_pattern
-    degree_suffix = f', degree={degree}' if degree is not None else ''
-    if result.human_case_2557_2558_marked_seam:
-        human_status = f'marked{degree_suffix}'
-    elif result.human_case_2557_2558_found:
-        human_status = (
-            f"rejected:{result.human_case_2557_2558_rejection_reason}{degree_suffix}"
-        )
-    else:
-        human_status = 'not found'
-    target_a_status = _format_two_edge_target_status(
-        result.target_path_2045_2541_4884_found,
-        result.target_path_2045_2541_4884_marked,
-        result.target_path_2045_2541_4884_rejection_reason,
-        result.target_path_2045_2541_4884_tangent_alignments,
-        result.target_path_2045_2541_4884_straightness,
-        result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception,
-    )
-    target_b_status = _format_two_edge_target_status(
-        result.target_path_2540_2541_2544_found,
-        result.target_path_2540_2541_2544_marked,
-        result.target_path_2540_2541_2544_rejection_reason,
-        result.target_path_2540_2541_2544_tangent_alignments,
-        result.target_path_2540_2541_2544_straightness,
-        result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception,
-    )
-    classification_summary = (result.human_gap_classification or {}).get('summary', {})
-    classified = classification_summary.get('total_paths_classified', 0)
-    editable = classification_summary.get('paths_all_edges_exist_in_blender', 0)
-    class_counts = classification_summary.get('count_by_candidate_class', {})
-    recommended = classification_summary.get('recommended_next_action', 'no_dominant_class')
-    return (
-        f'Marked {result.applied} seam edges. '
-        f'Ignored {result.ignored_non_original} triangulation-only edges. '
-        f'Skipped {result.duplicates_skipped} duplicates. '
-        f'Bridge debug: {result.accepted_bridge_edges_present_in_json} accepted in JSON, '
-        f'{result.accepted_bridge_edges_applied} applied, '
-        f'{result.accepted_bridge_edges_ignored_non_original} ignored as non-original.'
-        f' Local repair: {result.blender_local_repair_edges_marked} marked, '
-        f'{result.blender_local_repair_edges_rejected} rejected, '
-        f'allowed={result.blender_local_repair_allowed_candidates_total}, '
-        f'over_cap={str(result.blender_local_repair_repair_over_cap).lower()}. '
-        f'Human case [2557,2558]: {human_status}.'
-        f' Two-edge repair: {result.blender_two_edge_repair_paths_marked} paths marked, '
-        f'{result.blender_two_edge_repair_edges_marked} edges marked, '
-        f'allowed={result.blender_two_edge_repair_allowed_candidates_total}, '
-        f'over_cap={str(result.blender_two_edge_repair_over_cap).lower()}. '
-        f'Two-edge endpoint bridge: {result.blender_two_edge_endpoint_bridge_paths_marked} '
-        f'paths marked, {result.blender_two_edge_endpoint_bridge_edges_marked} edges marked, '
-        f'raw_allowed={result.blender_two_edge_endpoint_bridge_raw_allowed_total}, '
-        f'dedup_allowed={result.blender_two_edge_endpoint_bridge_deduplicated_allowed_total}, '
-        f'over_cap={str(result.blender_two_edge_endpoint_bridge_over_cap).lower()}, '
-        f'policy={result.blender_two_edge_endpoint_bridge_selection_policy}. '
-        f'Curved two-edge endpoint bridge: '
-        f'{result.blender_curved_two_edge_endpoint_bridge_paths_marked} paths marked, '
-        f'{result.blender_curved_two_edge_endpoint_bridge_edges_marked} edges marked, '
-        f'eligible={result.blender_curved_two_edge_endpoint_bridge_eligible_total}, '
-        f'over_cap={str(result.blender_curved_two_edge_endpoint_bridge_over_cap).lower()}, '
-        f'cap={result.blender_curved_two_edge_endpoint_bridge_safety_cap}. '
-        f'Tangent-audit endpoint bridge: '
-        f'{result.blender_tangent_audit_endpoint_bridge_paths_marked} paths marked, '
-        f'{result.blender_tangent_audit_endpoint_bridge_edges_marked} edges marked, '
-        f'eligible={result.blender_tangent_audit_endpoint_bridge_eligible_total}, '
-        f'over_cap={str(result.blender_tangent_audit_endpoint_bridge_over_cap).lower()}, '
-        f'cap={result.blender_tangent_audit_endpoint_bridge_safety_cap}. '
-        f'Human Phase 2B.1 paths selected: '
-        f'{result.blender_two_edge_endpoint_bridge_human_paths_selected_by_rank}/'
-        f'{len(result.blender_two_edge_endpoint_bridge_human_path_reports)}. '
-        f'Human Phase 2B.1 paths skipped below rank threshold: '
-        f'{result.blender_two_edge_endpoint_bridge_human_paths_skipped_below_threshold}/'
-        f'{len(result.blender_two_edge_endpoint_bridge_human_path_reports)}. '
-        f'Target [2045,2541,4884]: {target_a_status}. '
-        f'Target [2540,2541,2544]: {target_b_status}.'
-        f' Human gap classifier: {classified} paths classified, {editable} editable, '
-        f'{class_counts}. Recommended next action: {recommended}.'
-        f'{trace_suffix}'
-    )
-
-
-def _format_two_edge_target_status(
-    found,
-    marked,
-    rejection_reason,
-    tangent_alignments=None,
-    straightness=None,
-    accepted_by_target_over_cap_exception=False,
-):
-    if marked:
-        if tangent_alignments is not None and straightness is not None:
-            return f'marked, alignments={tangent_alignments}, straightness={straightness}'
-        return 'marked'
-    if found:
-        return f'rejected:{rejection_reason}'
-    return 'not found'
+    if trace:
+        parts.append(f' Bridge trace: {trace}.')
+    return ''.join(parts)
 
 
 def _is_vertex_pair(value):

@@ -4612,76 +4612,72 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             'max_repair_paths'
         ].default, 6)
 
-    def test_local_repair_summary_reports_telemetry(self):
+    def test_summary_reports_core_counts_bridge_and_gap_fill(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
-        result = seam_mapping.SeamApplyResult(
+
+        result_bare = seam_mapping.SeamApplyResult(
+            requested=5,
+            unique=4,
+            applied=3,
+            ignored_non_original=1,
+            duplicates_skipped=1,
+        )
+        summary_bare = seam_mapping.format_apply_summary(result_bare)
+        self.assertIn('Marked 3 seam edges.', summary_bare)
+        self.assertIn('Ignored 1 triangulation-only edges.', summary_bare)
+        self.assertIn('Skipped 1 duplicates.', summary_bare)
+        self.assertNotIn('Bridge:', summary_bare)
+        self.assertNotIn('Gap fill:', summary_bare)
+
+        result_bridge = seam_mapping.SeamApplyResult(
+            requested=2,
+            unique=2,
+            applied=2,
+            ignored_non_original=0,
+            duplicates_skipped=0,
+            accepted_bridge_edges_present_in_json=3,
+            accepted_bridge_edges_applied=2,
+            accepted_bridge_edges_ignored_non_original=1,
+        )
+        summary_bridge = seam_mapping.format_apply_summary(result_bridge)
+        self.assertIn('Bridge: 3 accepted in JSON, 2 applied, 1 ignored as non-original.', summary_bridge)
+
+        result_gap = seam_mapping.SeamApplyResult(
+            requested=2,
+            unique=2,
+            applied=2,
+            ignored_non_original=0,
+            duplicates_skipped=0,
+            editable_gap_fill_result={
+                'accepted_paths_count': 2,
+                'accepted_edges_count': 4,
+                'max_gap_hops': 2,
+            },
+        )
+        summary_gap = seam_mapping.format_apply_summary(result_gap)
+        self.assertIn('Gap fill: 2 paths filled, 4 edges added.', summary_gap)
+
+        result_no_gap = seam_mapping.SeamApplyResult(
             requested=1,
             unique=1,
             applied=1,
             ignored_non_original=0,
             duplicates_skipped=0,
-            blender_local_repair_enabled=True,
-            blender_local_repair_edges_marked=1,
-            blender_local_repair_edges_rejected=2,
-            blender_local_repair_allowed_candidates_total=1,
-            blender_local_repair_repair_over_cap=False,
-            human_case_2557_2558_found=True,
-            human_case_2557_2558_marked_seam=True,
-            human_case_2557_2558_degree_pattern=(2, 3),
-            blender_two_edge_repair_paths_marked=2,
-            blender_two_edge_repair_edges_marked=4,
-            blender_two_edge_repair_allowed_candidates_total=2,
-            blender_two_edge_repair_over_cap=False,
-            target_path_2045_2541_4884_found=True,
-            target_path_2045_2541_4884_marked=True,
-            target_path_2045_2541_4884_tangent_alignments=(0.42, 0.36),
-            target_path_2045_2541_4884_straightness=0.71,
-            target_path_2540_2541_2544_found=True,
-            target_path_2540_2541_2544_marked=True,
-            target_path_2540_2541_2544_tangent_alignments=(0.31, 0.28),
-            target_path_2540_2541_2544_straightness=0.62,
-            blender_two_edge_endpoint_bridge_paths_marked=2,
-            blender_two_edge_endpoint_bridge_edges_marked=4,
-            blender_two_edge_endpoint_bridge_raw_allowed_total=2,
-            blender_two_edge_endpoint_bridge_deduplicated_allowed_total=2,
-            blender_two_edge_endpoint_bridge_allowed_total=2,
-            blender_two_edge_endpoint_bridge_over_cap=False,
-            blender_two_edge_endpoint_bridge_selection_policy='top_k_ranked_continuity_tier_v2',
-            blender_two_edge_endpoint_bridge_human_paths_selected_by_rank=1,
-            blender_two_edge_endpoint_bridge_human_paths_skipped_below_threshold=1,
-            blender_two_edge_endpoint_bridge_human_path_reports=({'a': 1}, {'b': 2}),
+            editable_gap_fill_result={'accepted_paths_count': 0, 'accepted_edges_count': 0},
         )
+        self.assertNotIn('Gap fill:', seam_mapping.format_apply_summary(result_no_gap))
 
-        summary = seam_mapping.format_apply_summary(result)
-
-        self.assertIn('Local repair: 1 marked, 2 rejected, allowed=1, over_cap=false.', summary)
-        self.assertIn('Human case [2557,2558]: marked, degree=(2, 3).', summary)
-        self.assertIn('Two-edge repair: 2 paths marked, 4 edges marked, allowed=2, over_cap=false.', summary)
-        self.assertIn(
-            'Two-edge endpoint bridge: 2 paths marked, 4 edges marked, raw_allowed=2, '
-            'dedup_allowed=2, over_cap=false, policy=top_k_ranked_continuity_tier_v2.',
-            summary,
-        )
-        self.assertIn(
-            'Curved two-edge endpoint bridge: 0 paths marked, 0 edges marked, eligible=0, '
-            'over_cap=false, cap=6.',
-            summary,
-        )
-        self.assertIn(
-            'Tangent-audit endpoint bridge: 0 paths marked, 0 edges marked, eligible=0, '
-            'over_cap=false, cap=1.',
-            summary,
-        )
-        self.assertIn('Human Phase 2B.1 paths selected: 1/2.', summary)
-        self.assertIn('Human Phase 2B.1 paths skipped below rank threshold: 1/2.', summary)
-        self.assertIn(
-            'Target [2045,2541,4884]: marked, alignments=(0.42, 0.36), straightness=0.71.',
-            summary,
-        )
-        self.assertIn(
-            'Target [2540,2541,2544]: marked, alignments=(0.31, 0.28), straightness=0.62.',
-            summary,
-        )
+        for legacy_phrase in (
+            'Local repair:',
+            'Two-edge repair:',
+            'Two-edge endpoint bridge:',
+            'Curved two-edge endpoint bridge:',
+            'Tangent-audit endpoint bridge:',
+            'Human case [2557,2558]:',
+            'Human Phase 2B.1',
+            'Target [2045',
+        ):
+            self.assertNotIn(legacy_phrase, summary_bare)
 
     def test_topology_change_guard_blocks_stale_application(self):
         validation = load_module('uvsp_validation_smoke', ADDON_DIR / 'validation.py')
