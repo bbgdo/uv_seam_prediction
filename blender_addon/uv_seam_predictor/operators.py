@@ -61,7 +61,6 @@ def _resolved_run_settings(settings):
         postprocess_anchor_boundary=settings.postprocess_anchor_boundary,
         postprocess_fill_small_gaps=settings.postprocess_fill_small_gaps,
         postprocess_fill_gap_max_hops=settings.postprocess_fill_gap_max_hops,
-        postprocess_write_debug_sidecars=settings.postprocess_write_debug_sidecars,
         clear_existing_seams=settings.clear_existing_seams,
     )
 
@@ -210,90 +209,8 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
                 enable_local_repair=self._run_settings.use_post_processing,
                 fill_small_gaps=self._run_settings.postprocess_fill_small_gaps,
                 fill_gap_max_hops=self._run_settings.postprocess_fill_gap_max_hops,
-                collect_debug_diagnostics=self._run_settings.postprocess_write_debug_sidecars,
             )
             summary = seam_mapping.format_apply_summary(result)
-            if self._run_settings.postprocess_write_debug_sidecars:
-                debug_path = seam_mapping.write_bridge_apply_debug(self._job.json_path, result)
-                human_gap_path = seam_mapping.write_human_gap_classification(self._job.json_path, result)
-                residual_debug_path = seam_mapping.write_residual_gap_phase2e_debug(
-                    self._job.json_path,
-                    result,
-                )
-                residual_summary = seam_mapping.format_residual_gap_phase2e_summary(
-                    result.residual_gap_phase2e_debug or {},
-                    residual_debug_path,
-                )
-                ranking_debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
-                ranking_debug_path = seam_mapping.write_endpoint_bridge_ranking_debug(
-                    self._job.json_path,
-                    result,
-                )
-                ranking_summary = seam_mapping.format_endpoint_bridge_ranking_debug_summary(
-                    ranking_debug,
-                    ranking_debug_path,
-                )
-                rank_review = seam_mapping.build_rank_9_to_16_review(result)
-                rank_review_path = seam_mapping.write_rank_9_to_16_review(
-                    self._job.json_path,
-                    result,
-                )
-                rank_review_summary = seam_mapping.format_rank_9_to_16_review_summary(
-                    rank_review,
-                    rank_review_path,
-                )
-                general_candidates_path = seam_mapping.write_general_residual_candidates_phase2h(
-                    self._job.json_path,
-                    result,
-                )
-                general_candidates_summary = seam_mapping.format_general_residual_candidates_phase2h_summary(
-                    result.general_residual_candidates_phase2h or {},
-                    general_candidates_path,
-                )
-                unified_simulation_path = seam_mapping.write_unified_local_continuity_simulation_phase2h_r(
-                    self._job.json_path,
-                    result,
-                )
-                unified_simulation_summary = seam_mapping.format_unified_local_continuity_simulation_phase2h_r_summary(
-                    result.unified_local_continuity_simulation_phase2h_r or {},
-                    unified_simulation_path,
-                )
-                visual_review_path = seam_mapping.write_phase2h_r3_visual_review(
-                    self._job.json_path,
-                    result,
-                )
-                visual_review_summary = seam_mapping.format_phase2h_r3_visual_review_summary(
-                    result.phase2h_r3_visual_review or {},
-                    visual_review_path,
-                )
-                small_gap_simulation_path = seam_mapping.write_phase2j_r_small_gap_rule_simulation(
-                    self._job.json_path,
-                    result,
-                )
-                small_gap_simulation_summary = seam_mapping.format_phase2j_r_small_gap_rule_simulation_summary(
-                    result.phase2j_r_small_gap_rule_simulation or {},
-                    small_gap_simulation_path,
-                )
-                tangent_audit_path = seam_mapping.write_phase2k_r_tangent_audit_rescue(
-                    self._job.json_path,
-                    result,
-                )
-                tangent_audit_summary = seam_mapping.format_phase2k_r_tangent_audit_rescue_summary(
-                    result.phase2k_r_tangent_audit_rescue or {},
-                    tangent_audit_path,
-                )
-                summary = (
-                    f'{summary} Bridge apply debug: {debug_path}. '
-                    f'Human gap classification: {human_gap_path}. '
-                    f'{residual_summary}. '
-                    f'{ranking_summary}. '
-                    f'{rank_review_summary}. '
-                    f'{general_candidates_summary}. '
-                    f'{unified_simulation_summary}. '
-                    f'{visual_review_summary}. '
-                    f'{small_gap_simulation_summary}. '
-                    f'{tangent_audit_summary}'
-                )
         except Exception as exc:
             return self._finish(context, error=str(exc))
 

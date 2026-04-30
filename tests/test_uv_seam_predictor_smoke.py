@@ -467,97 +467,6 @@ def build_straight_tangent_weak_mesh(path=(100, 101, 102), *, alternative_suppor
     return FakeMesh(edges=edges, vertex_count=vertex_count, coords=coords), predicted_keys, path
 
 
-def rank_review_allowed_report(rank, path, *, human_labels=(), duplicate=False, weak=False, selected=False):
-    u, middle, v = path
-    tier = 3 if weak else 1
-    q_floor = 0.3 if weak else 0.8
-    q_sum = 0.8 if weak else 1.7
-    straightness = 0.3 if weak else 0.9
-    return {
-        'rank': rank,
-        'rank_v2': rank,
-        'path_vertex_ids': [u, middle, v],
-        'path_edge_keys': [[min(u, middle), max(u, middle)], [min(middle, v), max(middle, v)]],
-        'path_edge_indices_blender': [rank * 2, rank * 2 + 1],
-        'endpoint_pair_key': [min(u, v), max(u, v)],
-        'selected_for_marking': bool(selected),
-        'marked': bool(selected),
-        'skipped_reason': 'selected' if selected else (
-            'duplicate_endpoint_pair_suppressed' if duplicate else 'over_cap_ranked_below_threshold'
-        ),
-        'duplicate_endpoint_pair_suppressed': bool(duplicate),
-        'conflict_reason': None,
-        'continuity_tier': tier,
-        'q_floor': q_floor,
-        'q_sum': q_sum,
-        'total_path_length': 0.01 * rank,
-        'endpoint_distance': 0.008 * rank,
-        'path_straightness': straightness,
-        'endpoint_tangent_alignment_u': q_floor,
-        'endpoint_tangent_alignment_v': q_floor,
-        'min_endpoint_tangent_alignment': q_floor,
-        'degree_pattern': (1, 0, 1),
-        'component_ids_before': [rank, rank + 100],
-        'human_gap_match_labels': list(human_labels),
-        'old_validation_target_match_label': None,
-    }
-
-
-def build_rank_review_result(seam_mapping):
-    reports = [
-        rank_review_allowed_report(rank, (1000 + rank * 10, 1001 + rank * 10, 1002 + rank * 10), selected=True)
-        for rank in range(1, 9)
-    ]
-    reports.extend([
-        rank_review_allowed_report(9, (5149, 3003, 3005), human_labels=('8a',), selected=True),
-        rank_review_allowed_report(10, (5149, 5103, 3005), human_labels=('8b',), duplicate=True),
-        rank_review_allowed_report(11, (3006, 3008, 3039), human_labels=('9',), weak=True),
-    ])
-    reports.extend(
-        rank_review_allowed_report(rank, (2000 + rank * 10, 2001 + rank * 10, 2002 + rank * 10))
-        for rank in range(12, 17)
-    )
-    residual_paths = [
-        {
-            'label': '8a',
-            'path_vertex_ids': [5149, 3003, 3005],
-            'candidate_class_phase2e': 'already_marked_but_human_still_sees_gap',
-            'recommended_followup': 'review_phase_2b1_rank_9_to_16',
-        },
-        {
-            'label': '8b',
-            'path_vertex_ids': [5149, 5103, 3005],
-            'candidate_class_phase2e': 'phase_2b1_duplicate_suppressed',
-            'recommended_followup': 'review_phase_2b1_rank_9_to_16',
-        },
-        {
-            'label': '9',
-            'path_vertex_ids': [3006, 3008, 3039],
-            'candidate_class_phase2e': 'phase_2b1_rank_below_cap',
-            'recommended_followup': 'review_phase_2b1_rank_9_to_16',
-        },
-    ]
-    return seam_mapping.SeamApplyResult(
-        requested=0,
-        unique=0,
-        applied=0,
-        ignored_non_original=0,
-        duplicates_skipped=0,
-        blender_two_edge_endpoint_bridge_selection_policy='top_k_ranked_continuity_tier_v2',
-        blender_two_edge_endpoint_bridge_safety_cap=9,
-        blender_two_edge_endpoint_bridge_selected_rank_threshold=9,
-        blender_two_edge_endpoint_bridge_raw_allowed_total=16,
-        blender_two_edge_endpoint_bridge_deduplicated_allowed_total=15,
-        blender_two_edge_endpoint_bridge_paths_marked=9,
-        blender_two_edge_endpoint_bridge_allowed_candidate_reports=tuple(reports),
-        residual_gap_phase2e_debug={
-            'summary': {'residual_paths_total': 3},
-            'paths': residual_paths,
-            'read_only': True,
-        },
-    )
-
-
 class UVSeamPredictorSmokeTests(unittest.TestCase):
     def test_editable_gap_fill_fills_one_hop_gap(self):
         seam_mapping = load_module('uvsp_editable_gap_one_hop_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -1815,33 +1724,10 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(result.blender_curved_two_edge_endpoint_bridge_enabled)
         self.assertFalse(result.blender_tangent_audit_endpoint_bridge_enabled)
 
-    def test_debug_sidecar_property_defaults_off_and_is_exposed(self):
-        properties_source = read_addon_file('properties.py')
-        ui_source = read_addon_file('ui.py')
-        operators_source = read_addon_file('operators.py')
-
-        self.assertIn('postprocess_write_debug_sidecars', properties_source)
-        self.assertIn("name='Write Legacy Debug Sidecars'", properties_source)
-        self.assertIn('default=False', properties_source)
-        self.assertIn(
-            "description='Debug only: write legacy post-processing diagnostic JSON sidecars.'",
-            properties_source,
-        )
-        self.assertIn("legacy_box.label(text='Legacy / Debug')", ui_source)
-        self.assertIn("legacy_box.prop(settings, 'postprocess_write_debug_sidecars')", ui_source)
-        self.assertIn(
-            'postprocess_write_debug_sidecars=settings.postprocess_write_debug_sidecars',
-            operators_source,
-        )
-        self.assertIn(
-            'collect_debug_diagnostics=self._run_settings.postprocess_write_debug_sidecars',
-            operators_source,
-        )
-
     def test_editable_gap_hops_property_uses_soft_recommended_max_only(self):
         properties_source = read_addon_file('properties.py')
         start = properties_source.index('postprocess_fill_gap_max_hops')
-        end = properties_source.index('postprocess_write_debug_sidecars')
+        end = properties_source.index('manual_cleanup_max_dangling_edges')
         gap_hops_source = properties_source[start:end]
 
         self.assertIn('default=2', gap_hops_source)
@@ -2247,99 +2133,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('operators.UVSEAM_OT_mirror_current_seams_left_to_right', init_source)
         self.assertIn('operators.UVSEAM_OT_mirror_current_seams_right_to_left', init_source)
 
-    def test_apply_seam_keys_skips_legacy_debug_collectors_by_default(self):
-        seam_mapping = load_module('uvsp_debug_collectors_default_off_smoke', ADDON_DIR / 'seam_mapping.py')
-
-        def fail_debug_collector(*args, **kwargs):
-            raise AssertionError('legacy debug collector should not be called by default')
-
-        seam_mapping.classify_human_gap_regressions = fail_debug_collector
-        seam_mapping.classify_residual_gap_phase2e = fail_debug_collector
-        seam_mapping.collect_general_residual_candidates_phase2h = fail_debug_collector
-        seam_mapping.simulate_unified_local_continuity_phase2h_r = fail_debug_collector
-        seam_mapping.build_phase2h_r3_visual_review = fail_debug_collector
-        seam_mapping.simulate_phase2j_r_small_gap_rule = fail_debug_collector
-        seam_mapping.simulate_phase2k_r_tangent_audit_rescue = fail_debug_collector
-
-        result = seam_mapping.apply_seam_keys(
-            FakeMesh(edges=[(0, 1)], vertex_count=2),
-            [(0, 1)],
-            clear_existing=True,
-        )
-
-        self.assertIsNone(result.human_gap_classification)
-        self.assertIsNone(result.residual_gap_phase2e_debug)
-        self.assertIsNone(result.general_residual_candidates_phase2h)
-        self.assertIsNone(result.unified_local_continuity_simulation_phase2h_r)
-        self.assertIsNone(result.phase2h_r3_visual_review)
-        self.assertIsNone(result.phase2j_r_small_gap_rule_simulation)
-        self.assertIsNone(result.phase2k_r_tangent_audit_rescue)
-
-    def test_apply_seam_keys_debug_collectors_are_reachable_without_legacy_active_repair(self):
-        seam_mapping = load_module('uvsp_debug_collectors_enabled_smoke', ADDON_DIR / 'seam_mapping.py')
-
-        def fail_legacy(*args, **kwargs):
-            raise AssertionError('debug mode should not call legacy active repair')
-
-        calls = []
-
-        def record(name, payload):
-            def _inner(*args, **kwargs):
-                calls.append(name)
-                return payload
-            return _inner
-
-        seam_mapping.apply_two_edge_local_continuity_repair = fail_legacy
-        seam_mapping.apply_curved_two_edge_endpoint_bridge_repair = fail_legacy
-        seam_mapping.apply_tangent_audit_endpoint_bridge_rescue = fail_legacy
-        seam_mapping.classify_human_gap_regressions = record('human', {'name': 'human'})
-        seam_mapping.classify_residual_gap_phase2e = record('phase2e', {'name': 'phase2e'})
-        seam_mapping.collect_general_residual_candidates_phase2h = record('phase2h', {'name': 'phase2h'})
-        seam_mapping.simulate_unified_local_continuity_phase2h_r = record('phase2hr', {'name': 'phase2hr'})
-        seam_mapping.build_phase2h_r3_visual_review = record('phase2hr3', {'name': 'phase2hr3'})
-        seam_mapping.simulate_phase2j_r_small_gap_rule = record('phase2j', {'name': 'phase2j'})
-        seam_mapping.simulate_phase2k_r_tangent_audit_rescue = record('phase2k', {'name': 'phase2k'})
-
-        result = seam_mapping.apply_seam_keys(
-            FakeMesh(edges=[(0, 1)], vertex_count=2),
-            [(0, 1)],
-            clear_existing=True,
-            enable_local_repair=True,
-            collect_debug_diagnostics=True,
-        )
-
-        self.assertEqual(
-            calls,
-            ['human', 'phase2e', 'phase2h', 'phase2hr', 'phase2hr3', 'phase2j', 'phase2k'],
-        )
-        self.assertEqual(result.human_gap_classification, {'name': 'human'})
-        self.assertEqual(result.phase2k_r_tangent_audit_rescue, {'name': 'phase2k'})
-        self.assertFalse(result.blender_two_edge_repair_enabled)
-        self.assertFalse(result.blender_two_edge_endpoint_bridge_enabled)
-        self.assertFalse(result.blender_curved_two_edge_endpoint_bridge_enabled)
-        self.assertFalse(result.blender_tangent_audit_endpoint_bridge_enabled)
-
-    def test_operator_legacy_sidecar_writers_are_guarded_by_debug_setting(self):
-        operators_source = read_addon_file('operators.py')
-        guard = 'if self._run_settings.postprocess_write_debug_sidecars:'
-        guarded_source = operators_source[operators_source.index(guard):]
-        writer_names = (
-            'write_bridge_apply_debug',
-            'write_human_gap_classification',
-            'write_residual_gap_phase2e_debug',
-            'write_endpoint_bridge_ranking_debug',
-            'write_rank_9_to_16_review',
-            'write_general_residual_candidates_phase2h',
-            'write_unified_local_continuity_simulation_phase2h_r',
-            'write_phase2h_r3_visual_review',
-            'write_phase2j_r_small_gap_rule_simulation',
-            'write_phase2k_r_tangent_audit_rescue',
-        )
-
-        for writer_name in writer_names:
-            self.assertIn(f'seam_mapping.{writer_name}', guarded_source)
-            self.assertNotIn(f'seam_mapping.{writer_name}', operators_source[:operators_source.index(guard)])
-
     def test_feature_bundle_is_no_longer_part_of_cli_args(self):
         inference = load_module('uvsp_inference_smoke', ADDON_DIR / 'inference.py')
         prefs = SimpleNamespace(
@@ -2578,28 +2371,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(mesh.edges[6].use_seam)
         self.assertEqual(result.blender_two_edge_repair_paths_marked, 0)
 
-    def test_endpoint_bridge_ranking_debug_sidecar_is_read_only_and_has_no_probabilities(self):
-        seam_mapping = load_module('uvsp_endpoint_bridge_ranking_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            predicted_keys,
-            clear_existing=True,
-            enable_local_repair=True,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-        debug = seam_mapping.build_endpoint_bridge_ranking_debug(result)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_endpoint_bridge_ranking_debug(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_endpoint_bridge_ranking_debug.json'))
-        self.assertTrue(debug['read_only'])
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-        self.assertNotIn('probability', json.dumps(payload).lower())
-
     def test_human_gap_classifier_reports_editable_and_missing_edges(self):
         seam_mapping = load_module('uvsp_gap_classifier_edges_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=4)
@@ -2740,59 +2511,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             'improve_phase_2b_same_component_ranking',
         )
 
-    def test_human_gap_classifier_writes_sidecar_and_operator_flow_references_it(self):
-        seam_mapping = load_module('uvsp_gap_classifier_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        result = seam_mapping.SeamApplyResult(
-            requested=0,
-            unique=0,
-            applied=0,
-            ignored_non_original=0,
-            duplicates_skipped=0,
-            human_gap_classification={
-                'summary': {
-                    'total_paths_classified': 1,
-                    'recommended_next_action': 'no_dominant_class',
-                },
-                'paths': [],
-                'read_only': True,
-            },
-        )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_human_gap_classification(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_human_gap_classification.json'))
-        self.assertTrue(payload['read_only'])
-        self.assertIn('write_human_gap_classification', read_addon_file('operators.py'))
-
-    def test_phase2e_residual_sidecar_and_already_marked_classification(self):
-        seam_mapping = load_module('uvsp_phase2e_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh = FakeMesh(edges=[(234, 319), (319, 318), (318, 214)], vertex_count=400)
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            [(234, 319), (319, 318), (318, 214)],
-            clear_existing=True,
-            enable_local_repair=True,
-            collect_debug_diagnostics=True,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-        report = next(item for item in result.residual_gap_phase2e_debug['paths'] if item['label'] == '2')
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_residual_gap_phase2e_debug(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_residual_gap_phase2e_debug.json'))
-        self.assertTrue(payload['read_only'])
-        self.assertEqual(report['candidate_class_phase2e'], 'already_marked_but_human_still_sees_gap')
-        self.assertTrue(report['is_visual_or_apply_verification_issue'])
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-        self.assertIn('write_residual_gap_phase2e_debug', read_addon_file('operators.py'))
-
     def test_phase2e_residual_classifies_new_repair_classes_and_missing_edge(self):
         seam_mapping = load_module('uvsp_phase2e_new_classes_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(
@@ -2831,115 +2549,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             by_label['14a']['candidate_class_phase2e'],
             'non_original_or_missing_blender_edge',
         )
-
-    def test_phase2f_rank_review_sidecar_and_rank_window(self):
-        seam_mapping = load_module('uvsp_phase2f_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        result = build_rank_review_result(seam_mapping)
-        payload = seam_mapping.build_rank_9_to_16_review(result)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_rank_9_to_16_review(prediction_path, result)
-            sidecar_payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_rank_9_to_16_review.json'))
-        self.assertTrue(payload['read_only'])
-        self.assertTrue(sidecar_payload['read_only'])
-        self.assertEqual(
-            [report['rank_v2'] for report in payload['rank_9_to_16_candidates']],
-            list(range(9, 17)),
-        )
-        self.assertIn('write_rank_9_to_16_review', read_addon_file('operators.py'))
-
-    def test_phase2f_hypothetical_cap_summaries_and_duplicate_exclusion(self):
-        seam_mapping = load_module('uvsp_phase2f_caps_smoke', ADDON_DIR / 'seam_mapping.py')
-        payload = seam_mapping.build_rank_9_to_16_review(build_rank_review_result(seam_mapping))
-        summaries = {
-            item['hypothetical_cap']: item
-            for item in payload['hypothetical_cap_summaries']
-        }
-
-        self.assertEqual(set(summaries), {8, 9, 10, 12, 16})
-        self.assertEqual(summaries[9]['risk_summary'], 'current')
-        self.assertEqual(summaries[9]['additional_candidates_selected'], 0)
-        self.assertEqual(summaries[8]['additional_candidates_selected'], 0)
-        self.assertEqual(summaries[10]['additional_candidates_selected'], 1)
-        self.assertEqual(summaries[10]['additional_duplicate_candidates_selected'], 0)
-        self.assertNotIn([5149, 5103, 3005], summaries[10]['path_vertex_ids_added'])
-
-    def test_phase2f_review_classifies_rank9_duplicate_weak_and_nonhuman(self):
-        seam_mapping = load_module('uvsp_phase2f_classes_smoke', ADDON_DIR / 'seam_mapping.py')
-        payload = seam_mapping.build_rank_9_to_16_review(build_rank_review_result(seam_mapping))
-        by_rank = {
-            report['rank_v2']: report
-            for report in payload['rank_9_to_16_candidates']
-        }
-
-        self.assertEqual(by_rank[9]['candidate_review_class'], 'strong_human_rank_below_cap')
-        self.assertTrue(by_rank[9]['would_be_selected_if_cap_9'])
-        self.assertTrue(by_rank[9]['selected_for_marking'])
-        self.assertEqual(by_rank[9]['visual_review_priority'], 'high')
-        self.assertEqual(by_rank[10]['candidate_review_class'], 'duplicate_alternative')
-        self.assertFalse(by_rank[10]['would_be_selected_if_cap_10'])
-        self.assertEqual(by_rank[11]['candidate_review_class'], 'weak_geometry_rank_below_cap')
-        self.assertEqual(by_rank[12]['candidate_review_class'], 'non_human_rank_below_cap')
-
-    def test_phase2f_special_5149_report_and_recommendation(self):
-        seam_mapping = load_module('uvsp_phase2f_special_smoke', ADDON_DIR / 'seam_mapping.py')
-        payload = seam_mapping.build_rank_9_to_16_review(build_rank_review_result(seam_mapping))
-        special = payload['special_reports']['path_5149_3003_3005']
-        summary = payload['summary']
-
-        self.assertTrue(special['found_in_review'])
-        self.assertEqual(special['rank_v2'], 9)
-        self.assertEqual(special['continuity_tier'], 1)
-        self.assertEqual(special['rank_delta_from_cap'], 0)
-        self.assertFalse(special['is_highest_ranked_unselected_human_candidate'])
-        self.assertTrue(special['would_be_selected_if_cap_9'])
-        self.assertFalse(special['duplicate_endpoint_pair_suppressed'])
-        self.assertEqual(special['visual_review_priority'], 'high')
-        self.assertEqual(summary['recommended_next_action'], 'do_not_increase_cap_due_to_weak_candidates')
-        self.assertEqual(summary['human_matched_review_candidates'], 3)
-        self.assertEqual(summary['duplicate_suppressed_review_candidates'], 1)
-        self.assertEqual(summary['weak_geometry_review_candidates'], 1)
-
-    def test_phase2f_review_is_read_only_for_mesh_flags(self):
-        seam_mapping = load_module('uvsp_phase2f_readonly_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            predicted_keys,
-            clear_existing=True,
-            enable_local_repair=True,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-
-        seam_mapping.build_rank_9_to_16_review(result)
-
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-
-    def test_phase2h_sidecar_is_emitted_and_read_only(self):
-        seam_mapping = load_module('uvsp_phase2h_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=3)
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            [(0, 1)],
-            clear_existing=True,
-            enable_local_repair=False,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_general_residual_candidates_phase2h(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_general_residual_candidates_phase2h.json'))
-        self.assertTrue(payload['read_only'])
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-        self.assertIn('write_general_residual_candidates_phase2h', read_addon_file('operators.py'))
 
     def test_phase2h_collects_length1_length2_length3_and_missing_residuals(self):
         seam_mapping = load_module('uvsp_phase2h_classes_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -3426,43 +3035,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertNotIn('probability_score', text)
         self.assertFalse(payload['probabilities_used'])
 
-    def test_phase2hr3_visual_review_sidecar_is_emitted_and_read_only(self):
-        seam_mapping = load_module('uvsp_phase2hr3_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            predicted_keys,
-            clear_existing=True,
-            enable_local_repair=True,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_phase2h_r3_visual_review(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_phase2h_r3_visual_review.json'))
-        self.assertEqual(payload['phase'], '2H-R.3')
-        self.assertEqual(payload['name'], 'visual_review_local_continuity_candidates')
-        self.assertTrue(payload['read_only'])
-        self.assertTrue(payload['seam_flags_unchanged'])
-        self.assertTrue(payload['not_applied_to_mesh'])
-        self.assertFalse(payload['probabilities_used'])
-        self.assertTrue(payload['diagnostic_paths_are_labels_only'])
-        self.assertFalse(payload['active_phase2j_allowed'])
-        self.assertEqual(
-            payload['source_simulation_sidecar'],
-            'prediction_unified_local_continuity_simulation_phase2h_r.json',
-        )
-        self.assertTrue(payload['compact_sidecar'])
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-        self.assertIn('write_phase2k_r_tangent_audit_rescue', read_addon_file('operators.py'))
-        self.assertIn('normalized_decision_summary', payload)
-        self.assertIn('compactness_summary', payload)
-        self.assertIn('write_phase2h_r3_visual_review', read_addon_file('operators.py'))
-
     def test_phase2hr3_reports_low_straightness_selected_candidates(self):
         seam_mapping = load_module('uvsp_phase2hr3_low_straightness_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(
@@ -3672,39 +3244,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
         self.assertFalse(with_label['probabilities_used'])
         self.assertFalse(with_label['active_phase2j_allowed'])
-
-    def test_phase2jr_small_gap_sidecar_is_emitted_and_read_only(self):
-        seam_mapping = load_module('uvsp_phase2jr_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh, predicted_keys, _ = build_endpoint_bridge_mesh()
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            predicted_keys,
-            clear_existing=True,
-            enable_local_repair=True,
-            collect_debug_diagnostics=True,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_phase2j_r_small_gap_rule_simulation(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_phase2j_r_small_gap_rule_simulation.json'))
-        self.assertEqual(payload['phase'], '2J-R')
-        self.assertEqual(payload['name'], 'small_local_gap_closure_rule_simulation_v2')
-        self.assertTrue(payload['read_only'])
-        self.assertTrue(payload['seam_flags_unchanged'])
-        self.assertTrue(payload['not_applied_to_mesh'])
-        self.assertFalse(payload['probabilities_used'])
-        self.assertTrue(payload['diagnostic_paths_are_labels_only'])
-        self.assertTrue(payload['active_phase2j_allowed_means_review_only'])
-        self.assertTrue(payload['compact_sidecar'])
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-        self.assertIn('decision_summary', payload)
-        self.assertIn('compactness_summary', payload)
-        self.assertIn('write_phase2j_r_small_gap_rule_simulation', read_addon_file('operators.py'))
 
     def test_phase2jr_curved_candidates_require_strict_guards(self):
         seam_mapping = load_module('uvsp_phase2jr_curved_smoke', ADDON_DIR / 'seam_mapping.py')
@@ -4195,35 +3734,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         ].default, 6)
         self.assertNotIn('target_paths', inspect.signature(seam_mapping.apply_two_edge_local_continuity_repair).parameters)
 
-    def test_phase2k_r_tangent_audit_sidecar_is_emitted_and_read_only(self):
-        seam_mapping = load_module('uvsp_phase2kr_sidecar_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh, predicted_keys, _ = build_straight_tangent_weak_mesh(alternative_support=True)
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            predicted_keys,
-            clear_existing=True,
-            enable_local_repair=False,
-        )
-        flags_before = [edge.use_seam for edge in mesh.edges]
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            prediction_path = str(Path(temp_dir) / 'prediction.json')
-            Path(prediction_path).write_text('{}', encoding='utf-8')
-            sidecar = seam_mapping.write_phase2k_r_tangent_audit_rescue(prediction_path, result)
-            payload = json.loads(Path(sidecar).read_text(encoding='utf-8'))
-
-        self.assertTrue(sidecar.endswith('_phase2k_r_tangent_audit_rescue.json'))
-        self.assertEqual(payload['phase'], '2K-R')
-        self.assertEqual(payload['name'], 'straight_tangent_weak_rescue_audit')
-        self.assertTrue(payload['read_only'])
-        self.assertTrue(payload['seam_flags_unchanged'])
-        self.assertTrue(payload['not_applied_to_mesh'])
-        self.assertFalse(payload['probabilities_used'])
-        self.assertTrue(payload['diagnostic_paths_are_labels_only'])
-        self.assertTrue(payload['active_phase2k_allowed_means_review_only'])
-        self.assertTrue(payload['compact_sidecar'])
-        self.assertEqual([edge.use_seam for edge in mesh.edges], flags_before)
-
     def test_phase2k_r_reports_straight_one_sided_weak_candidates_without_audit_evidence(self):
         seam_mapping = load_module('uvsp_phase2kr_inconclusive_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh, predicted_keys, path = build_straight_tangent_weak_mesh()
@@ -4365,24 +3875,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             report['path_vertex_ids'] == [5477, 5520, 5483]
             for report in payload['tangent_audit_candidates']
         ))
-
-    def test_phase2k_r_phase2j_compact_audit_and_existing_caps_remain_intact(self):
-        seam_mapping = load_module('uvsp_phase2kr_phase2j_audit_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh, predicted_keys, _ = build_curved_endpoint_bridge_mesh()
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            predicted_keys,
-            clear_existing=True,
-            enable_local_repair=True,
-            collect_debug_diagnostics=True,
-        )
-        audit = result.phase2k_r_tangent_audit_rescue['phase2j_curved_repair_compact_audit']
-
-        self.assertEqual(audit['curved_safety_cap'], 6)
-        self.assertEqual(audit['curved_paths_marked'], result.blender_curved_two_edge_endpoint_bridge_paths_marked)
-        self.assertIn('integrity_flags', audit)
-        self.assertFalse(audit['integrity_flags']['probabilities_used_for_curved_repair'])
-        self.assertFalse(audit['integrity_flags']['phase2j_curved_repair_uses_hardcoded_paths'])
 
     def test_phase2k_tangent_audit_rescue_marks_generic_supported_candidate(self):
         seam_mapping = load_module('uvsp_phase2k_active_mark_smoke', ADDON_DIR / 'seam_mapping.py')

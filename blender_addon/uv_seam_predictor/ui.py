@@ -82,7 +82,6 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         legacy_box.enabled = settings.use_post_processing
         legacy_box.prop(settings, 'postprocess_tau_high')
         legacy_box.prop(settings, 'postprocess_epsilon')
-        legacy_box.prop(settings, 'postprocess_write_debug_sidecars')
 
         actions = layout.box()
         actions.label(text='Actions')

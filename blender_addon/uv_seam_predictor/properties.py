@@ -88,11 +88,6 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         description='Maximum editable mesh edge hops for Blender-side gap filling. '
                     '3 is recommended; higher values may over-connect seams.',
     )
-    postprocess_write_debug_sidecars: bpy.props.BoolProperty(
-        name='Write Legacy Debug Sidecars',
-        default=False,
-        description='Debug only: write legacy post-processing diagnostic JSON sidecars.',
-    )
     manual_cleanup_max_dangling_edges: bpy.props.IntProperty(
         name='Max Dangling Length',
         default=1,
