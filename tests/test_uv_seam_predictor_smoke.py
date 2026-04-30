@@ -707,6 +707,179 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(mesh.edges[3].use_seam)
         self.assertGreaterEqual(result['rejected_endpoint_to_existing_same_component'], 1)
 
+    def test_editable_gap_fill_closes_one_edge_same_component_endpoint_loop_gap(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_one_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (0, 6)],
+            vertex_count=7,
+        )
+        for index in range(6):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['endpoint_loop_closure_candidates'], 1)
+        self.assertEqual(result['endpoint_loop_closure_accepted'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'endpoint_to_endpoint')
+        self.assertTrue(result['accepted_paths'][0]['same_component_loop_closure'])
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 6])
+        self.assertTrue(mesh.edges[6].use_seam)
+
+    def test_editable_gap_fill_closes_two_edge_same_component_endpoint_loop_gap(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_two_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6),
+                (0, 7), (7, 6),
+            ],
+            vertex_count=8,
+        )
+        for index in range(6):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['endpoint_loop_closure_accepted'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'endpoint_to_endpoint')
+        self.assertTrue(result['accepted_paths'][0]['same_component_loop_closure'])
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 7, 6])
+        self.assertTrue(mesh.edges[6].use_seam)
+        self.assertTrue(mesh.edges[7].use_seam)
+
+    def test_editable_gap_fill_closes_same_component_endpoint_to_degree_two_vertex(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_degree_two_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7),
+                (0, 6),
+            ],
+            vertex_count=8,
+        )
+        for index in range(7):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['endpoint_to_existing_loop_closure_candidates'], 1)
+        self.assertEqual(result['endpoint_to_existing_loop_closure_accepted'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'endpoint_to_existing_seam_vertex')
+        self.assertTrue(result['accepted_paths'][0]['same_component_loop_closure'])
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 6])
+        self.assertTrue(mesh.edges[7].use_seam)
+
+    def test_editable_gap_fill_closes_same_component_endpoint_to_junction(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_junction_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6),
+                (6, 7), (6, 8), (0, 6),
+            ],
+            vertex_count=9,
+        )
+        for index in range(8):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['endpoint_to_existing_loop_closure_accepted'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'endpoint_to_existing_seam_vertex')
+        self.assertTrue(result['accepted_paths'][0]['same_component_loop_closure'])
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 6])
+        self.assertTrue(mesh.edges[8].use_seam)
+
+    def test_editable_gap_fill_same_component_endpoint_loop_three_hops_respects_limit(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_three_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6),
+                (0, 7), (7, 8), (8, 6),
+            ],
+            vertex_count=9,
+        )
+        for index in range(6):
+            mesh.edges[index].use_seam = True
+
+        blocked = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+        self.assertEqual(blocked['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[6].use_seam)
+        self.assertFalse(mesh.edges[7].use_seam)
+        self.assertFalse(mesh.edges[8].use_seam)
+
+        filled = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=3)
+        self.assertEqual(filled['accepted_paths_count'], 1)
+        self.assertEqual(filled['endpoint_loop_closure_accepted'], 1)
+        self.assertEqual(filled['accepted_paths'][0]['kind'], 'endpoint_to_endpoint')
+        self.assertTrue(filled['accepted_paths'][0]['same_component_loop_closure'])
+        self.assertEqual(filled['accepted_paths'][0]['vertices'], [0, 7, 8, 6])
+        self.assertTrue(mesh.edges[6].use_seam)
+        self.assertTrue(mesh.edges[7].use_seam)
+        self.assertTrue(mesh.edges[8].use_seam)
+
+    def test_editable_gap_fill_rejects_tiny_same_component_endpoint_shortcut(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_tiny_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (2, 3), (0, 3)], vertex_count=4)
+        for index in range(3):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[3].use_seam)
+        self.assertGreaterEqual(result['rejected_endpoint_same_component_too_short'], 1)
+
+    def test_editable_gap_fill_rejects_tiny_same_component_endpoint_to_degree_two_shortcut(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_tiny_degree_two_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (2, 3), (0, 2)], vertex_count=4)
+        for index in range(3):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[3].use_seam)
+        self.assertGreaterEqual(result['rejected_endpoint_to_existing_same_component_too_short'], 1)
+
+    def test_editable_gap_fill_same_component_endpoint_closure_rejects_internal_seam_vertex(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_internal_seam_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6),
+                (0, 3), (3, 6),
+            ],
+            vertex_count=7,
+        )
+        for index in range(6):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[6].use_seam)
+        self.assertFalse(mesh.edges[7].use_seam)
+        self.assertGreaterEqual(result['rejected_internal_seam_vertex'], 1)
+
+    def test_editable_gap_fill_same_component_endpoint_closure_rejects_existing_seam_edge(self):
+        seam_mapping = load_module('uvsp_editable_gap_endpoint_loop_existing_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6),
+                (0, 3),
+            ],
+            vertex_count=7,
+        )
+        for index in range(6):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=3)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[6].use_seam)
+        self.assertGreaterEqual(result['rejected_existing_seam_internal'], 1)
+
     def test_editable_gap_fill_rejects_internal_existing_seam_vertex(self):
         seam_mapping = load_module('uvsp_editable_gap_internal_seam_vertex_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(
@@ -866,6 +1039,197 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertTrue(mesh.edges[6].use_seam)
         self.assertFalse(mesh.edges[4].use_seam)
         self.assertFalse(mesh.edges[5].use_seam)
+
+    def test_editable_gap_fill_fills_one_hop_junction_gap(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_one_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (0, 2), (0, 3), (4, 5), (4, 6), (0, 4)],
+            vertex_count=7,
+        )
+        for index in range(5):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['junction_gap_candidates'], 1)
+        self.assertEqual(result['junction_gap_accepted'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'junction_gap_closure')
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 4])
+        self.assertTrue(mesh.edges[5].use_seam)
+
+    def test_editable_gap_fill_fills_two_hop_junction_gap_when_allowed(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_two_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (0, 2), (0, 3), (5, 6), (5, 7), (0, 4), (4, 5)],
+            vertex_count=8,
+        )
+        for index in range(5):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['junction_gap_accepted'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'junction_gap_closure')
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 4, 5])
+        self.assertTrue(mesh.edges[5].use_seam)
+        self.assertTrue(mesh.edges[6].use_seam)
+
+    def test_editable_gap_fill_three_hop_junction_gap_respects_limit(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_three_hop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (0, 2), (0, 3), (6, 7), (6, 8), (0, 4), (4, 5), (5, 6)],
+            vertex_count=9,
+        )
+        for index in range(5):
+            mesh.edges[index].use_seam = True
+
+        blocked = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+        self.assertEqual(blocked['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[5].use_seam)
+        self.assertFalse(mesh.edges[6].use_seam)
+        self.assertFalse(mesh.edges[7].use_seam)
+
+        filled = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=3)
+        self.assertEqual(filled['accepted_paths_count'], 1)
+        self.assertEqual(filled['accepted_paths'][0]['kind'], 'junction_gap_closure')
+        self.assertEqual(filled['accepted_paths'][0]['vertices'], [0, 4, 5, 6])
+        self.assertTrue(mesh.edges[5].use_seam)
+        self.assertTrue(mesh.edges[6].use_seam)
+        self.assertTrue(mesh.edges[7].use_seam)
+
+    def test_editable_gap_fill_junction_gap_requires_high_degree_endpoint(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_high_degree_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (0, 2), (3, 4), (3, 5), (0, 3)], vertex_count=6)
+        for index in range(4):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[4].use_seam)
+        self.assertGreaterEqual(result['rejected_junction_gap_no_high_degree_endpoint'], 1)
+
+    def test_editable_gap_fill_junction_gap_rejects_internal_seam_vertex(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_internal_seam_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (0, 2), (0, 8), (0, 11), (11, 3), (3, 9),
+                (5, 6), (5, 7), (0, 3), (3, 5),
+            ],
+            vertex_count=12,
+        )
+        for index in range(8):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[8].use_seam)
+        self.assertFalse(mesh.edges[9].use_seam)
+        self.assertGreaterEqual(result['rejected_junction_gap_internal_seam_vertex'], 1)
+
+    def test_editable_gap_fill_junction_gap_rejects_existing_seam_edge_in_path(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_existing_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (0, 2), (0, 8), (0, 11), (11, 3), (3, 9),
+                (3, 4), (4, 5), (0, 3),
+            ],
+            vertex_count=12,
+        )
+        for index in range(8):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[8].use_seam)
+        self.assertGreaterEqual(result['rejected_junction_gap_existing_seam_edge'], 1)
+
+    def test_editable_gap_fill_junction_same_component_loop_guard_accepts_large_loop(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_large_loop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6),
+                (0, 7), (0, 8), (6, 9), (0, 6),
+            ],
+            vertex_count=10,
+        )
+        for index in range(9):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'junction_gap_closure')
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 6])
+        self.assertTrue(mesh.edges[9].use_seam)
+
+    def test_editable_gap_fill_junction_same_component_loop_guard_rejects_tiny_chord(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_tiny_chord_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (1, 2), (2, 3), (0, 7), (0, 8), (3, 9), (0, 3)],
+            vertex_count=10,
+        )
+        for index in range(6):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 0)
+        self.assertFalse(mesh.edges[6].use_seam)
+        self.assertGreaterEqual(result['rejected_junction_gap_same_component_too_short'], 1)
+
+    def test_editable_gap_fill_junction_gap_does_not_consume_junction_endpoints(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_unconsumed_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (0, 2), (0, 3),
+                (4, 5), (4, 6),
+                (7, 8), (7, 9),
+                (0, 4), (0, 7),
+            ],
+            vertex_count=10,
+        )
+        for index in range(7):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=1)
+
+        self.assertEqual(result['accepted_paths_count'], 2)
+        self.assertEqual(result['junction_gap_accepted'], 2)
+        self.assertEqual(
+            [path['vertices'] for path in result['accepted_paths']],
+            [[0, 4], [0, 7]],
+        )
+        self.assertTrue(mesh.edges[7].use_seam)
+        self.assertTrue(mesh.edges[8].use_seam)
+
+    def test_editable_gap_fill_junction_gap_rejects_reserved_bridge_edge_conflict(self):
+        seam_mapping = load_module('uvsp_editable_gap_junction_reserved_conflict_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[
+                (0, 1), (0, 2), (0, 3),
+                (4, 5), (4, 6),
+                (7, 8), (7, 9),
+                (0, 10), (10, 4), (10, 7),
+            ],
+            vertex_count=11,
+        )
+        for index in range(7):
+            mesh.edges[index].use_seam = True
+
+        result = seam_mapping.apply_editable_shortest_path_gap_fill(mesh, max_gap_hops=2)
+
+        self.assertEqual(result['accepted_paths_count'], 1)
+        self.assertEqual(result['accepted_paths'][0]['kind'], 'junction_gap_closure')
+        self.assertEqual(result['accepted_paths'][0]['vertices'], [0, 10, 4])
+        self.assertGreaterEqual(result['rejected_junction_gap_reserved_edge'], 1)
+        self.assertTrue(mesh.edges[7].use_seam)
+        self.assertTrue(mesh.edges[8].use_seam)
+        self.assertFalse(mesh.edges[9].use_seam)
 
     def test_dangling_cleanup_removes_one_edge_endpoint_to_junction_spur(self):
         seam_mapping = load_module('uvsp_dangling_cleanup_one_edge_smoke', ADDON_DIR / 'seam_mapping.py')

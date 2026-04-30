@@ -241,19 +241,31 @@ def apply_editable_shortest_path_gap_fill(
     counters = {
         'rejected_same_component': 0,
         'rejected_endpoint_to_existing_same_component': 0,
+        'rejected_endpoint_same_component_too_short': 0,
+        'rejected_endpoint_to_existing_same_component_too_short': 0,
+        'rejected_same_component_no_existing_path': 0,
         'rejected_existing_seam_internal': 0,
         'rejected_internal_seam_vertex': 0,
         'rejected_no_path': 0,
+        'rejected_junction_gap_no_high_degree_endpoint': 0,
+        'rejected_junction_gap_same_component_too_short': 0,
+        'rejected_junction_gap_internal_seam_vertex': 0,
+        'rejected_junction_gap_existing_seam_edge': 0,
+        'rejected_junction_gap_reserved_edge': 0,
     }
     candidates = []
 
     def add_candidate(start, target, kind):
         same_component = component_id_of.get(start) == component_id_of.get(target)
-        if same_component and not allow_same_component:
-            counters['rejected_same_component'] += 1
-            if kind == 'endpoint_to_existing_seam_vertex':
-                counters['rejected_endpoint_to_existing_same_component'] += 1
-            return
+        is_junction_gap = kind == 'junction_gap_closure'
+        is_endpoint_loop_candidate = (
+            same_component
+            and kind in ('endpoint_to_endpoint', 'endpoint_to_existing_seam_vertex')
+        )
+        if is_junction_gap:
+            if max(int(seam_degree.get(start, 0)), int(seam_degree.get(target, 0))) < 3:
+                counters['rejected_junction_gap_no_high_degree_endpoint'] += 1
+                return
 
         paths = _bounded_editable_paths(adjacency, start, target, max_hops)
         if not paths:
@@ -265,17 +277,37 @@ def apply_editable_shortest_path_gap_fill(
             path_edges = _path_edge_keys(path)
             if any(bool(edge_by_key[edge_key][1].use_seam) for edge_key in path_edges):
                 counters['rejected_existing_seam_internal'] += 1
+                if is_junction_gap:
+                    counters['rejected_junction_gap_existing_seam_edge'] += 1
                 continue
             if any(int(vertex) in seam_vertices for vertex in path[1:-1]):
                 counters['rejected_internal_seam_vertex'] += 1
+                if is_junction_gap:
+                    counters['rejected_junction_gap_internal_seam_vertex'] += 1
                 continue
             if same_component:
                 seam_distance = _shortest_seam_path_length(seam_adjacency, start, target)
-                if seam_distance is None or seam_distance + len(path_edges) < min_loop:
-                    counters['rejected_same_component'] += 1
-                    if kind == 'endpoint_to_existing_seam_vertex':
-                        counters['rejected_endpoint_to_existing_same_component'] += 1
-                    continue
+                if is_junction_gap:
+                    min_existing_seam_distance = max(6, max_hops + 3)
+                    if seam_distance is None or seam_distance < min_existing_seam_distance:
+                        counters['rejected_junction_gap_same_component_too_short'] += 1
+                        continue
+                else:
+                    min_existing_seam_distance = max(6, max_hops + 3)
+                    if seam_distance is None:
+                        counters['rejected_same_component'] += 1
+                        counters['rejected_same_component_no_existing_path'] += 1
+                        if kind == 'endpoint_to_existing_seam_vertex':
+                            counters['rejected_endpoint_to_existing_same_component'] += 1
+                        continue
+                    if seam_distance < min_existing_seam_distance:
+                        counters['rejected_same_component'] += 1
+                        if kind == 'endpoint_to_endpoint':
+                            counters['rejected_endpoint_same_component_too_short'] += 1
+                        if kind == 'endpoint_to_existing_seam_vertex':
+                            counters['rejected_endpoint_to_existing_same_component'] += 1
+                            counters['rejected_endpoint_to_existing_same_component_too_short'] += 1
+                        continue
             valid_paths.append(path)
 
         if not valid_paths:
@@ -288,7 +320,14 @@ def apply_editable_shortest_path_gap_fill(
                 tuple(path),
             ),
         )
-        candidates.append(_editable_gap_candidate(mesh, best_path, kind, start, target))
+        candidates.append(_editable_gap_candidate(
+            mesh,
+            best_path,
+            kind,
+            start,
+            target,
+            same_component_loop_closure=bool(is_endpoint_loop_candidate),
+        ))
 
     for left_index, left in enumerate(endpoints):
         for right in endpoints[left_index + 1:]:
@@ -298,11 +337,24 @@ def apply_editable_shortest_path_gap_fill(
         for target in existing_seam_targets:
             add_candidate(start, target, 'endpoint_to_existing_seam_vertex')
 
+    junction_gap_vertices = sorted(
+        vertex for vertex, degree in seam_degree.items()
+        if int(degree) >= 2
+    )
+    for left_index, left in enumerate(junction_gap_vertices):
+        for right in junction_gap_vertices[left_index + 1:]:
+            add_candidate(left, right, 'junction_gap_closure')
+
+    kind_priority = {
+        'endpoint_to_endpoint': 0,
+        'endpoint_to_existing_seam_vertex': 1,
+        'junction_gap_closure': 2,
+    }
     candidates.sort(
         key=lambda item: (
             item['hop_count'],
             item['total_length'],
-            0 if item['kind'] == 'endpoint_to_endpoint' else 1,
+            kind_priority.get(item['kind'], 99),
             item['start_vertex'],
             item['target_vertex'],
             tuple(item['vertices']),
@@ -321,7 +373,10 @@ def apply_editable_shortest_path_gap_fill(
             rejected_conflict_consumed_endpoint += 1
             continue
         if edge_keys & reserved_edges:
-            rejected_conflict_consumed_endpoint += 1
+            if candidate['kind'] == 'junction_gap_closure':
+                counters['rejected_junction_gap_reserved_edge'] += 1
+            else:
+                rejected_conflict_consumed_endpoint += 1
             continue
         for edge_key in edge_keys:
             edge_by_key[edge_key][1].use_seam = True
@@ -338,6 +393,42 @@ def apply_editable_shortest_path_gap_fill(
         1 for candidate in accepted_paths
         if candidate['kind'] == 'endpoint_to_existing_seam_vertex'
     )
+    endpoint_loop_closure_candidates = sum(
+        1 for candidate in candidates
+        if (
+            candidate['kind'] == 'endpoint_to_endpoint'
+            and candidate.get('same_component_loop_closure')
+        )
+    )
+    endpoint_loop_closure_accepted = sum(
+        1 for candidate in accepted_paths
+        if (
+            candidate['kind'] == 'endpoint_to_endpoint'
+            and candidate.get('same_component_loop_closure')
+        )
+    )
+    endpoint_to_existing_loop_closure_candidates = sum(
+        1 for candidate in candidates
+        if (
+            candidate['kind'] == 'endpoint_to_existing_seam_vertex'
+            and candidate.get('same_component_loop_closure')
+        )
+    )
+    endpoint_to_existing_loop_closure_accepted = sum(
+        1 for candidate in accepted_paths
+        if (
+            candidate['kind'] == 'endpoint_to_existing_seam_vertex'
+            and candidate.get('same_component_loop_closure')
+        )
+    )
+    junction_gap_candidates = sum(
+        1 for candidate in candidates
+        if candidate['kind'] == 'junction_gap_closure'
+    )
+    junction_gap_accepted = sum(
+        1 for candidate in accepted_paths
+        if candidate['kind'] == 'junction_gap_closure'
+    )
     return {
         'enabled': True,
         'max_gap_hops': max_hops,
@@ -346,15 +437,45 @@ def apply_editable_shortest_path_gap_fill(
         'candidates_total': len(candidates),
         'endpoint_to_existing_seam_candidates': endpoint_to_existing_candidates,
         'endpoint_to_existing_seam_accepted': endpoint_to_existing_accepted,
+        'endpoint_loop_closure_candidates': endpoint_loop_closure_candidates,
+        'endpoint_loop_closure_accepted': endpoint_loop_closure_accepted,
+        'endpoint_to_existing_loop_closure_candidates': endpoint_to_existing_loop_closure_candidates,
+        'endpoint_to_existing_loop_closure_accepted': endpoint_to_existing_loop_closure_accepted,
+        'junction_gap_candidates': junction_gap_candidates,
+        'junction_gap_accepted': junction_gap_accepted,
         'accepted_paths_count': len(accepted_paths),
         'accepted_edges_count': len(accepted_edge_keys),
         'rejected_same_component': counters['rejected_same_component'],
         'rejected_endpoint_to_existing_same_component': counters[
             'rejected_endpoint_to_existing_same_component'
         ],
+        'rejected_endpoint_same_component_too_short': counters[
+            'rejected_endpoint_same_component_too_short'
+        ],
+        'rejected_endpoint_to_existing_same_component_too_short': counters[
+            'rejected_endpoint_to_existing_same_component_too_short'
+        ],
+        'rejected_same_component_no_existing_path': counters[
+            'rejected_same_component_no_existing_path'
+        ],
         'rejected_existing_seam_internal': counters['rejected_existing_seam_internal'],
         'rejected_internal_seam_vertex': counters['rejected_internal_seam_vertex'],
         'rejected_conflict_consumed_endpoint': rejected_conflict_consumed_endpoint,
+        'rejected_junction_gap_no_high_degree_endpoint': counters[
+            'rejected_junction_gap_no_high_degree_endpoint'
+        ],
+        'rejected_junction_gap_same_component_too_short': counters[
+            'rejected_junction_gap_same_component_too_short'
+        ],
+        'rejected_junction_gap_internal_seam_vertex': counters[
+            'rejected_junction_gap_internal_seam_vertex'
+        ],
+        'rejected_junction_gap_existing_seam_edge': counters[
+            'rejected_junction_gap_existing_seam_edge'
+        ],
+        'rejected_junction_gap_reserved_edge': counters[
+            'rejected_junction_gap_reserved_edge'
+        ],
         'rejected_no_path': counters['rejected_no_path'],
         'accepted_paths': tuple(accepted_paths),
     }
@@ -369,13 +490,27 @@ def _editable_gap_fill_empty_result(enabled, max_gap_hops):
         'candidates_total': 0,
         'endpoint_to_existing_seam_candidates': 0,
         'endpoint_to_existing_seam_accepted': 0,
+        'endpoint_loop_closure_candidates': 0,
+        'endpoint_loop_closure_accepted': 0,
+        'endpoint_to_existing_loop_closure_candidates': 0,
+        'endpoint_to_existing_loop_closure_accepted': 0,
+        'junction_gap_candidates': 0,
+        'junction_gap_accepted': 0,
         'accepted_paths_count': 0,
         'accepted_edges_count': 0,
         'rejected_same_component': 0,
         'rejected_endpoint_to_existing_same_component': 0,
+        'rejected_endpoint_same_component_too_short': 0,
+        'rejected_endpoint_to_existing_same_component_too_short': 0,
+        'rejected_same_component_no_existing_path': 0,
         'rejected_existing_seam_internal': 0,
         'rejected_internal_seam_vertex': 0,
         'rejected_conflict_consumed_endpoint': 0,
+        'rejected_junction_gap_no_high_degree_endpoint': 0,
+        'rejected_junction_gap_same_component_too_short': 0,
+        'rejected_junction_gap_internal_seam_vertex': 0,
+        'rejected_junction_gap_existing_seam_edge': 0,
+        'rejected_junction_gap_reserved_edge': 0,
         'rejected_no_path': 0,
         'accepted_paths': tuple(),
     }
@@ -401,9 +536,9 @@ def _bounded_editable_paths(adjacency, source, target, max_hops):
     return paths
 
 
-def _editable_gap_candidate(mesh, path, kind, start, target):
+def _editable_gap_candidate(mesh, path, kind, start, target, *, same_component_loop_closure=False):
     edge_keys = _path_edge_keys(path)
-    consumed_endpoint_vertices = [int(start)]
+    consumed_endpoint_vertices = [] if kind == 'junction_gap_closure' else [int(start)]
     if kind == 'endpoint_to_endpoint':
         consumed_endpoint_vertices.append(int(target))
     return {
@@ -415,6 +550,7 @@ def _editable_gap_candidate(mesh, path, kind, start, target):
         'hop_count': len(edge_keys),
         'total_length': _editable_path_length(mesh, path),
         'consumed_endpoint_vertices': consumed_endpoint_vertices,
+        'same_component_loop_closure': bool(same_component_loop_closure),
     }
 
 
