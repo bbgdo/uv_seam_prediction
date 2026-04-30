@@ -8,7 +8,7 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         description='Path to the trained model weights file',
     )
     threshold: bpy.props.FloatProperty(
-        name='Raw Seam Threshold',
+        name='Inference Seam Threshold',
         default=0.75,
         min=0.0,
         max=1.0,
