@@ -106,6 +106,24 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         default=True,
         description='Do not remove dangling branches anchored at mesh boundary vertices.',
     )
+    manual_mirror_axis: bpy.props.EnumProperty(
+        name='Mirror Axis',
+        items=(
+            ('X', 'X', 'Local X axis'),
+            ('Y', 'Y', 'Local Y axis'),
+            ('Z', 'Z', 'Local Z axis'),
+        ),
+        default='X',
+        description='Local mesh axis used for manual seam mirroring.',
+    )
+    manual_mirror_tolerance: bpy.props.FloatProperty(
+        name='Mirror Tolerance',
+        default=1e-4,
+        min=1e-8,
+        soft_max=1e-2,
+        precision=6,
+        description='Coordinate tolerance used to match mirrored vertices in object-local space.',
+    )
     clear_existing_seams: bpy.props.BoolProperty(
         name='Clear Existing Seams',
         default=True,

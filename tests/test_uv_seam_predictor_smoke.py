@@ -105,6 +105,7 @@ def load_operators_module_with_fakes(name, *, active_obj):
     calls = {
         'gap_fill': [],
         'dangling_cleanup': [],
+        'seam_mirror': [],
         'inference': [],
         'export': [],
         'mode_set': mode_set.calls,
@@ -128,8 +129,23 @@ def load_operators_module_with_fakes(name, *, active_obj):
             'max_dangling_edges': int(kwargs['max_dangling_edges']),
         }
 
+    def fake_seam_mirror(mesh, **kwargs):
+        calls['seam_mirror'].append((mesh, kwargs))
+        return {
+            'mirrored_edges_added': 2,
+            'mirrored_edges_already_present': 1,
+            'source_seam_edges': 5,
+            'unmatched_vertices': 4,
+            'missing_mirrored_edges': 1,
+            'skipped_center_edges': 0,
+            'direction': kwargs['direction'],
+            'axis': kwargs['axis'],
+            'tolerance': float(kwargs['tolerance']),
+        }
+
     seam_mapping_module.apply_editable_shortest_path_gap_fill = fake_gap_fill
     seam_mapping_module.apply_editable_dangling_seam_cleanup = fake_dangling_cleanup
+    seam_mapping_module.apply_editable_seam_mirror = fake_seam_mirror
     sys.modules[f'{package_name}.seam_mapping'] = seam_mapping_module
 
     validation_module = ModuleType(f'{package_name}.validation')
@@ -1005,6 +1021,304 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(result['removed_branches_count'], 3)
         self.assertGreaterEqual(result['rejected_entire_component'], 1)
 
+    def test_seam_mirror_axis_x_negative_to_positive_mirrors_correctly(self):
+        seam_mapping = load_module('uvsp_seam_mirror_x_neg_to_pos_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+        before_edge_count = len(mesh.edges)
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertEqual(len(mesh.edges), before_edge_count)
+        self.assertTrue(mesh.edges[0].use_seam)
+        self.assertTrue(mesh.edges[1].use_seam)
+        self.assertEqual(result['source_seam_edges'], 1)
+        self.assertEqual(result['mirrored_edges_added'], 1)
+        self.assertEqual(result['mirrored_edges'][0]['mirrored_edge_key'], [2, 3])
+
+    def test_seam_mirror_axis_x_positive_to_negative_mirrors_correctly(self):
+        seam_mapping = load_module('uvsp_seam_mirror_x_pos_to_neg_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+        mesh.edges[1].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='POSITIVE_TO_NEGATIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertTrue(mesh.edges[0].use_seam)
+        self.assertTrue(mesh.edges[1].use_seam)
+        self.assertEqual(result['mirrored_edges_added'], 1)
+        self.assertEqual(result['mirrored_edges'][0]['mirrored_edge_key'], [0, 1])
+
+    def test_seam_mirror_axis_y_negative_to_positive_mirrors_correctly(self):
+        seam_mapping = load_module('uvsp_seam_mirror_y_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (0.0, -1.0, 0.0),
+                1: (1.0, -1.0, 0.0),
+                2: (0.0, 1.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='Y',
+            tolerance=1e-4,
+        )
+
+        self.assertTrue(mesh.edges[1].use_seam)
+        self.assertEqual(result['axis'], 'Y')
+        self.assertEqual(result['mirrored_edges_added'], 1)
+
+    def test_seam_mirror_axis_z_negative_to_positive_mirrors_correctly(self):
+        seam_mapping = load_module('uvsp_seam_mirror_z_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (0.0, 0.0, -1.0),
+                1: (1.0, 0.0, -1.0),
+                2: (0.0, 0.0, 1.0),
+                3: (1.0, 0.0, 1.0),
+            },
+        )
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='Z',
+            tolerance=1e-4,
+        )
+
+        self.assertTrue(mesh.edges[1].use_seam)
+        self.assertEqual(result['axis'], 'Z')
+        self.assertEqual(result['mirrored_edges_added'], 1)
+
+    def test_seam_mirror_is_additive_when_destination_already_seam(self):
+        seam_mapping = load_module('uvsp_seam_mirror_additive_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+        self.assertEqual(result['mirrored_edges_added'], 0)
+        self.assertEqual(result['mirrored_edges_already_present'], 1)
+
+    def test_seam_mirror_skips_center_plane_edges(self):
+        seam_mapping = load_module('uvsp_seam_mirror_center_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1)],
+            coords={
+                0: (0.0, 0.0, 0.0),
+                1: (0.0, 1.0, 0.0),
+            },
+        )
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertTrue(mesh.edges[0].use_seam)
+        self.assertEqual(result['source_seam_edges'], 0)
+        self.assertEqual(result['mirrored_edges_added'], 0)
+        self.assertEqual(result['skipped_center_edges'], 1)
+
+    def test_seam_mirror_skips_unmatched_vertices(self):
+        seam_mapping = load_module('uvsp_seam_mirror_unmatched_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            vertex_count=4,
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+            },
+        )
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertTrue(mesh.edges[0].use_seam)
+        self.assertFalse(mesh.edges[1].use_seam)
+        self.assertEqual(result['mirrored_edges_added'], 0)
+        self.assertEqual(result['unmatched_vertices'], 1)
+
+    def test_seam_mirror_skips_missing_mirrored_edge(self):
+        seam_mapping = load_module('uvsp_seam_mirror_missing_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+        before_edge_count = len(mesh.edges)
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertEqual(len(mesh.edges), before_edge_count)
+        self.assertTrue(mesh.edges[0].use_seam)
+        self.assertEqual(result['mirrored_edges_added'], 0)
+        self.assertEqual(result['missing_mirrored_edges'], 1)
+
+    def test_seam_mirror_tolerance_controls_vertex_matching(self):
+        seam_mapping = load_module('uvsp_seam_mirror_tolerance_smoke', ADDON_DIR / 'seam_mapping.py')
+        within = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.00005, 0.0, 0.0),
+                3: (1.00005, 1.0, 0.0),
+            },
+        )
+        within.edges[0].use_seam = True
+        within_result = seam_mapping.apply_editable_seam_mirror(
+            within,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        beyond = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.001, 0.0, 0.0),
+                3: (1.001, 1.0, 0.0),
+            },
+        )
+        beyond.edges[0].use_seam = True
+        beyond_result = seam_mapping.apply_editable_seam_mirror(
+            beyond,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertEqual(within_result['mirrored_edges_added'], 1)
+        self.assertTrue(within.edges[1].use_seam)
+        self.assertEqual(beyond_result['mirrored_edges_added'], 0)
+        self.assertEqual(beyond_result['unmatched_vertices'], 1)
+        self.assertFalse(beyond.edges[1].use_seam)
+
+    def test_seam_mirror_direction_filter_uses_source_side_only(self):
+        seam_mapping = load_module('uvsp_seam_mirror_direction_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+        mesh.edges[1].use_seam = True
+
+        negative_to_positive = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+        self.assertEqual(negative_to_positive['source_seam_edges'], 0)
+        self.assertFalse(mesh.edges[0].use_seam)
+
+        positive_to_negative = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='POSITIVE_TO_NEGATIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertEqual(positive_to_negative['source_seam_edges'], 1)
+        self.assertEqual(positive_to_negative['mirrored_edges_added'], 1)
+        self.assertTrue(mesh.edges[0].use_seam)
+
+    def test_seam_mirror_no_source_seams_reports_source_zero(self):
+        seam_mapping = load_module('uvsp_seam_mirror_no_source_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (2, 3)],
+            coords={
+                0: (-1.0, 0.0, 0.0),
+                1: (-1.0, 1.0, 0.0),
+                2: (1.0, 0.0, 0.0),
+                3: (1.0, 1.0, 0.0),
+            },
+        )
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            mesh,
+            direction='NEGATIVE_TO_POSITIVE',
+            axis='X',
+            tolerance=1e-4,
+        )
+
+        self.assertEqual(result['source_seam_edges'], 0)
+        self.assertEqual(result['mirrored_edges_added'], 0)
+        self.assertFalse(any(edge.use_seam for edge in mesh.edges))
+
     def test_apply_seam_keys_uses_editable_gap_fill_not_legacy_repair_stack(self):
         seam_mapping = load_module('uvsp_editable_gap_routing_smoke', ADDON_DIR / 'seam_mapping.py')
 
@@ -1080,6 +1394,26 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('manual_cleanup_protect_boundary_vertices', properties_source)
         self.assertIn("name='Protect Boundary Ends'", properties_source)
         self.assertIn('Do not remove dangling branches anchored at mesh boundary vertices.', properties_source)
+
+    def test_manual_mirror_axis_and_tolerance_properties_are_defined(self):
+        properties_source = read_addon_file('properties.py')
+
+        self.assertIn('manual_mirror_axis', properties_source)
+        self.assertIn("name='Mirror Axis'", properties_source)
+        self.assertIn("('X', 'X', 'Local X axis')", properties_source)
+        self.assertIn("('Y', 'Y', 'Local Y axis')", properties_source)
+        self.assertIn("('Z', 'Z', 'Local Z axis')", properties_source)
+        self.assertIn("default='X'", properties_source)
+        self.assertIn('Local mesh axis used for manual seam mirroring.', properties_source)
+        self.assertIn('manual_mirror_tolerance', properties_source)
+        self.assertIn("name='Mirror Tolerance'", properties_source)
+        self.assertIn('default=1e-4', properties_source)
+        self.assertIn('min=1e-8', properties_source)
+        self.assertIn('soft_max=1e-2', properties_source)
+        self.assertIn(
+            'Coordinate tolerance used to match mirrored vertices in object-local space.',
+            properties_source,
+        )
 
     def test_manual_fill_current_seams_operator_calls_existing_gap_filler(self):
         mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
@@ -1281,6 +1615,129 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
         self.assertEqual(reports[-1], ({'WARNING'}, 'Active object must be a mesh.'))
 
+    def test_manual_seam_mirror_operators_call_helper_with_direction_and_tolerance(self):
+        mesh = FakeMesh(edges=[(0, 1), (2, 3)], vertex_count=4)
+        obj = FakeObject(mesh)
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_seam_mirror_operator_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    manual_mirror_axis='Y',
+                    manual_mirror_tolerance=0.0025,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        reports = []
+        left_operator = operators.UVSEAM_OT_mirror_current_seams_left_to_right()
+        right_operator = operators.UVSEAM_OT_mirror_current_seams_right_to_left()
+        left_operator.report = lambda levels, message: reports.append((levels, message))
+        right_operator.report = lambda levels, message: reports.append((levels, message))
+
+        left_result = left_operator.execute(context)
+        right_result = right_operator.execute(context)
+
+        self.assertEqual(left_result, {'FINISHED'})
+        self.assertEqual(right_result, {'FINISHED'})
+        self.assertEqual(len(calls['seam_mirror']), 2)
+        self.assertEqual(calls['seam_mirror'][0][1], {
+            'enabled': True,
+            'direction': 'NEGATIVE_TO_POSITIVE',
+            'axis': 'Y',
+            'tolerance': 0.0025,
+            'skip_center_edges': True,
+        })
+        self.assertEqual(calls['seam_mirror'][1][1], {
+            'enabled': True,
+            'direction': 'POSITIVE_TO_NEGATIVE',
+            'axis': 'Y',
+            'tolerance': 0.0025,
+            'skip_center_edges': True,
+        })
+        self.assertEqual(calls['gap_fill'], [])
+        self.assertEqual(calls['dangling_cleanup'], [])
+        self.assertEqual(calls['inference'], [])
+        self.assertEqual(calls['export'], [])
+        self.assertEqual(
+            reports[0],
+            (
+                {'INFO'},
+                'Mirror Y −→+: added 2, already 1, source 5, unmatched vertices 4, '
+                'missing edges 1, skipped center 0.',
+            ),
+        )
+        self.assertEqual(
+            reports[1],
+            (
+                {'INFO'},
+                'Mirror Y +→−: added 2, already 1, source 5, unmatched vertices 4, '
+                'missing edges 1, skipped center 0.',
+            ),
+        )
+
+    def test_manual_seam_mirror_operator_restores_edit_mode(self):
+        mesh = FakeMesh(edges=[(0, 1), (2, 3)], vertex_count=4)
+        obj = FakeObject(mesh)
+        obj.mode = 'EDIT'
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_seam_mirror_edit_mode_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    manual_mirror_axis='X',
+                    manual_mirror_tolerance=1e-4,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        operator = operators.UVSEAM_OT_mirror_current_seams_left_to_right()
+        operator.report = lambda levels, message: None
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(calls['mode_set'], ['OBJECT', 'EDIT'])
+        self.assertEqual(obj.mode, 'EDIT')
+
+    def test_manual_seam_mirror_operator_cancels_for_non_mesh(self):
+        obj = SimpleNamespace(name='Camera', type='CAMERA', data=None, mode='OBJECT')
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_seam_mirror_non_mesh_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    manual_mirror_axis='X',
+                    manual_mirror_tolerance=1e-4,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        reports = []
+        operator = operators.UVSEAM_OT_mirror_current_seams_right_to_left()
+        operator.report = lambda levels, message: reports.append((levels, message))
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'CANCELLED'})
+        self.assertEqual(calls['seam_mirror'], [])
+        self.assertEqual(calls['inference'], [])
+        self.assertEqual(calls['export'], [])
+        self.assertEqual(
+            context.scene.uv_seam_predictor_settings.last_run_summary,
+            'Active object must be a mesh.',
+        )
+        self.assertEqual(reports[-1], ({'WARNING'}, 'Active object must be a mesh.'))
+
     def test_manual_fill_current_seams_button_and_registration_are_wired(self):
         operators_source = read_addon_file('operators.py')
         ui_source = read_addon_file('ui.py')
@@ -1305,6 +1762,24 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn("manual_box.prop(settings, 'manual_cleanup_max_dangling_edges')", ui_source)
         self.assertIn("manual_box.prop(settings, 'manual_cleanup_protect_boundary_vertices')", ui_source)
         self.assertIn('operators.UVSEAM_OT_clean_small_dangling_seams', init_source)
+        self.assertIn("bl_idname = 'uv_seam_predictor.mirror_current_seams_l_to_r'", operators_source)
+        self.assertIn("bl_idname = 'uv_seam_predictor.mirror_current_seams_r_to_l'", operators_source)
+        self.assertIn("bl_label = 'Mirror Seams −→+'", operators_source)
+        self.assertIn("bl_label = 'Mirror Seams +→−'", operators_source)
+        self.assertIn(
+            'Mirror current seam flags from the negative side of the selected local axis',
+            operators_source,
+        )
+        self.assertIn(
+            'Mirror current seam flags from the positive side of the selected local axis',
+            operators_source,
+        )
+        self.assertIn("manual_box.prop(settings, 'manual_mirror_axis')", ui_source)
+        self.assertIn("manual_box.prop(settings, 'manual_mirror_tolerance')", ui_source)
+        self.assertIn("manual_box.operator('uv_seam_predictor.mirror_current_seams_l_to_r'", ui_source)
+        self.assertIn("manual_box.operator('uv_seam_predictor.mirror_current_seams_r_to_l'", ui_source)
+        self.assertIn('operators.UVSEAM_OT_mirror_current_seams_left_to_right', init_source)
+        self.assertIn('operators.UVSEAM_OT_mirror_current_seams_right_to_left', init_source)
 
     def test_apply_seam_keys_skips_legacy_debug_collectors_by_default(self):
         seam_mapping = load_module('uvsp_debug_collectors_default_off_smoke', ADDON_DIR / 'seam_mapping.py')

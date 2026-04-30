@@ -679,6 +679,189 @@ def _mesh_boundary_vertices(mesh):
     return boundary_vertices
 
 
+def apply_editable_seam_mirror(
+    mesh,
+    *,
+    direction,
+    axis='X',
+    tolerance=1e-4,
+    enabled=True,
+    skip_center_edges=True,
+):
+    if direction not in ('NEGATIVE_TO_POSITIVE', 'POSITIVE_TO_NEGATIVE'):
+        raise ValueError(
+            "direction must be 'NEGATIVE_TO_POSITIVE' or 'POSITIVE_TO_NEGATIVE'"
+        )
+    if isinstance(tolerance, bool) or float(tolerance) <= 0.0:
+        raise ValueError('tolerance must be greater than 0')
+
+    tolerance = float(tolerance)
+    axis_index = _axis_index(axis)
+    normalized_axis = str(axis).upper()
+    if not enabled:
+        return _editable_seam_mirror_empty_result(
+            False,
+            direction,
+            normalized_axis,
+            tolerance,
+        )
+
+    edge_items, edge_by_key, _ = _mesh_edge_lookup(mesh)
+    original_seam_keys = {
+        key for _, key, edge in edge_items
+        if bool(edge.use_seam)
+    }
+    mirror_vertex_of = _mirrored_vertex_lookup(mesh, axis_index, tolerance)
+
+    source_seam_edges = 0
+    mirrored_edges_added = 0
+    mirrored_edges_already_present = 0
+    skipped_center_edges = 0
+    unmatched_vertices = 0
+    missing_mirrored_edges = 0
+    mirrored_edges = []
+
+    for edge_index, edge_key, edge in sorted(edge_items, key=lambda item: (item[1], item[0])):
+        if edge_key not in original_seam_keys:
+            continue
+
+        left_position = _vertex_position(mesh, edge_key[0])
+        right_position = _vertex_position(mesh, edge_key[1])
+        if left_position is None or right_position is None:
+            unmatched_vertices += 1
+            continue
+
+        midpoint = (left_position[axis_index] + right_position[axis_index]) / 2.0
+        if abs(midpoint) <= tolerance:
+            if skip_center_edges:
+                skipped_center_edges += 1
+            continue
+        if direction == 'NEGATIVE_TO_POSITIVE' and midpoint >= -tolerance:
+            continue
+        if direction == 'POSITIVE_TO_NEGATIVE' and midpoint <= tolerance:
+            continue
+
+        source_seam_edges += 1
+        mirror_left = mirror_vertex_of.get(edge_key[0])
+        mirror_right = mirror_vertex_of.get(edge_key[1])
+        if mirror_left is None or mirror_right is None:
+            unmatched_vertices += 1
+            continue
+
+        mirrored_key = _edge_key(mirror_left, mirror_right)
+        mirrored_edge = edge_by_key.get(mirrored_key)
+        if mirrored_edge is None:
+            missing_mirrored_edges += 1
+            continue
+
+        mirrored_edge_index, mirrored_edge_object = mirrored_edge
+        if bool(mirrored_edge_object.use_seam):
+            mirrored_edges_already_present += 1
+        else:
+            mirrored_edge_object.use_seam = True
+            mirrored_edges_added += 1
+            mirrored_edges.append({
+                'source_edge_key': [int(edge_key[0]), int(edge_key[1])],
+                'source_edge_index': int(edge_index),
+                'mirrored_edge_key': [int(mirrored_key[0]), int(mirrored_key[1])],
+                'mirrored_edge_index': int(mirrored_edge_index),
+            })
+
+    return {
+        'enabled': True,
+        'direction': direction,
+        'axis': normalized_axis,
+        'tolerance': tolerance,
+        'source_seam_edges': source_seam_edges,
+        'mirrored_edges_added': mirrored_edges_added,
+        'mirrored_edges_already_present': mirrored_edges_already_present,
+        'skipped_center_edges': skipped_center_edges,
+        'unmatched_vertices': unmatched_vertices,
+        'missing_mirrored_edges': missing_mirrored_edges,
+        'mirrored_edges': tuple(mirrored_edges),
+    }
+
+
+def _editable_seam_mirror_empty_result(enabled, direction, axis, tolerance):
+    return {
+        'enabled': bool(enabled),
+        'direction': direction,
+        'axis': axis,
+        'tolerance': float(tolerance),
+        'source_seam_edges': 0,
+        'mirrored_edges_added': 0,
+        'mirrored_edges_already_present': 0,
+        'skipped_center_edges': 0,
+        'unmatched_vertices': 0,
+        'missing_mirrored_edges': 0,
+        'mirrored_edges': tuple(),
+    }
+
+
+def _axis_index(axis):
+    normalized = str(axis).upper()
+    if normalized == 'X':
+        return 0
+    if normalized == 'Y':
+        return 1
+    if normalized == 'Z':
+        return 2
+    raise ValueError("axis must be 'X', 'Y', or 'Z'")
+
+
+def _mirrored_vertex_lookup(mesh, axis_index, tolerance):
+    positions_by_vertex = {}
+    buckets = {}
+    for vertex_index in range(len(getattr(mesh, 'vertices', ()))):
+        position = _vertex_position(mesh, vertex_index)
+        if position is None:
+            continue
+        positions_by_vertex[int(vertex_index)] = position
+        buckets.setdefault(_mirror_bucket_key(position, tolerance), []).append(int(vertex_index))
+
+    lookup = {}
+    for vertex_index, position in positions_by_vertex.items():
+        mirrored_position = list(position)
+        mirrored_position[axis_index] = -mirrored_position[axis_index]
+        lookup[vertex_index] = _find_mirrored_vertex(
+            tuple(mirrored_position),
+            positions_by_vertex,
+            buckets,
+            tolerance,
+        )
+    return lookup
+
+
+def _find_mirrored_vertex(target_position, positions_by_vertex, buckets, tolerance):
+    base_key = _mirror_bucket_key(target_position, tolerance)
+    candidates = []
+    for x_offset in (-1, 0, 1):
+        for y_offset in (-1, 0, 1):
+            for z_offset in (-1, 0, 1):
+                bucket_key = (
+                    base_key[0] + x_offset,
+                    base_key[1] + y_offset,
+                    base_key[2] + z_offset,
+                )
+                candidates.extend(buckets.get(bucket_key, ()))
+    valid = [
+        vertex_index for vertex_index in candidates
+        if _position_within_tolerance(positions_by_vertex[vertex_index], target_position, tolerance)
+    ]
+    return min(valid) if valid else None
+
+
+def _mirror_bucket_key(position, tolerance):
+    return tuple(int(math.floor(float(value) / tolerance)) for value in position)
+
+
+def _position_within_tolerance(position, target_position, tolerance):
+    return all(
+        abs(float(position[index]) - float(target_position[index])) <= tolerance
+        for index in range(3)
+    )
+
+
 def _edge_key(left, right):
     left = int(left)
     right = int(right)

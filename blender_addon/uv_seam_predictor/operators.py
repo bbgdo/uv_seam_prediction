@@ -497,6 +497,76 @@ class UVSEAM_OT_clean_small_dangling_seams(bpy.types.Operator):
             _restore_mode(obj, original_mode)
 
 
+def _execute_manual_seam_mirror(operator, context, direction, label):
+    settings = _settings(context)
+    obj = None
+    original_mode = 'OBJECT'
+
+    try:
+        obj = validation.require_active_mesh_object(context)
+        original_mode = obj.mode
+        if obj.mode != 'OBJECT':
+            _ensure_object_mode()
+
+        result = seam_mapping.apply_editable_seam_mirror(
+            obj.data,
+            enabled=True,
+            direction=direction,
+            axis=settings.manual_mirror_axis,
+            tolerance=settings.manual_mirror_tolerance,
+            skip_center_edges=True,
+        )
+        obj.data.update()
+
+        axis = str(result.get('axis', settings.manual_mirror_axis)).upper()
+        added = int(result.get('mirrored_edges_added', 0))
+        already = int(result.get('mirrored_edges_already_present', 0))
+        source = int(result.get('source_seam_edges', 0))
+        unmatched = int(result.get('unmatched_vertices', 0))
+        missing = int(result.get('missing_mirrored_edges', 0))
+        skipped = int(result.get('skipped_center_edges', 0))
+        summary = (
+            f'Mirror {axis} {label}: added {added}, already {already}, source {source}, '
+            f'unmatched vertices {unmatched}, missing edges {missing}, skipped center {skipped}.'
+        )
+        settings.last_run_summary = summary
+        operator.report({'INFO'}, summary)
+        return {'FINISHED'}
+    except Exception as exc:
+        message = str(exc)
+        settings.last_run_summary = message
+        operator.report({'WARNING'}, message)
+        return {'CANCELLED'}
+    finally:
+        _restore_mode(obj, original_mode)
+
+
+class UVSEAM_OT_mirror_current_seams_left_to_right(bpy.types.Operator):
+    bl_idname = 'uv_seam_predictor.mirror_current_seams_l_to_r'
+    bl_label = 'Mirror Seams −→+'
+    bl_description = (
+        'Mirror current seam flags from the negative side of the selected local axis '
+        'to the positive side'
+    )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        return _execute_manual_seam_mirror(self, context, 'NEGATIVE_TO_POSITIVE', '−→+')
+
+
+class UVSEAM_OT_mirror_current_seams_right_to_left(bpy.types.Operator):
+    bl_idname = 'uv_seam_predictor.mirror_current_seams_r_to_l'
+    bl_label = 'Mirror Seams +→−'
+    bl_description = (
+        'Mirror current seam flags from the positive side of the selected local axis '
+        'to the negative side'
+    )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        return _execute_manual_seam_mirror(self, context, 'POSITIVE_TO_NEGATIVE', '+→−')
+
+
 class UVSEAM_OT_open_preferences(bpy.types.Operator):
     bl_idname = 'uv_seam_predictor.open_preferences'
     bl_label = 'Open Preferences'

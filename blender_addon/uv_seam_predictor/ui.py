@@ -74,6 +74,10 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         manual_box.operator('uv_seam_predictor.clean_small_dangling_seams', icon='BRUSH_DATA')
         manual_box.prop(settings, 'manual_cleanup_max_dangling_edges')
         manual_box.prop(settings, 'manual_cleanup_protect_boundary_vertices')
+        manual_box.prop(settings, 'manual_mirror_axis')
+        manual_box.prop(settings, 'manual_mirror_tolerance')
+        manual_box.operator('uv_seam_predictor.mirror_current_seams_l_to_r', icon='MOD_MIRROR')
+        manual_box.operator('uv_seam_predictor.mirror_current_seams_r_to_l', icon='MOD_MIRROR')
 
         legacy_box = layout.box()
         legacy_box.label(text='Legacy / Debug')
