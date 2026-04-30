@@ -446,6 +446,57 @@ class UVSEAM_OT_fill_current_seam_gaps(bpy.types.Operator):
             _restore_mode(obj, original_mode)
 
 
+class UVSEAM_OT_clean_small_dangling_seams(bpy.types.Operator):
+    bl_idname = 'uv_seam_predictor.clean_small_dangling_seams'
+    bl_label = 'Clean Small Dangling Seams'
+    bl_description = 'Remove short dangling seam branches from the currently marked seams'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        settings = _settings(context)
+        obj = None
+        original_mode = 'OBJECT'
+
+        try:
+            obj = validation.require_active_mesh_object(context)
+            original_mode = obj.mode
+            if obj.mode != 'OBJECT':
+                _ensure_object_mode()
+
+            result = seam_mapping.apply_editable_dangling_seam_cleanup(
+                obj.data,
+                enabled=True,
+                max_dangling_edges=settings.manual_cleanup_max_dangling_edges,
+                protect_boundary_vertices=settings.manual_cleanup_protect_boundary_vertices,
+                allow_remove_entire_component=False,
+            )
+            obj.data.update()
+
+            branches = int(result.get('removed_branches_count', 0))
+            edges = int(result.get('removed_edges_count', 0))
+            max_edges = int(result.get(
+                'max_dangling_edges',
+                settings.manual_cleanup_max_dangling_edges,
+            ))
+            if branches:
+                summary = (
+                    f'Removed {branches} dangling seam branches / {edges} edges '
+                    f'with max length {max_edges}.'
+                )
+            else:
+                summary = f'No dangling seam branches removed with max length {max_edges}.'
+            settings.last_run_summary = summary
+            self.report({'INFO'}, summary)
+            return {'FINISHED'}
+        except Exception as exc:
+            message = str(exc)
+            settings.last_run_summary = message
+            self.report({'WARNING'}, message)
+            return {'CANCELLED'}
+        finally:
+            _restore_mode(obj, original_mode)
+
+
 class UVSEAM_OT_open_preferences(bpy.types.Operator):
     bl_idname = 'uv_seam_predictor.open_preferences'
     bl_label = 'Open Preferences'

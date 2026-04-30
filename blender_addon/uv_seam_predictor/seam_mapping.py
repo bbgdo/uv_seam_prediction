@@ -430,6 +430,261 @@ def _editable_path_length(mesh, path):
     return float(total)
 
 
+def apply_editable_dangling_seam_cleanup(
+    mesh,
+    *,
+    enabled=True,
+    max_dangling_edges=1,
+    protect_boundary_vertices=True,
+    allow_remove_entire_component=False,
+):
+    if isinstance(max_dangling_edges, bool) or int(max_dangling_edges) < 1:
+        raise ValueError('max_dangling_edges must be an integer greater than or equal to 1')
+
+    max_edges = int(max_dangling_edges)
+    if not enabled:
+        return _editable_dangling_cleanup_empty_result(
+            False,
+            max_edges,
+            protect_boundary_vertices,
+        )
+
+    edge_items, edge_by_key, _ = _mesh_edge_lookup(mesh)
+    seam_degree, seam_adjacency = _seam_topology_from_mesh_edges(edge_items)
+    component_id_of = _seam_component_ids(seam_adjacency)
+    seam_edge_keys = {
+        key for _, key, edge in edge_items
+        if bool(edge.use_seam)
+    }
+    component_edge_counts = {}
+    for edge_key in seam_edge_keys:
+        component_id = component_id_of.get(edge_key[0])
+        if component_id is None:
+            continue
+        component_edge_counts[component_id] = component_edge_counts.get(component_id, 0) + 1
+    boundary_vertices = (
+        _mesh_boundary_vertices(mesh)
+        if protect_boundary_vertices
+        else set()
+    )
+
+    counters = {
+        'rejected_too_long': 0,
+        'rejected_boundary_protected': 0,
+        'rejected_entire_component': 0,
+        'rejected_terminal_not_junction': 0,
+        'rejected_conflict_removed_edge': 0,
+    }
+    candidates_total = 0
+    removable_candidates = []
+
+    for start in sorted(vertex for vertex, degree in seam_degree.items() if int(degree) == 1):
+        candidates_total += 1
+        report = _dangling_branch_candidate(
+            start,
+            seam_adjacency,
+            seam_degree,
+            seam_edge_keys,
+            edge_by_key,
+            max_edges,
+            boundary_vertices,
+            component_id_of,
+            component_edge_counts,
+            protect_boundary_vertices=bool(protect_boundary_vertices),
+            allow_remove_entire_component=bool(allow_remove_entire_component),
+        )
+        reason = report.get('rejection_reason')
+        if reason is None:
+            removable_candidates.append(report)
+        elif reason in counters:
+            counters[reason] += 1
+
+    removable_candidates.sort(
+        key=lambda item: (
+            item['length'],
+            item['start_vertex'],
+            item['terminal_vertex'],
+            tuple(tuple(edge_key) for edge_key in item['edge_keys']),
+        )
+    )
+
+    removed_edge_keys = set()
+    removed_edges_by_component = {}
+    removed_branches = []
+    for candidate in removable_candidates:
+        edge_keys = {tuple(edge_key) for edge_key in candidate['edge_keys']}
+        if edge_keys & removed_edge_keys:
+            counters['rejected_conflict_removed_edge'] += 1
+            continue
+        component_id = candidate.get('component_id')
+        component_edge_count = int(candidate.get('component_edge_count', 0))
+        if (
+            not allow_remove_entire_component
+            and component_id is not None
+            and component_edge_count > 0
+            and removed_edges_by_component.get(component_id, 0) + len(edge_keys) >= component_edge_count
+        ):
+            counters['rejected_entire_component'] += 1
+            continue
+        for edge_key in edge_keys:
+            edge_by_key[edge_key][1].use_seam = False
+        removed_edge_keys.update(edge_keys)
+        if component_id is not None:
+            removed_edges_by_component[component_id] = (
+                removed_edges_by_component.get(component_id, 0) + len(edge_keys)
+            )
+        removed_branches.append(candidate)
+
+    return {
+        'enabled': True,
+        'max_dangling_edges': max_edges,
+        'protect_boundary_vertices': bool(protect_boundary_vertices),
+        'allow_remove_entire_component': bool(allow_remove_entire_component),
+        'candidates_total': candidates_total,
+        'removed_branches_count': len(removed_branches),
+        'removed_edges_count': len(removed_edge_keys),
+        'rejected_too_long': counters['rejected_too_long'],
+        'rejected_boundary_protected': counters['rejected_boundary_protected'],
+        'rejected_entire_component': counters['rejected_entire_component'],
+        'rejected_terminal_not_junction': counters['rejected_terminal_not_junction'],
+        'rejected_conflict_removed_edge': counters['rejected_conflict_removed_edge'],
+        'removed_branches': tuple(removed_branches),
+    }
+
+
+def _editable_dangling_cleanup_empty_result(enabled, max_dangling_edges, protect_boundary_vertices):
+    return {
+        'enabled': bool(enabled),
+        'max_dangling_edges': int(max_dangling_edges),
+        'protect_boundary_vertices': bool(protect_boundary_vertices),
+        'allow_remove_entire_component': False,
+        'candidates_total': 0,
+        'removed_branches_count': 0,
+        'removed_edges_count': 0,
+        'rejected_too_long': 0,
+        'rejected_boundary_protected': 0,
+        'rejected_entire_component': 0,
+        'rejected_terminal_not_junction': 0,
+        'rejected_conflict_removed_edge': 0,
+        'removed_branches': tuple(),
+    }
+
+
+def _dangling_branch_candidate(
+    start,
+    seam_adjacency,
+    seam_degree,
+    seam_edge_keys,
+    edge_by_key,
+    max_edges,
+    boundary_vertices,
+    component_id_of,
+    component_edge_counts,
+    *,
+    protect_boundary_vertices,
+    allow_remove_entire_component,
+):
+    if protect_boundary_vertices and int(start) in boundary_vertices:
+        return {'rejection_reason': 'rejected_boundary_protected'}
+
+    neighbors = sorted(seam_adjacency.get(start, ()))
+    if len(neighbors) != 1:
+        return {'rejection_reason': 'rejected_terminal_not_junction'}
+    component_id = component_id_of.get(int(start))
+    component_edge_count = int(component_edge_counts.get(component_id, 0))
+
+    previous = int(start)
+    current = int(neighbors[0])
+    path_vertices = [int(start), current]
+    edge_keys = [_edge_key(previous, current)]
+
+    while True:
+        if len(edge_keys) > max_edges:
+            return {'rejection_reason': 'rejected_too_long'}
+
+        degree = int(seam_degree.get(current, 0))
+        if degree >= 3:
+            return _dangling_branch_report(
+                start,
+                current,
+                edge_keys,
+                edge_by_key,
+                component_id,
+                component_edge_count,
+            )
+
+        if degree == 1:
+            if protect_boundary_vertices and current in boundary_vertices:
+                return {'rejection_reason': 'rejected_boundary_protected'}
+            if allow_remove_entire_component:
+                return _dangling_branch_report(
+                    start,
+                    current,
+                    edge_keys,
+                    edge_by_key,
+                    component_id,
+                    component_edge_count,
+                )
+            return {'rejection_reason': 'rejected_entire_component'}
+
+        if degree != 2:
+            return {'rejection_reason': 'rejected_terminal_not_junction'}
+
+        next_vertices = [
+            int(vertex) for vertex in sorted(seam_adjacency.get(current, ()))
+            if int(vertex) != previous
+        ]
+        if len(next_vertices) != 1:
+            return {'rejection_reason': 'rejected_terminal_not_junction'}
+        next_vertex = next_vertices[0]
+        next_edge_key = _edge_key(current, next_vertex)
+        if next_edge_key not in seam_edge_keys or next_vertex in path_vertices:
+            return {'rejection_reason': 'rejected_terminal_not_junction'}
+        edge_keys.append(next_edge_key)
+        path_vertices.append(next_vertex)
+        previous, current = current, next_vertex
+
+
+def _dangling_branch_report(start, terminal, edge_keys, edge_by_key, component_id, component_edge_count):
+    return {
+        'start_vertex': int(start),
+        'terminal_vertex': int(terminal),
+        'edge_keys': [[int(edge_key[0]), int(edge_key[1])] for edge_key in edge_keys],
+        'edge_indices': [int(edge_by_key[edge_key][0]) for edge_key in edge_keys],
+        'length': len(edge_keys),
+        'component_id': component_id,
+        'component_edge_count': int(component_edge_count),
+    }
+
+
+def _mesh_boundary_vertices(mesh):
+    polygons = getattr(mesh, 'polygons', None)
+    if not polygons:
+        return set()
+
+    edge_face_counts = {}
+    for polygon in polygons:
+        vertices = list(getattr(polygon, 'vertices', ()))
+        if len(vertices) < 2:
+            continue
+        for index, vertex in enumerate(vertices):
+            next_vertex = vertices[(index + 1) % len(vertices)]
+            key = _edge_key(vertex, next_vertex)
+            edge_face_counts[key] = edge_face_counts.get(key, 0) + 1
+
+    boundary_vertices = set()
+    for edge_key, count in edge_face_counts.items():
+        if count == 1:
+            boundary_vertices.update(edge_key)
+    return boundary_vertices
+
+
+def _edge_key(left, right):
+    left = int(left)
+    right = int(right)
+    return (min(left, right), max(left, right))
+
+
 def _disabled_one_edge_repair_result():
     return {
         'enabled': False,

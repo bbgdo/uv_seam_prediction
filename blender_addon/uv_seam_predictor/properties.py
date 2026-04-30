@@ -93,6 +93,19 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         default=False,
         description='Debug only: write legacy post-processing diagnostic JSON sidecars.',
     )
+    manual_cleanup_max_dangling_edges: bpy.props.IntProperty(
+        name='Max Dangling Length',
+        default=1,
+        min=1,
+        soft_max=3,
+        description='Maximum seam-edge length of dangling branches removed by manual cleanup. '
+                    '1 is safest.',
+    )
+    manual_cleanup_protect_boundary_vertices: bpy.props.BoolProperty(
+        name='Protect Boundary Ends',
+        default=True,
+        description='Do not remove dangling branches anchored at mesh boundary vertices.',
+    )
     clear_existing_seams: bpy.props.BoolProperty(
         name='Clear Existing Seams',
         default=True,

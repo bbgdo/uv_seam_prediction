@@ -37,7 +37,7 @@ class FakeVertex:
 
 
 class FakeMesh:
-    def __init__(self, edges, vertex_count=None, coords=None):
+    def __init__(self, edges, vertex_count=None, coords=None, polygons=None):
         self.edges = [FakeEdge(edge, index) for index, edge in enumerate(edges)]
         coords = coords or {}
         if vertex_count is None:
@@ -46,6 +46,10 @@ class FakeMesh:
                 max(coords, default=-1),
             ) + 1
         self.vertices = [FakeVertex(coords.get(index)) for index in range(vertex_count)]
+        self.polygons = [
+            SimpleNamespace(vertices=tuple(polygon))
+            for polygon in (polygons or [])
+        ]
         self.update_count = 0
 
     def update(self):
@@ -100,6 +104,7 @@ def load_operators_module_with_fakes(name, *, active_obj):
 
     calls = {
         'gap_fill': [],
+        'dangling_cleanup': [],
         'inference': [],
         'export': [],
         'mode_set': mode_set.calls,
@@ -115,7 +120,16 @@ def load_operators_module_with_fakes(name, *, active_obj):
             'max_gap_hops': int(kwargs['max_gap_hops']),
         }
 
+    def fake_dangling_cleanup(mesh, **kwargs):
+        calls['dangling_cleanup'].append((mesh, kwargs))
+        return {
+            'removed_branches_count': 2,
+            'removed_edges_count': 3,
+            'max_dangling_edges': int(kwargs['max_dangling_edges']),
+        }
+
     seam_mapping_module.apply_editable_shortest_path_gap_fill = fake_gap_fill
+    seam_mapping_module.apply_editable_dangling_seam_cleanup = fake_dangling_cleanup
     sys.modules[f'{package_name}.seam_mapping'] = seam_mapping_module
 
     validation_module = ModuleType(f'{package_name}.validation')
@@ -837,6 +851,160 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertFalse(mesh.edges[4].use_seam)
         self.assertFalse(mesh.edges[5].use_seam)
 
+    def test_dangling_cleanup_removes_one_edge_endpoint_to_junction_spur(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_one_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7)], vertex_count=8)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 1)
+        self.assertEqual(result['removed_edges_count'], 1)
+        self.assertFalse(mesh.edges[0].use_seam)
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges[1:]))
+        self.assertEqual(result['removed_branches'][0]['start_vertex'], 0)
+        self.assertEqual(result['removed_branches'][0]['terminal_vertex'], 1)
+        self.assertEqual(result['removed_branches'][0]['length'], 1)
+
+    def test_dangling_cleanup_removes_two_edge_spur_only_when_allowed(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_two_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [(0, 8), (8, 1), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7)]
+        blocked_mesh = FakeMesh(edges=edges, vertex_count=9)
+        for edge in blocked_mesh.edges:
+            edge.use_seam = True
+
+        blocked = seam_mapping.apply_editable_dangling_seam_cleanup(
+            blocked_mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(blocked['removed_branches_count'], 0)
+        self.assertGreaterEqual(blocked['rejected_too_long'], 1)
+        self.assertTrue(all(edge.use_seam for edge in blocked_mesh.edges))
+
+        filled_mesh = FakeMesh(edges=edges, vertex_count=9)
+        for edge in filled_mesh.edges:
+            edge.use_seam = True
+        filled = seam_mapping.apply_editable_dangling_seam_cleanup(
+            filled_mesh,
+            max_dangling_edges=2,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(filled['removed_branches_count'], 1)
+        self.assertEqual(filled['removed_edges_count'], 2)
+        self.assertFalse(filled_mesh.edges[0].use_seam)
+        self.assertFalse(filled_mesh.edges[1].use_seam)
+        self.assertTrue(all(edge.use_seam for edge in filled_mesh.edges[2:]))
+
+    def test_dangling_cleanup_does_not_remove_long_branch(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_long_branch_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 8), (8, 9), (9, 1), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7)], vertex_count=10)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=2,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 0)
+        self.assertGreaterEqual(result['rejected_too_long'], 1)
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+
+    def test_dangling_cleanup_does_not_remove_endpoint_to_endpoint_component_by_default(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_entire_component_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=3)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=2,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 0)
+        self.assertGreaterEqual(result['rejected_entire_component'], 1)
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+
+    def test_dangling_cleanup_does_not_remove_closed_loop(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_loop_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (0, 2)], vertex_count=3)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(result['candidates_total'], 0)
+        self.assertEqual(result['removed_branches_count'], 0)
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+
+    def test_dangling_cleanup_protects_boundary_endpoint_when_enabled(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_boundary_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7)],
+            vertex_count=9,
+            polygons=[(0, 1, 8)],
+        )
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=True,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 0)
+        self.assertGreaterEqual(result['rejected_boundary_protected'], 1)
+        self.assertTrue(mesh.edges[0].use_seam)
+
+    def test_dangling_cleanup_allows_non_boundary_spur_cleanup(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_non_boundary_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7)], vertex_count=8)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=True,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 1)
+        self.assertFalse(mesh.edges[0].use_seam)
+
+    def test_dangling_cleanup_removes_multiple_branches_deterministically(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_deterministic_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(3, 10), (1, 10), (4, 10), (2, 10)], vertex_count=11)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(
+            [branch['start_vertex'] for branch in result['removed_branches']],
+            [1, 2, 3],
+        )
+        self.assertEqual(result['removed_branches_count'], 3)
+        self.assertGreaterEqual(result['rejected_entire_component'], 1)
+
     def test_apply_seam_keys_uses_editable_gap_fill_not_legacy_repair_stack(self):
         seam_mapping = load_module('uvsp_editable_gap_routing_smoke', ADDON_DIR / 'seam_mapping.py')
 
@@ -901,6 +1069,17 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('soft_max=3', gap_hops_source)
         self.assertNotRegex(gap_hops_source, r'(?m)^\s*max=3,')
         self.assertIn('3 is recommended; higher values may over-connect seams.', gap_hops_source)
+
+    def test_manual_dangling_cleanup_properties_are_defined(self):
+        properties_source = read_addon_file('properties.py')
+
+        self.assertIn('manual_cleanup_max_dangling_edges', properties_source)
+        self.assertIn("name='Max Dangling Length'", properties_source)
+        self.assertIn('default=1', properties_source)
+        self.assertIn('soft_max=3', properties_source)
+        self.assertIn('manual_cleanup_protect_boundary_vertices', properties_source)
+        self.assertIn("name='Protect Boundary Ends'", properties_source)
+        self.assertIn('Do not remove dangling branches anchored at mesh boundary vertices.', properties_source)
 
     def test_manual_fill_current_seams_operator_calls_existing_gap_filler(self):
         mesh = FakeMesh(edges=[(0, 1), (2, 3), (1, 2)], vertex_count=4)
@@ -998,6 +1177,110 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
         self.assertEqual(reports[-1], ({'WARNING'}, 'Active object must be a mesh.'))
 
+    def test_manual_dangling_cleanup_operator_calls_existing_cleanup_function(self):
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (1, 3)], vertex_count=4)
+        obj = FakeObject(mesh)
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_dangling_cleanup_operator_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    manual_cleanup_max_dangling_edges=2,
+                    manual_cleanup_protect_boundary_vertices=True,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        reports = []
+        operator = operators.UVSEAM_OT_clean_small_dangling_seams()
+        operator.report = lambda levels, message: reports.append((levels, message))
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(len(calls['dangling_cleanup']), 1)
+        called_mesh, kwargs = calls['dangling_cleanup'][0]
+        self.assertIs(called_mesh, mesh)
+        self.assertEqual(kwargs, {
+            'enabled': True,
+            'max_dangling_edges': 2,
+            'protect_boundary_vertices': True,
+            'allow_remove_entire_component': False,
+        })
+        self.assertEqual(calls['gap_fill'], [])
+        self.assertEqual(calls['inference'], [])
+        self.assertEqual(calls['export'], [])
+        self.assertEqual(
+            context.scene.uv_seam_predictor_settings.last_run_summary,
+            'Removed 2 dangling seam branches / 3 edges with max length 2.',
+        )
+        self.assertEqual(
+            reports[-1],
+            ({'INFO'}, 'Removed 2 dangling seam branches / 3 edges with max length 2.'),
+        )
+
+    def test_manual_dangling_cleanup_operator_restores_edit_mode(self):
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (1, 3)], vertex_count=4)
+        obj = FakeObject(mesh)
+        obj.mode = 'EDIT'
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_dangling_cleanup_edit_mode_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    manual_cleanup_max_dangling_edges=1,
+                    manual_cleanup_protect_boundary_vertices=False,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        operator = operators.UVSEAM_OT_clean_small_dangling_seams()
+        operator.report = lambda levels, message: None
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(calls['mode_set'], ['OBJECT', 'EDIT'])
+        self.assertEqual(obj.mode, 'EDIT')
+
+    def test_manual_dangling_cleanup_operator_cancels_for_non_mesh(self):
+        obj = SimpleNamespace(name='Camera', type='CAMERA', data=None, mode='OBJECT')
+        operators, calls = load_operators_module_with_fakes(
+            'uvsp_manual_dangling_cleanup_non_mesh_smoke',
+            active_obj=obj,
+        )
+        context = SimpleNamespace(
+            scene=SimpleNamespace(
+                uv_seam_predictor_settings=SimpleNamespace(
+                    manual_cleanup_max_dangling_edges=1,
+                    manual_cleanup_protect_boundary_vertices=True,
+                    last_run_summary='',
+                )
+            ),
+            view_layer=SimpleNamespace(objects=SimpleNamespace(active=obj)),
+        )
+        reports = []
+        operator = operators.UVSEAM_OT_clean_small_dangling_seams()
+        operator.report = lambda levels, message: reports.append((levels, message))
+
+        result = operator.execute(context)
+
+        self.assertEqual(result, {'CANCELLED'})
+        self.assertEqual(calls['dangling_cleanup'], [])
+        self.assertEqual(calls['inference'], [])
+        self.assertEqual(calls['export'], [])
+        self.assertEqual(
+            context.scene.uv_seam_predictor_settings.last_run_summary,
+            'Active object must be a mesh.',
+        )
+        self.assertEqual(reports[-1], ({'WARNING'}, 'Active object must be a mesh.'))
+
     def test_manual_fill_current_seams_button_and_registration_are_wired(self):
         operators_source = read_addon_file('operators.py')
         ui_source = read_addon_file('ui.py')
@@ -1012,6 +1295,16 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn("manual_box.label(text='Manual Seam Cleanup')", ui_source)
         self.assertIn("manual_box.operator('uv_seam_predictor.fill_current_seam_gaps'", ui_source)
         self.assertIn('operators.UVSEAM_OT_fill_current_seam_gaps', init_source)
+        self.assertIn("bl_idname = 'uv_seam_predictor.clean_small_dangling_seams'", operators_source)
+        self.assertIn("bl_label = 'Clean Small Dangling Seams'", operators_source)
+        self.assertIn(
+            "bl_description = 'Remove short dangling seam branches from the currently marked seams'",
+            operators_source,
+        )
+        self.assertIn("manual_box.operator('uv_seam_predictor.clean_small_dangling_seams'", ui_source)
+        self.assertIn("manual_box.prop(settings, 'manual_cleanup_max_dangling_edges')", ui_source)
+        self.assertIn("manual_box.prop(settings, 'manual_cleanup_protect_boundary_vertices')", ui_source)
+        self.assertIn('operators.UVSEAM_OT_clean_small_dangling_seams', init_source)
 
     def test_apply_seam_keys_skips_legacy_debug_collectors_by_default(self):
         seam_mapping = load_module('uvsp_debug_collectors_default_off_smoke', ADDON_DIR / 'seam_mapping.py')

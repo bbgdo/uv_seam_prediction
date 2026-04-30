@@ -70,6 +70,10 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         manual_box = layout.box()
         manual_box.label(text='Manual Seam Cleanup')
         manual_box.operator('uv_seam_predictor.fill_current_seam_gaps', icon='MOD_VERTEX_WEIGHT')
+        manual_box.prop(settings, 'postprocess_fill_gap_max_hops')
+        manual_box.operator('uv_seam_predictor.clean_small_dangling_seams', icon='BRUSH_DATA')
+        manual_box.prop(settings, 'manual_cleanup_max_dangling_edges')
+        manual_box.prop(settings, 'manual_cleanup_protect_boundary_vertices')
 
         legacy_box = layout.box()
         legacy_box.label(text='Legacy / Debug')
