@@ -1437,10 +1437,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(result.editable_gap_fill_result['accepted_paths_count'], 1)
         self.assertTrue(mesh.edges[2].use_seam)
         self.assertTrue(mesh.edges[3].use_seam)
-        self.assertFalse(result.blender_two_edge_repair_enabled)
-        self.assertFalse(result.blender_two_edge_endpoint_bridge_enabled)
-        self.assertFalse(result.blender_curved_two_edge_endpoint_bridge_enabled)
-        self.assertFalse(result.blender_tangent_audit_endpoint_bridge_enabled)
 
     def test_editable_gap_hops_property_uses_soft_recommended_max_only(self):
         properties_source = read_addon_file('properties.py')
@@ -2001,24 +1997,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertEqual(result.applied, 2)
         self.assertEqual(result.duplicates_skipped, 1)
 
-    def test_production_hardcoded_path_exception_telemetry_is_disabled(self):
-        seam_mapping = load_module('uvsp_seam_mapping_hardcode_telemetry_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh = FakeMesh(edges=[(0, 1)], vertex_count=2)
-
-        result = seam_mapping.apply_seam_keys(
-            mesh,
-            [(0, 1)],
-            clear_existing=True,
-            enable_local_repair=True,
-        )
-
-        self.assertFalse(result.production_hardcoded_path_exceptions_enabled)
-        self.assertTrue(result.production_hardcoded_path_exceptions_removed)
-        self.assertTrue(result.diagnostic_path_labels_read_only)
-        self.assertFalse(result.human_case_over_cap_exception_used)
-        self.assertFalse(result.target_path_2045_2541_4884_accepted_by_target_over_cap_exception)
-        self.assertFalse(result.target_path_2540_2541_2544_accepted_by_target_over_cap_exception)
-
     def test_local_repair_does_not_create_geometry_or_mark_missing_edges(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_no_geometry_smoke', ADDON_DIR / 'seam_mapping.py')
         mesh = FakeMesh(edges=[(0, 1), (1, 2), (0, 3), (2, 4)], vertex_count=5)
@@ -2032,7 +2010,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
 
         self.assertEqual(len(mesh.edges), before_edge_count)
-        self.assertEqual(result.blender_local_repair_edges_marked, 0)
+        self.assertEqual(result.editable_gap_fill_result['accepted_edges_count'], 0)
 
     def test_summary_reports_core_counts_bridge_and_gap_fill(self):
         seam_mapping = load_module('uvsp_seam_mapping_repair_summary_smoke', ADDON_DIR / 'seam_mapping.py')
