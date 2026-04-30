@@ -77,12 +77,6 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         manual_box.operator('uv_seam_predictor.mirror_current_seams_l_to_r', icon='MOD_MIRROR')
         manual_box.operator('uv_seam_predictor.mirror_current_seams_r_to_l', icon='MOD_MIRROR')
 
-        legacy_box = layout.box()
-        legacy_box.label(text='Legacy / Debug')
-        legacy_box.enabled = settings.use_post_processing
-        legacy_box.prop(settings, 'postprocess_tau_high')
-        legacy_box.prop(settings, 'postprocess_epsilon')
-
         actions = layout.box()
         actions.label(text='Actions')
         row = actions.row()

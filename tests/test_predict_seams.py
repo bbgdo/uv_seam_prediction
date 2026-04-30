@@ -197,11 +197,9 @@ class PredictSeamsTests(unittest.TestCase):
     def test_postprocess_kwargs_from_args(self):
         args = Namespace(
             postprocess_tau_low=0.25,
-            postprocess_tau_high=0.65,
             postprocess_d_max=2,
             postprocess_r_bridge=5,
             postprocess_l_min=3,
-            postprocess_epsilon=1e-2,
             postprocess_anchor_boundary=False,
         )
 
@@ -209,11 +207,9 @@ class PredictSeamsTests(unittest.TestCase):
 
         self.assertEqual(kwargs, {
             'tau_low': 0.25,
-            'tau_high': 0.65,
             'd_max': 2,
             'r_bridge': 5,
             'l_min': 3,
-            'epsilon': 1e-2,
             'anchor_boundary': False,
         })
         self.assertIs(type(kwargs['tau_low']), float)
@@ -231,11 +227,9 @@ class PredictSeamsTests(unittest.TestCase):
                 probabilities=kwargs['probabilities'],
                 topology=kwargs['topology'],
                 tau_low=kwargs['tau_low'],
-                tau_high=kwargs['tau_high'],
                 d_max=kwargs['d_max'],
                 r_bridge=kwargs['r_bridge'],
                 l_min=kwargs['l_min'],
-                epsilon=kwargs['epsilon'],
                 anchor_boundary=kwargs['anchor_boundary'],
             )
 

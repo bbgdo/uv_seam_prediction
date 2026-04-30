@@ -70,10 +70,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='Candidate-set threshold for skeletonization (Stage A).'
     )
     parser.add_argument(
-        '--postprocess-tau-high', type=float, default=0.70,
-        help='Deprecated Stage B probability threshold; ignored by endpoint bridging.'
-    )
-    parser.add_argument(
         '--postprocess-d-max', type=int, default=3,
         help='Thickness-preservation distance for skeletonization (Stage A).'
     )
@@ -113,10 +109,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--postprocess-l-min', type=int, default=4,
         help='Minimum branch length for spur pruning (Stage C).'
-    )
-    parser.add_argument(
-        '--postprocess-epsilon', type=float, default=1e-3,
-        help='Deprecated Stage B probability weight floor; ignored by endpoint bridging.'
     )
     parser.add_argument(
         '--postprocess-anchor-boundary',
@@ -170,11 +162,9 @@ def _validate_threshold(value: Any) -> float:
 def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
     kwargs = {
         'tau_low': float(args.postprocess_tau_low),
-        'tau_high': float(args.postprocess_tau_high),
         'd_max': int(args.postprocess_d_max),
         'r_bridge': int(args.postprocess_r_bridge),
         'l_min': int(args.postprocess_l_min),
-        'epsilon': float(args.postprocess_epsilon),
         'anchor_boundary': bool(args.postprocess_anchor_boundary),
     }
     if hasattr(args, 'postprocess_max_bridge_edges'):

@@ -1858,11 +1858,9 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             threshold=0.42,
             use_post_processing=True,
             postprocess_tau_low=0.30,
-            postprocess_tau_high=0.70,
             postprocess_d_max=3,
             postprocess_r_bridge=6,
             postprocess_l_min=4,
-            postprocess_epsilon=1e-3,
             postprocess_anchor_boundary=True,
         )
 
@@ -1890,25 +1888,23 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             threshold=0.42,
             use_post_processing=True,
             postprocess_tau_low=0.30,
-            postprocess_tau_high=0.70,
             postprocess_d_max=3,
             postprocess_r_bridge=6,
             postprocess_l_min=4,
-            postprocess_epsilon=1e-3,
             postprocess_anchor_boundary=True,
         )
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
         # New flags present:
         for flag in (
             '--postprocess-tau-low',
-            '--postprocess-tau-high',
             '--postprocess-d-max',
             '--postprocess-r-bridge',
             '--postprocess-l-min',
-            '--postprocess-epsilon',
         ):
             self.assertIn(flag, args, f'expected new flag {flag} in cmd')
         self.assertIn('--postprocess-anchor-boundary', args)
+        for suffix in ('tau-high', 'epsilon'):
+            self.assertNotIn('--postprocess-' + suffix, args)
         # Deleted v1 flags absent:
         for suffix in (
             'seam_threshold',
@@ -1947,11 +1943,9 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             threshold=0.42,
             use_post_processing=True,
             postprocess_tau_low=0.30,
-            postprocess_tau_high=0.70,
             postprocess_d_max=3,
             postprocess_r_bridge=6,
             postprocess_l_min=4,
-            postprocess_epsilon=1e-3,
             postprocess_anchor_boundary=False,
         )
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')

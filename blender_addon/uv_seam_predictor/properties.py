@@ -28,14 +28,6 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         description='Lower probability threshold used to choose seam candidates for '
                     'inference-time skeletonization and thinning.',
     )
-    postprocess_tau_high: bpy.props.FloatProperty(
-        name='Legacy Tau High (debug)',
-        default=0.70,
-        min=0.0,
-        max=1.0,
-        description='Legacy compatibility/debug value kept for saved settings. '
-                    'It does not affect current endpoint-bridging behavior.',
-    )
     postprocess_d_max: bpy.props.IntProperty(
         name='Skeleton Thickness Distance',
         default=3,
@@ -59,15 +51,6 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         max=32,
         description='Minimum branch length kept during inference-time spur pruning '
                     'and small dangling-branch cleanup.',
-    )
-    postprocess_epsilon: bpy.props.FloatProperty(
-        name='Legacy Epsilon (debug)',
-        default=1e-3,
-        min=1e-6,
-        max=0.1,
-        precision=6,
-        description='Legacy compatibility/debug numerical floor kept for saved settings. '
-                    'It does not affect current endpoint-bridging behavior.',
     )
     postprocess_anchor_boundary: bpy.props.BoolProperty(
         name='Anchor Boundary for Skeleton Cleanup',

@@ -48,16 +48,12 @@ def build_cli_args(prefs, settings, obj_path, json_path):
     args.extend([
         '--postprocess-tau-low',
         str(settings.postprocess_tau_low),
-        '--postprocess-tau-high',
-        str(settings.postprocess_tau_high),
         '--postprocess-d-max',
         str(settings.postprocess_d_max),
         '--postprocess-r-bridge',
         str(settings.postprocess_r_bridge),
         '--postprocess-l-min',
         str(settings.postprocess_l_min),
-        '--postprocess-epsilon',
-        str(settings.postprocess_epsilon),
     ])
     # BooleanOptionalAction: emit a single token, no separate value.
     if settings.postprocess_anchor_boundary:

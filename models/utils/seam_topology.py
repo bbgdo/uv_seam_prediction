@@ -649,7 +649,6 @@ class BridgingResult:
     rejected_bridge_reports: tuple[dict, ...] = tuple()
     unmatched_endpoints: tuple[int, ...] = tuple()
     bridge_length_edges_histogram: dict[int, int] | None = None
-    probability_tiebreak_used: bool = False
     accepted_bridge_edge_indices: tuple[int, ...] = tuple()
     accepted_bridge_edge_keys: tuple[tuple[int, int], ...] = tuple()
     same_component_candidates_considered: int = 0
@@ -672,21 +671,8 @@ class BridgingResult:
     min_loop_size_to_allow: int = 8
     tangent_alignment_weight: float = 0.25
     path_weighting: str = 'edge_length'
-    legacy_probability_bridging: dict[str, Any] | None = None
-
-    # Deprecated compatibility fields. They are not active Stage B telemetry.
-    steiner_added_edges: frozenset[int] = frozenset()
     component_reports: tuple[dict, ...] = tuple()
-    component_count: int = 0
-    terminals_total: int = 0
-    terminals_dropped_no_component: int = 0
-    steiner_calls: int = 0
-    steiner_edges_added_total: int = 0
-    tau_high: float = 0.70
     r_bridge: int = 6
-    epsilon: float = 1e-3
-    cluster_count: int = 0
-    representative_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -710,11 +696,9 @@ class TopologyPipelineResult:
     bridging_result: BridgingResult
     pruning_result: PruningResult
     tau_low: float
-    tau_high: float
     d_max: int
     r_bridge: int
     l_min: int
-    epsilon: float
     anchor_boundary: bool
     max_bridge_edges: int = 6
     max_bridge_euclidean_ratio: float = 0.03
@@ -1549,7 +1533,6 @@ def compute_endpoint_bridging(
         rejected_bridge_reports=tuple(rejected_reports),
         unmatched_endpoints=unmatched,
         bridge_length_edges_histogram=dict(sorted(histogram.items())),
-        probability_tiebreak_used=False,
         accepted_bridge_edge_indices=tuple(sorted(int(edge_index) for edge_index in added_bridge_edges)),
         accepted_bridge_edge_keys=tuple(
             (int(view.unique_edges[edge_index, 0]), int(view.unique_edges[edge_index, 1]))
@@ -1581,75 +1564,15 @@ def compute_endpoint_bridging(
         tangent_alignment_weight=tangent_weight_value,
         path_weighting='edge_length',
         component_reports=component_reports,
-        component_count=len(components),
-        cluster_count=len(components),
-        legacy_probability_bridging={
-            'disabled': True,
-            'ignored_parameters': ['tau_high', 'epsilon'],
-            'steiner_tree_used': False,
-        },
         **counters,
-    )
-
-
-def compute_steiner_bridging(
-    view: SeamGraphView,
-    probabilities: np.ndarray,
-    skel_result: SkeletonResult,
-    *,
-    tau_high: float = 0.70,
-    r_bridge: int = 6,
-    epsilon: float = 1e-3,
-    anchor_boundary: bool = True,
-    extra_anchor_vertices: frozenset[int] | None = None,
-    topology: Any = None,
-) -> BridgingResult:
-    """
-    Deprecated compatibility wrapper.
-
-    This no longer performs Steiner-tree or probability-driven bridging.
-    ``probabilities``, ``tau_high``, and ``epsilon`` are validated/recorded
-    for legacy callers only; Stage B delegates to deterministic endpoint
-    shortest-path bridging and uses ``r_bridge`` as ``max_bridge_edges``.
-    """
-    _validated_probability_vector(view, probabilities)
-    tau_high_value = _validated_probability_threshold('tau_high', tau_high)
-    epsilon_value = float(epsilon)
-    if not np.isfinite(epsilon_value) or epsilon_value <= 0.0 or epsilon_value > 1.0:
-        raise ValueError('epsilon must be finite and lie in (0.0, 1.0]')
-    max_bridge_edges_value = _validated_nonnegative_int('r_bridge', r_bridge)
-    if anchor_boundary and topology is None:
-        raise ValueError('anchor_boundary=True requires a non-None topology argument')
-    _validate_extra_anchor_vertices(view, extra_anchor_vertices)
-
-    result = compute_endpoint_bridging(
-        view,
-        skel_result,
-        max_bridge_edges=max_bridge_edges_value,
-    )
-    return BridgingResult(
-        **{
-            **result.__dict__,
-            'tau_high': tau_high_value,
-            'r_bridge': max_bridge_edges_value,
-            'epsilon': epsilon_value,
-            'legacy_probability_bridging': {
-                'disabled': True,
-                'ignored_parameters': ['tau_high', 'epsilon'],
-                'steiner_tree_used': False,
-            },
-        }
     )
 
 
 def diagnose_bridging_application(
     view: SeamGraphView,
-    probabilities: np.ndarray,
     skel_result: SkeletonResult,
     *,
-    tau_high: float = 0.70,
     r_bridge: int = 6,
-    epsilon: float = 1e-3,
     max_bridge_edges: int | None = None,
     max_bridge_euclidean_ratio: float = 0.03,
     max_endpoint_candidates: int = 4,
@@ -1667,7 +1590,7 @@ def diagnose_bridging_application(
     """
     before_probs = np.where(skel_result.skeleton_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
-    del probabilities, tau_high, epsilon, anchor_boundary, extra_anchor_vertices, topology
+    del anchor_boundary, extra_anchor_vertices, topology
     bridging = compute_endpoint_bridging(
         view,
         skel_result,
@@ -1872,11 +1795,9 @@ def apply_topology_pipeline(
     probabilities: np.ndarray,
     *,
     tau_low: float = 0.30,
-    tau_high: float = 0.70,
     d_max: int = 3,
     r_bridge: int = 6,
     l_min: int = 4,
-    epsilon: float = 1e-3,
     max_bridge_edges: int | None = None,
     max_bridge_euclidean_ratio: float = 0.03,
     max_endpoint_candidates: int = 4,
@@ -1932,11 +1853,9 @@ def apply_topology_pipeline(
         bridging_result=bridge,
         pruning_result=prune,
         tau_low=float(tau_low),
-        tau_high=float(tau_high),
         d_max=int(d_max),
         r_bridge=int(r_bridge),
         l_min=int(l_min),
-        epsilon=float(epsilon),
         anchor_boundary=bool(anchor_boundary),
         max_bridge_edges=int(r_bridge if max_bridge_edges is None else max_bridge_edges),
         max_bridge_euclidean_ratio=float(max_bridge_euclidean_ratio),
@@ -2027,7 +1946,6 @@ def topology_pipeline_result_to_json_dict(
             'endpoints_after': int(bridging.endpoints_after),
             'endpoints_before': int(bridging.endpoints_before),
             'final_output_contains_accepted_bridge_edges': bool(len(survived_bridge_edges) > 0),
-            'legacy_probability_bridging': dict(bridging.legacy_probability_bridging or {}),
             'max_bridge_length_edges': int(bridging.max_bridge_length_edges),
             'mean_bridge_length_edges': float(bridging.mean_bridge_length_edges),
             'parameters': {
@@ -2040,7 +1958,6 @@ def topology_pipeline_result_to_json_dict(
                 'tangent_alignment_weight': float(bridging.tangent_alignment_weight),
             },
             'path_weighting': str(bridging.path_weighting),
-            'probability_tiebreak_used': bool(bridging.probability_tiebreak_used),
             'rejected_bridge_reports': [dict(report) for report in bridging.rejected_bridge_reports],
             'same_component_bridges_accepted': int(bridging.same_component_bridges_accepted),
             'same_component_bridges_rejected_by_already_connected': int(
@@ -2077,7 +1994,6 @@ def topology_pipeline_result_to_json_dict(
         'parameters': {
             'anchor_boundary': bool(result.anchor_boundary),
             'd_max': int(result.d_max),
-            'epsilon': float(result.epsilon),
             'l_min': int(result.l_min),
             'max_bridge_edges': int(result.max_bridge_edges),
             'max_bridge_euclidean_ratio': float(result.max_bridge_euclidean_ratio),
@@ -2087,7 +2003,6 @@ def topology_pipeline_result_to_json_dict(
             'require_mutual_pairing': bool(result.require_mutual_pairing),
             'r_bridge': int(result.r_bridge),
             'tangent_alignment_weight': float(result.tangent_alignment_weight),
-            'tau_high': float(result.tau_high),
             'tau_low': float(result.tau_low),
         },
         'pruning': {

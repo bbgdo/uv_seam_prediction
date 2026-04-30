@@ -124,7 +124,6 @@ class RealMeshBridgingTests(unittest.TestCase):
             fixture.view,
             fixture.probabilities,
             tau_low=0.30,
-            tau_high=0.70,
             d_max=3,
             r_bridge=6,
             l_min=4,
