@@ -1299,9 +1299,61 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(result['rejected_too_long'], 1)
         self.assertTrue(all(edge.use_seam for edge in mesh.edges))
 
-    def test_dangling_cleanup_does_not_remove_endpoint_to_endpoint_component_by_default(self):
-        seam_mapping = load_module('uvsp_dangling_cleanup_entire_component_smoke', ADDON_DIR / 'seam_mapping.py')
-        mesh = FakeMesh(edges=[(0, 1), (1, 2)], vertex_count=3)
+    def test_dangling_cleanup_removes_one_edge_isolated_seam_component(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_isolated_one_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (2, 3)], vertex_count=4)
+        mesh.edges[0].use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=3,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 1)
+        self.assertEqual(result['removed_edges_count'], 1)
+        self.assertEqual(result['isolated_path_candidates'], 1)
+        self.assertEqual(result['isolated_paths_removed'], 1)
+        self.assertEqual(result['isolated_path_edges_removed'], 1)
+        self.assertFalse(mesh.edges[0].use_seam)
+        self.assertFalse(mesh.edges[1].use_seam)
+        self.assertEqual(result['removed_branches'][0]['kind'], 'isolated_path_component')
+
+    def test_dangling_cleanup_removes_two_edge_isolated_path_only_when_allowed(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_isolated_two_edge_smoke', ADDON_DIR / 'seam_mapping.py')
+        edges = [(0, 1), (1, 2)]
+        blocked_mesh = FakeMesh(edges=edges, vertex_count=3)
+        for edge in blocked_mesh.edges:
+            edge.use_seam = True
+
+        blocked = seam_mapping.apply_editable_dangling_seam_cleanup(
+            blocked_mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(blocked['isolated_paths_removed'], 0)
+        self.assertGreaterEqual(blocked['rejected_isolated_path_too_long'], 1)
+        self.assertTrue(all(edge.use_seam for edge in blocked_mesh.edges))
+
+        removed_mesh = FakeMesh(edges=edges, vertex_count=3)
+        for edge in removed_mesh.edges:
+            edge.use_seam = True
+
+        removed = seam_mapping.apply_editable_dangling_seam_cleanup(
+            removed_mesh,
+            max_dangling_edges=2,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(removed['removed_branches_count'], 1)
+        self.assertEqual(removed['isolated_paths_removed'], 1)
+        self.assertEqual(removed['isolated_path_edges_removed'], 2)
+        self.assertTrue(all(not edge.use_seam for edge in removed_mesh.edges))
+
+    def test_dangling_cleanup_does_not_remove_long_isolated_path(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_isolated_long_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (2, 3)], vertex_count=4)
         for edge in mesh.edges:
             edge.use_seam = True
 
@@ -1312,7 +1364,7 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         )
 
         self.assertEqual(result['removed_branches_count'], 0)
-        self.assertGreaterEqual(result['rejected_entire_component'], 1)
+        self.assertGreaterEqual(result['rejected_isolated_path_too_long'], 1)
         self.assertTrue(all(edge.use_seam for edge in mesh.edges))
 
     def test_dangling_cleanup_does_not_remove_closed_loop(self):
@@ -1323,13 +1375,65 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
 
         result = seam_mapping.apply_editable_dangling_seam_cleanup(
             mesh,
-            max_dangling_edges=1,
+            max_dangling_edges=3,
             protect_boundary_vertices=False,
         )
 
         self.assertEqual(result['candidates_total'], 0)
         self.assertEqual(result['removed_branches_count'], 0)
+        self.assertGreaterEqual(result['rejected_isolated_path_not_simple'], 1)
         self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+
+    def test_dangling_cleanup_does_not_remove_isolated_component_with_junction(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_isolated_junction_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(edges=[(0, 1), (1, 2), (0, 2), (0, 3), (1, 3)], vertex_count=4)
+        for edge in mesh.edges:
+            edge.use_seam = True
+
+        result = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=5,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(result['removed_branches_count'], 0)
+        self.assertGreaterEqual(result['rejected_isolated_path_not_simple'], 1)
+        self.assertTrue(all(edge.use_seam for edge in mesh.edges))
+
+    def test_dangling_cleanup_boundary_protects_isolated_path_when_enabled(self):
+        seam_mapping = load_module('uvsp_dangling_cleanup_isolated_boundary_smoke', ADDON_DIR / 'seam_mapping.py')
+        mesh = FakeMesh(
+            edges=[(0, 1)],
+            vertex_count=3,
+            polygons=[(0, 1, 2)],
+        )
+        mesh.edges[0].use_seam = True
+
+        protected = seam_mapping.apply_editable_dangling_seam_cleanup(
+            mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=True,
+        )
+
+        self.assertEqual(protected['removed_branches_count'], 0)
+        self.assertGreaterEqual(protected['rejected_isolated_path_boundary_protected'], 1)
+        self.assertTrue(mesh.edges[0].use_seam)
+
+        allowed_mesh = FakeMesh(
+            edges=[(0, 1)],
+            vertex_count=3,
+            polygons=[(0, 1, 2)],
+        )
+        allowed_mesh.edges[0].use_seam = True
+
+        allowed = seam_mapping.apply_editable_dangling_seam_cleanup(
+            allowed_mesh,
+            max_dangling_edges=1,
+            protect_boundary_vertices=False,
+        )
+
+        self.assertEqual(allowed['isolated_paths_removed'], 1)
+        self.assertFalse(allowed_mesh.edges[0].use_seam)
 
     def test_dangling_cleanup_protects_boundary_endpoint_when_enabled(self):
         seam_mapping = load_module('uvsp_dangling_cleanup_boundary_smoke', ADDON_DIR / 'seam_mapping.py')
