@@ -135,7 +135,7 @@ Converts `.obj` meshes into PyG `Data` objects with edge features and face indic
 python obj_to_dataset_graph.py ./3d-objs --max-meshes 50 --save
 ```
 
-The default `--feature-preset extended18` preserves the current endpoint + AO + symmetry feature path with fixed sorted endpoint order. Use `--feature-preset paper14` for GraphSeam-style endpoint `[normalized xyz, normals, gaussian curvature]` features. With `--endpoint-order auto`, `paper14` uses random endpoint order and `extended18` keeps fixed sorted order.
+Use `--feature-group paper14` (default) for GraphSeam-style endpoint `[normalized xyz, normals, gaussian curvature]` features with random endpoint order. Use `--feature-group custom` with optional flags (`--enable-ao`, `--enable-dihedral`, `--enable-symmetry`, `--enable-density`, `--enable-thickness-sdf`) to build a custom feature set.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -143,7 +143,7 @@ The default `--feature-preset extended18` preserves the current endpoint + AO + 
 | `--max-meshes` | 5 | Max meshes to process |
 | `--save` | off | Save dataset as `dataset.pt` |
 | `--output` | `dataset.pt` | Output path when saving |
-| `--feature-preset` | `extended18` | `extended18` or `paper14` |
+| `--feature-group` | `paper14` | `paper14` or `custom` |
 | `--endpoint-order` | `auto` | `auto`, `fixed`, or `random` |
 
 ---

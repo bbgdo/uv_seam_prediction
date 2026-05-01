@@ -74,9 +74,9 @@ Scans `./meshes` for `.obj` files, converts each to a PyG `Data` object, prints 
 
 Meshes with zero detected seam edges are flagged as outliers and excluded.
 
-Feature presets:
-- `extended18` is the default and preserves the current endpoint + AO + symmetry feature path.
-- `paper14` builds the GraphSeam-style baseline features: endpoint `[normalized xyz, normals, gaussian curvature]` for both endpoints. With `--endpoint-order auto`, this preset uses random endpoint order.
+Feature groups:
+- `paper14` is the default and builds GraphSeam-style baseline features: endpoint `[normalized xyz, normals, gaussian curvature]` for both endpoints. With `--endpoint-order auto`, this preset uses random endpoint order.
+- `custom` enables optional feature engineering via `--enable-ao`, `--enable-dihedral`, `--enable-symmetry`, `--enable-density`, and `--enable-thickness-sdf` flags.
 
 Seam detection works on actual UV data when present — an edge is a seam if either endpoint has different UV coordinates across its two adjacent faces. Boundary edges are always seams. Falls back to boundary-only detection when the mesh has no UVs.
 

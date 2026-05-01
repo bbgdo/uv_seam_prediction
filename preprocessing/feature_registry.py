@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-FEATURE_GROUP_NAMES = ('paper14', 'extended18', 'custom')
+FEATURE_GROUP_NAMES = ('paper14', 'custom')
 
 PAPER14_FEATURE_NAMES = (
     'pos_x_i', 'pos_y_i', 'pos_z_i',
@@ -20,15 +20,6 @@ SIGNED_DIHEDRAL_FEATURE_NAMES = ('signed_dihedral',)
 SYMMETRY_FEATURE_NAMES = ('symmetry_dist',)
 DENSITY_FEATURE_NAMES = ('density_mean', 'density_diff')
 THICKNESS_SDF_FEATURE_NAMES = ('thickness_sdf',)
-
-EXTENDED18_FEATURE_NAMES = (
-    *_I_BASE,
-    'ao_i',
-    *_J_BASE,
-    'ao_j',
-    'signed_dihedral',
-    'symmetry_dist',
-)
 
 ALL_ATOMIC_FEATURE_NAMES = (
     *_I_BASE,
@@ -103,12 +94,6 @@ FEATURE_GROUPS = {
         feature_names=PAPER14_FEATURE_NAMES,
         feature_flags=FeatureFlags(),
     ),
-    'extended18': FeatureGroup(
-        name='extended18',
-        feature_preset='extended18',
-        feature_names=EXTENDED18_FEATURE_NAMES,
-        feature_flags=FeatureFlags(ao=True, signed_dihedral=True, symmetry=True),
-    ),
     'custom': FeatureGroup(
         name='custom',
         feature_preset='custom',
@@ -119,9 +104,7 @@ FEATURE_GROUPS = {
 
 
 def _normalize_group_name(name: str | None) -> str:
-    group = name or 'extended18'
-    if group == 'extended':
-        group = 'extended18'
+    group = name or 'paper14'
     if group == 'paper':
         group = 'paper14'
     if group not in FEATURE_GROUPS:

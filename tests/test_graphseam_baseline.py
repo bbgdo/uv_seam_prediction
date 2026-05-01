@@ -76,18 +76,21 @@ class GraphSeamBaselineTests(unittest.TestCase):
         mesh = _tiny_mesh()
 
         paper, edges, _ = compute_edge_features(mesh, feature_preset='paper14', endpoint_order='random')
-        extended, extended_edges, _ = compute_edge_features(mesh, feature_preset='extended18')
 
         self.assertEqual(paper.shape, (len(edges), 14))
-        self.assertEqual(extended.shape, (len(extended_edges), 18))
+
+    def test_feature_registry_rejects_extended18(self):
+        with self.assertRaises(ValueError):
+            get_feature_group('extended18')
+        with self.assertRaises(ValueError):
+            resolve_feature_selection('extended18')
 
     def test_feature_registry_scaffold_lists_existing_baselines(self):
         self.assertEqual(get_feature_group('paper14').feature_preset, 'paper14')
-        self.assertEqual(len(get_feature_group('extended18').feature_names), 18)
+        self.assertEqual(get_feature_group('custom').feature_preset, 'custom')
 
     def test_feature_registry_resolves_custom_toggles(self):
         paper = resolve_feature_selection('paper14')
-        extended = resolve_feature_selection('extended18')
         ao_only = resolve_feature_selection('custom', enable_ao=True)
         symmetry_only = resolve_feature_selection('custom', enable_symmetry=True)
         density_only = resolve_feature_selection('custom', enable_density=True)
@@ -99,7 +102,6 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
 
         self.assertEqual(paper.feature_count, 14)
-        self.assertEqual(extended.feature_count, 18)
         self.assertEqual(ao_only.feature_names[-1], 'ao_j')
         self.assertEqual(symmetry_only.feature_names[-1], 'symmetry_dist')
         self.assertEqual(density_only.feature_names[-2:], ('density_mean', 'density_diff'))
@@ -262,7 +264,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
     def test_strict_paper_protocol_rejects_inconsistent_metadata(self):
         data = Data(x=torch.zeros(3, 14))
         data.label_source = 'wrong_source'
-        data.feature_preset = 'extended18'
+        data.feature_preset = 'wrong_preset'
         args = Namespace(
             preset='paper',
             resolution_tag='all',

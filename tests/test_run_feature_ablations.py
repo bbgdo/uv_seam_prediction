@@ -83,7 +83,7 @@ def _summary(seed: int, fpr_best: float, f1_best: float, fpr_05: float, f1_05: f
 class FeatureAblationRunnerTests(unittest.TestCase):
     def test_experiment_name_to_feature_selection_mapping(self):
         control = experiment_feature_selection('custom14_control')
-        extended_equiv = experiment_feature_selection('extended18_equiv')
+        ao_dih_sym = experiment_feature_selection('ao_dihedral_symmetry')
         full_custom = experiment_feature_selection('full_custom')
         sdf_only = experiment_feature_selection('sdf_only')
         ao_density_sdf = experiment_feature_selection('ao_density_sdf')
@@ -91,11 +91,11 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
         self.assertEqual(control.feature_group, 'custom')
         self.assertEqual(control.feature_names, PAPER14_FEATURE_NAMES)
-        self.assertTrue(extended_equiv.feature_flags.ao)
-        self.assertTrue(extended_equiv.feature_flags.signed_dihedral)
-        self.assertTrue(extended_equiv.feature_flags.symmetry)
-        self.assertFalse(extended_equiv.feature_flags.density)
-        self.assertEqual(extended_equiv.feature_count, 18)
+        self.assertTrue(ao_dih_sym.feature_flags.ao)
+        self.assertTrue(ao_dih_sym.feature_flags.signed_dihedral)
+        self.assertTrue(ao_dih_sym.feature_flags.symmetry)
+        self.assertFalse(ao_dih_sym.feature_flags.density)
+        self.assertEqual(ao_dih_sym.feature_count, 18)
         self.assertTrue(full_custom.feature_flags.density)
         self.assertEqual(full_custom.feature_names[-2:], ('density_mean', 'density_diff'))
         self.assertTrue(sdf_only.feature_flags.thickness_sdf)
@@ -118,7 +118,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
     def test_failure_on_missing_features_or_wrong_dataset_metadata(self):
         with self.assertRaisesRegex(ValueError, "feature_group must be 'paper14'"):
-            validate_paper_dataset_metadata([_paper_data(feature_group='extended18')])
+            validate_paper_dataset_metadata([_paper_data(feature_group='custom')])
 
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
             validate_custom_dataset_metadata([_custom_data(list(PAPER14_FEATURE_NAMES))], ['full_custom'])

@@ -35,7 +35,7 @@ def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:
 
 
 def resolve_feature_cli_selection(
-    feature_preset: str = 'extended18',
+    feature_preset: str = 'paper14',
     feature_group: str | None = None,
     enable_ao: bool = False,
     enable_dihedral: bool = False,
@@ -328,7 +328,7 @@ def _process_mesh_exact_obj(
 
 def process_mesh(
     file_path: str | Path,
-    feature_preset: str = 'extended18',
+    feature_preset: str = 'paper14',
     feature_group: str | None = None,
     enable_ao: bool = False,
     enable_dihedral: bool = False,
@@ -395,8 +395,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         '--feature-preset',
         choices=FEATURE_PRESETS,
-        default='extended18',
-        help='Deprecated alias for --feature-group paper14/extended18; kept for compatibility',
+        default='paper14',
+        help='Deprecated alias for --feature-group; use --feature-group instead',
     )
     parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default=None)
     parser.add_argument('--enable-ao', action='store_true', help='Enable AO endpoint features for custom group')

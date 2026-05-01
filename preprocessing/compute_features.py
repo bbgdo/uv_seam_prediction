@@ -17,7 +17,6 @@ try:
     from preprocessing.feature_registry import (
         ALL_ATOMIC_FEATURE_NAMES,
         DENSITY_CONFIG,
-        EXTENDED18_FEATURE_NAMES,
         PAPER14_FEATURE_NAMES,
         ResolvedFeatureSet,
         resolve_feature_selection,
@@ -27,13 +26,12 @@ except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing
     from feature_registry import (
         ALL_ATOMIC_FEATURE_NAMES,
         DENSITY_CONFIG,
-        EXTENDED18_FEATURE_NAMES,
         PAPER14_FEATURE_NAMES,
         ResolvedFeatureSet,
         resolve_feature_selection,
     )
 
-FEATURE_PRESETS = ('paper14', 'extended18')
+FEATURE_PRESETS = ('paper14',)
 ENDPOINT_ORDERS = ('fixed', 'random')
 
 
@@ -658,7 +656,7 @@ def compute_edge_features_for_selection(
 
 def compute_edge_features(
     mesh: trimesh.Trimesh,
-    feature_preset: str = 'extended18',
+    feature_preset: str = 'paper14',
     endpoint_order: str = 'auto',
     rng_seed: int = 42,
     *,
@@ -681,7 +679,7 @@ def compute_edge_features(
     )
     return compute_edge_features_for_selection(mesh, selection, endpoint_order=endpoint_order, rng_seed=rng_seed)
 
-FEATURE_NAMES = EXTENDED18_FEATURE_NAMES
+FEATURE_NAMES = PAPER14_FEATURE_NAMES
 
 
 if __name__ == '__main__':

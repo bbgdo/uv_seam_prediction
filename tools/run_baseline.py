@@ -98,8 +98,8 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
                         help='focal loss gamma (0=plain BCE, 2=standard focal)')
     parser.add_argument('--strict-paper-protocol', action='store_true',
                         help='fail unless dataset and options match the paper-faithful GraphSeam protocol')
-    parser.add_argument('--feature-group', choices=['paper14', 'extended18', 'custom'], default=None,
-                        help='feature bundle to train on (default: paper14 for --preset paper, otherwise extended18)')
+    parser.add_argument('--feature-group', choices=['paper14', 'custom'], default=None,
+                        help='feature bundle to train on (default: paper14)')
     parser.add_argument('--enable-ao', action='store_true',
                         help='enable AO endpoint features for --feature-group custom')
     parser.add_argument('--enable-dihedral', action='store_true',

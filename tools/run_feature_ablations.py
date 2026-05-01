@@ -118,15 +118,15 @@ EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
         feature_group='custom',
         enable_dihedral=True,
     ),
-    'extended18_equiv': ExperimentSpec(
-        name='extended18_equiv',
+    'ao_dihedral_symmetry': ExperimentSpec(
+        name='ao_dihedral_symmetry',
         dataset_role='custom',
         feature_group='custom',
         enable_ao=True,
         enable_dihedral=True,
         enable_symmetry=True,
     ),
-    'full_custom': ExperimentSpec(
+    'ao_dihedral_symmetry_density': ExperimentSpec(
         name='full_custom',
         dataset_role='custom',
         feature_group='custom',
@@ -135,7 +135,7 @@ EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
         enable_symmetry=True,
         enable_density=True,
     ),
-    'full_custom_sdf': ExperimentSpec(
+    'full_custom': ExperimentSpec(
         name='full_custom_sdf',
         dataset_role='custom',
         feature_group='custom',

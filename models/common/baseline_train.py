@@ -97,7 +97,7 @@ def dataset_metadata_summary(dataset: list[Data]) -> dict:
 def resolve_runtime_feature_selection(args: argparse.Namespace) -> ResolvedFeatureSet:
     feature_group = getattr(args, 'feature_group', None)
     if feature_group is None:
-        feature_group = 'paper14' if getattr(args, 'preset', None) == 'paper' else 'extended18'
+        feature_group = 'paper14'
 
     return resolve_feature_selection(
         feature_group,
@@ -133,7 +133,7 @@ def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeat
 
         current_dim = int(data.x.shape[1])
         if feature_names is None:
-            if current_dim == selection.feature_count and selection.feature_group in {'paper14', 'extended18'}:
+            if current_dim == selection.feature_count and selection.feature_group == 'paper14':
                 continue
             raise ValueError(
                 f"dataset graph {graph_idx} is missing feature_names metadata; "

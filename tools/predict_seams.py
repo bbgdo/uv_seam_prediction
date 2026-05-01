@@ -37,7 +37,7 @@ from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
 
 
 MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn')
-FEATURE_BUNDLES = ('auto', 'paper14_locked', 'extended18', 'ao_density', 'custom')
+FEATURE_BUNDLES = ('auto', 'paper14_locked', 'ao_density', 'custom')
 
 
 class PredictionError(RuntimeError):
@@ -252,8 +252,6 @@ def resolve_feature_bundle(
 
     if args.feature_bundle == 'paper14_locked':
         return resolve_feature_selection('paper14'), 'random', args.feature_bundle
-    if args.feature_bundle == 'extended18':
-        return resolve_feature_selection('extended18'), 'fixed', args.feature_bundle
     if args.feature_bundle == 'ao_density':
         return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', args.feature_bundle
 
@@ -282,8 +280,6 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
 
         if group in ('paper14', 'paper') or preset in ('paper14', 'paper'):
             return resolve_feature_selection('paper14'), 'random', 'auto'
-        if group in ('extended18', 'extended') or preset in ('extended18', 'extended'):
-            return resolve_feature_selection('extended18'), 'fixed', 'auto'
         if group == 'custom' or preset == 'custom':
             flags = _infer_feature_flags(metadata)
             return (
@@ -305,8 +301,6 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
             names = tuple(feature_names)
             if names == resolve_feature_selection('paper14').feature_names:
                 return resolve_feature_selection('paper14'), 'random', 'auto'
-            if names == resolve_feature_selection('extended18').feature_names:
-                return resolve_feature_selection('extended18'), 'fixed', 'auto'
             flags = _infer_feature_flags({'feature_names': feature_names})
             return (
                 resolve_feature_selection(
