@@ -224,7 +224,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unsupported ablation model'):
             validate_experiment_selection(list(EXPERIMENT_SPECS), model='meshcnn_full')
 
-    def test_parse_args_accepts_sparsemeshcnn_and_rejects_meshcnn_full(self):
+    def test_parse_args_accepts_sparsemeshcnn_and_rejects_internal_meshcnn_name(self):
         args = parse_args([
             '--model', 'sparsemeshcnn',
             '--meshcnn-dataset', 'meshcnn.pt',

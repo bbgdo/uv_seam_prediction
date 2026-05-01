@@ -117,7 +117,7 @@ def _coerce_feature_names(value) -> list[str] | None:
     return None
 
 
-def _legacy_feature_names(data: Data) -> list[str] | None:
+def _feature_names_from_saved_paper14_dim(data: Data) -> list[str] | None:
     preset = _metadata_value(data, 'feature_preset')
     if preset == 'paper14' and getattr(data.x, 'shape', (0, 0))[1] == 14:
         return list(PAPER14_FEATURE_NAMES)
@@ -129,7 +129,7 @@ def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeat
     for graph_idx, data in enumerate(dataset):
         feature_names = _coerce_feature_names(_metadata_value(data, 'feature_names'))
         if feature_names is None:
-            feature_names = _legacy_feature_names(data)
+            feature_names = _feature_names_from_saved_paper14_dim(data)
 
         current_dim = int(data.x.shape[1])
         if feature_names is None:

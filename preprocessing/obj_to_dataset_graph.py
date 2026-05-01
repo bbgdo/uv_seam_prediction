@@ -110,7 +110,6 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
             split_j = np.linalg.norm(uv_vj_f0 - uv_vj_f1) > UV_EPS
             seam_map[edge] = bool(split_i or split_j)
         else:
-            # Keep legacy behavior for the transition period.
             seam_map[edge] = True
 
     return seam_map

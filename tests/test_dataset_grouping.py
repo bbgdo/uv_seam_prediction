@@ -146,7 +146,7 @@ class DatasetGroupingTests(unittest.TestCase):
         self.assertEqual(saved_info['val'], loaded_info['val'])
         self.assertEqual(saved_info['test'], loaded_info['test'])
 
-    def test_split_dataset_rejects_legacy_group_mode(self):
+    def test_split_dataset_rejects_removed_group_mode(self):
         dataset = [_data('mesh_10000f.obj'), _data('other.obj')]
 
         with self.assertRaisesRegex(ValueError, "group_mode must be 'family'"):
