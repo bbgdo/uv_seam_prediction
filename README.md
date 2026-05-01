@@ -11,7 +11,7 @@ UV seam placement is a tedious manual task in 3D modeling. This project frames i
 ```
 dataset_py_utils/
 ├── preprocessing/           # Mesh cleanup, feature engineering, augmentation,
-│                               graph conversion, and dual graph construction
+│                               graph conversion and GNN dataset preparation
 ├── models/                  # GNN architectures, training, and experiment logging
 │   ├── dual_graphsage/      # DualGraphSAGE node classifier (dual graph)
 │   ├── gatv2/               # DualGATv2 node classifier (dual graph)
@@ -28,8 +28,7 @@ dataset_py_utils/
 Raw 3D files
     → [preprocessing]                    cleanup, format conversion, scale normalization
     → [augment_meshes.py]                data augmentation (Gaussian vertex perturbation)
-    → [obj_to_dataset_graph.py]              build original graph dataset (dataset.pt)
-    → [build_dual_graph.py]                  build dual graph dataset (dataset_dual.pt)
+    → [obj_to_dataset_graph.py]              build the maintained PyG GNN dataset entrypoint
     → [build_meshcnn_data.py]                build MeshCNN dataset (dataset_meshcnn.pt)
     → [models/dual_graphsage/train.py]       train DualGraphSAGE on dual graph
     → [models/gatv2/train.py]                train DualGATv2 on dual graph
@@ -53,9 +52,9 @@ Each mesh is stored as a PyTorch Geometric `Data` object (original graph, used f
 | `y` | `[2E]` | 1 = seam, 0 = not a seam |
 | `faces` | `[F, 3]` | triangle face indices |
 
-### Dual graph (`dataset_dual.pt`)
+### Dual graph view
 
-Each original edge becomes a dual node; two dual nodes are connected if their original edges share a face.
+`preprocessing/obj_to_dataset_graph.py` is the maintained GNN/PyG builder. It writes the canonical edge-level dataset and exports the dual-view helpers used by GraphSAGE/GATv2 tooling.
 
 | Tensor | Shape | Description |
 |---|---|---|
@@ -70,7 +69,7 @@ Each original edge becomes a dual node; two dual nodes are connected if their or
 python ./preprocessing/obj_to_dataset_graph.py [./meshes (YOUR_DIR_NAME)] --max-meshes 200 --save
 ```
 
-Scans `./meshes` for `.obj` files, converts each to a PyG `Data` object, prints per-mesh statistics and class balance, then saves the full list to `dataset.pt`.
+Scans `./meshes` for `.obj` files, converts each to a PyG `Data` object with exact OBJ seam labels, prints per-mesh statistics and class balance, then saves the full list to `dataset.pt`.
 
 Meshes with zero detected seam edges are flagged as outliers and excluded.
 

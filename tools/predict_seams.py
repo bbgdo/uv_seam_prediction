@@ -29,9 +29,9 @@ from models.utils.seam_topology import (  # noqa: E402
     diagnostics_to_json_dict,
     topology_pipeline_result_to_json_dict,
 )
-from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.obj_to_dataset_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.obj_parser import parse_obj  # noqa: E402
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology  # noqa: E402
 

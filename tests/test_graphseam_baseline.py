@@ -16,9 +16,9 @@ from models.common.baseline_train import _model_kwargs, apply_runtime_feature_se
 from models.baselines.registry import get_baseline
 from tools.run_baseline import parse_args as parse_baseline_args
 from models.utils.experiment_log import ExperimentLogger
-from preprocessing.build_dual_graph import build_dual_graph_data
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.feature_registry import get_feature_group, resolve_feature_selection
+from preprocessing.obj_to_dataset_graph import build_dual_data
 
 
 def _tiny_mesh() -> trimesh.Trimesh:
@@ -154,7 +154,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         data.feature_flags = {'ao': False, 'signed_dihedral': False, 'symmetry': False, 'density': True}
         data.density_config = {'neighborhood': '2-ring'}
 
-        dual = build_dual_graph_data(data)
+        dual = build_dual_data(data)
 
         self.assertEqual(dual.feature_names, data.feature_names)
         self.assertEqual(dual.feature_group, 'custom')

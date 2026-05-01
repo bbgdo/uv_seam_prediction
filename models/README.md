@@ -113,13 +113,14 @@ Paper baseline:
 ```bash
 python preprocessing/obj_to_dataset_graph.py ./3d-objs --max-meshes 200 --save \
     --output dataset_paper14.pt --feature-preset paper14
-python preprocessing/build_dual_graph.py --input dataset_paper14.pt --output dataset_paper14_dual.pt
 python models/dual_graphsage/train.py \
     --dataset dataset_paper14_dual.pt \
     --preset paper \
     --resolution-tag 10000f \
     --run-dir runs/graphseam_paper14_10000f
 ```
+
+The maintained GNN dataset builder is `preprocessing/obj_to_dataset_graph.py`. Dual-graph conversion helpers now live in that module as `build_dual_data(...)` and `build_dual_edge_index_from_unique_edges(...)`.
 
 ### DualGATv2 — `gatv2/train.py`
 

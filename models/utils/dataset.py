@@ -397,9 +397,9 @@ def split_dataset(
 
 
 def load_dual_dataset(path: str | Path) -> list[Data]:
-    from preprocessing.build_dual_graph import build_dual_graph_data
+    from preprocessing.obj_to_dataset_graph import build_dual_data
     original = load_dataset(path)
-    return [build_dual_graph_data(d) for d in original]
+    return [build_dual_data(d) for d in original]
 
 
 def compute_pos_weight(dataset: list[Data], max_weight: float = 100.0) -> torch.Tensor:

@@ -127,9 +127,9 @@ AO requires raycasting (pyembree preferred, ray_triangle as secondary). Raises `
 
 ---
 
-### 7. `obj_to_dataset_graph.py` — Graph Dataset Builder
+### 7. `obj_to_dataset_graph.py` — Official GNN Dataset Builder
 
-Converts `.obj` meshes into PyG `Data` objects with edge features and face indices. Seam labels are derived from UV coordinate splits across adjacent faces.
+Converts `.obj` meshes into PyG `Data` objects with exact OBJ seam labels, edge features, face indices, and the metadata used by GraphSAGE/GATv2 tooling. This is the maintained GNN/PyG dataset entrypoint.
 
 ```bash
 python obj_to_dataset_graph.py ./3d-objs --max-meshes 50 --save
@@ -141,25 +141,16 @@ Use `--feature-group paper14` (default) for GraphSeam-style endpoint `[normalize
 |---|---|---|
 | `mesh_dir` | `./meshes` | Directory with `.obj` files |
 | `--max-meshes` | 5 | Max meshes to process |
-| `--save` | off | Save dataset as `dataset.pt` |
-| `--output` | `dataset.pt` | Output path when saving |
+| `--save` | off | Save dataset as `dataset_v2_exact_labels.pt` by default |
+| `--output` | `dataset_v2_exact_labels.pt` | Output path when saving |
 | `--feature-group` | `paper14` | `paper14` or `custom` |
 | `--endpoint-order` | `auto` | `auto`, `fixed`, or `random` |
 
 ---
 
-### 8. `build_dual_graph.py` — Dual Graph Construction
+`obj_to_dataset_graph.py` also exposes the maintained dual-view helpers used by the GNN pipeline: `build_dual_data(...)` and `build_dual_edge_index_from_unique_edges(...)`.
 
-Converts the original graph dataset into a dual (line) graph for GATv2 training. Each original edge becomes a dual node, with dual edges connecting edges that share a face.
-
-```bash
-python build_dual_graph.py --input dataset.pt --output dataset_dual.pt
-```
-
-| Flag | Description |
-|---|---|
-| `--input` | Path to original `dataset.pt` |
-| `--output` | Path to save dual dataset |
+SparseMeshCNN remains separate and still uses `build_meshcnn_data.py`.
 
 ---
 

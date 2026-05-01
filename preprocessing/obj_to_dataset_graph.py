@@ -194,6 +194,72 @@ def _mesh_summary(data: Data) -> dict:
     }
 
 
+def _extract_unique_edges(data: Data) -> np.ndarray:
+    unique_edges = getattr(data, 'unique_edges', None)
+    if unique_edges is not None:
+        if torch.is_tensor(unique_edges):
+            unique_edges = unique_edges.detach().cpu().numpy()
+        return np.asarray(unique_edges, dtype=np.int64)
+
+    num_directed = int(data.edge_index.shape[1])
+    num_unique = num_directed // 2
+    return data.edge_index[:, :num_unique].T.detach().cpu().numpy().astype(np.int64, copy=False)
+
+
+def build_dual_edge_index_from_unique_edges(unique_edges: np.ndarray) -> torch.LongTensor:
+    """Build line-graph adjacency for canonical undirected mesh edges."""
+    unique_edges = np.asarray(unique_edges, dtype=np.int64)
+    if unique_edges.ndim != 2 or unique_edges.shape[1] != 2:
+        raise ValueError(f'unique_edges must have shape [E, 2], got {unique_edges.shape}')
+
+    vertex_to_edges: dict[int, list[int]] = {}
+    for idx, (vi, vj) in enumerate(unique_edges):
+        vertex_to_edges.setdefault(int(vi), []).append(idx)
+        vertex_to_edges.setdefault(int(vj), []).append(idx)
+
+    dual_edges_set: set[tuple[int, int]] = set()
+    for incident in vertex_to_edges.values():
+        for i in range(len(incident)):
+            for j in range(i + 1, len(incident)):
+                a, b = incident[i], incident[j]
+                dual_edges_set.add((a, b))
+                dual_edges_set.add((b, a))
+
+    if not dual_edges_set:
+        return torch.empty((2, 0), dtype=torch.long)
+    dual_edges = np.array(sorted(dual_edges_set), dtype=np.int64).T
+    return torch.from_numpy(dual_edges)
+
+
+def build_dual_data(original_data: Data) -> Data:
+    """Convert an original-graph mesh sample into its dual-graph PyG view."""
+    unique_edges = _extract_unique_edges(original_data)
+    dual_edges = build_dual_edge_index_from_unique_edges(unique_edges)
+    num_unique = int(unique_edges.shape[0])
+    dual_x = original_data.edge_attr[:num_unique]
+    dual_y = original_data.y[:num_unique]
+
+    dual = Data(
+        x=dual_x,
+        edge_index=dual_edges,
+        y=dual_y,
+        num_nodes=num_unique,
+    )
+    dual.file_path = getattr(original_data, 'file_path', '')
+    dual.label_source = getattr(original_data, 'label_source', '')
+    dual.feature_preset = getattr(original_data, 'feature_preset', '')
+    dual.feature_group = getattr(original_data, 'feature_group', getattr(original_data, 'feature_preset', ''))
+    dual.feature_names = list(getattr(original_data, 'feature_names', []))
+    dual.feature_flags = dict(getattr(original_data, 'feature_flags', {}))
+    if hasattr(original_data, 'density_config'):
+        dual.density_config = dict(getattr(original_data, 'density_config'))
+    dual.endpoint_order = getattr(original_data, 'endpoint_order', '')
+    dual.weld_mode = getattr(original_data, 'weld_mode', '')
+    dual.seam_edge_count = getattr(original_data, 'seam_edge_count', int(dual_y.sum().item()))
+    dual.boundary_edge_count = getattr(original_data, 'boundary_edge_count', 0)
+    return dual
+
+
 def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
     if not dataset:
         raise ValueError('cannot build a manifest for an empty dataset')

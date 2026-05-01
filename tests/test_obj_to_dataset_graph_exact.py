@@ -7,11 +7,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from preprocessing.build_dual_graph import build_dual_graph_data
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.obj_parser import parse_obj
 from preprocessing.obj_to_dataset_graph import (
     _build_feature_mesh_from_topology,
+    build_dual_data,
     main as build_dataset_main,
     manifest_path_for_dataset,
     process_mesh,
@@ -221,7 +221,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
                 endpoint_order='fixed',
             )
 
-            dual = build_dual_graph_data(data)
+            dual = build_dual_data(data)
 
             self.assertEqual(dual.file_path, str(path))
             self.assertEqual(dual.label_source, 'exact_obj')

@@ -15,8 +15,8 @@ if _ROOT not in sys.path:
 
 import torch
 from preprocessing.compute_features import compute_edge_features
-from preprocessing.build_dual_graph import build_dual_graph_data
 from models.utils.seam_topology import apply_topology_pipeline, build_seam_graph_view
+from preprocessing.obj_to_dataset_graph import build_dual_data
 from preprocessing.obj_parser import parse_obj
 from preprocessing.topology import WeldConfig, build_topology
 from evaluation.uv_metrics import parse_obj_with_uv, compute_all_uv_metrics
@@ -91,7 +91,7 @@ def _infer_seam_indices(
             faces=torch.from_numpy(faces),
         )
         data.file_path = str(mesh_path)
-        dual_data = build_dual_graph_data(data)
+        dual_data = build_dual_data(data)
         x = dual_data.x.to(device)
         ei = dual_data.edge_index.to(device)
         with torch.no_grad():
