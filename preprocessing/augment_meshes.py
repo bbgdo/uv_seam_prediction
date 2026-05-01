@@ -102,10 +102,48 @@ def _compute_local_vertex_scale(lines: list[str], face_indices: list[int], verti
     return np.maximum(local_scale, MIN_EDGE_LENGTH)
 
 
+def _compute_shift_offsets(
+    vertices: np.ndarray,
+    n_zones: int,
+    radius: float,
+    falloff: float,
+    strength: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if n_zones <= 0:
+        return np.zeros_like(vertices)
+    if radius <= 0.0:
+        raise ValueError('shift radius must be positive')
+    if falloff <= 0.0:
+        raise ValueError('shift falloff must be positive')
+    if strength < 0.0:
+        raise ValueError('shift strength must be non-negative')
+
+    offsets = np.zeros_like(vertices)
+    center_indices = rng.integers(0, len(vertices), size=n_zones)
+    centers = vertices[center_indices]
+    zone_shifts = rng.normal(0.0, strength, size=(n_zones, 3))
+
+    for center, zone_shift in zip(centers, zone_shifts):
+        distances = np.linalg.norm(vertices - center, axis=1)
+        weights = np.clip(1.0 - distances / radius, 0.0, 1.0)
+        weights = weights * weights * (3.0 - 2.0 * weights)
+        weights = weights ** falloff
+        offsets += weights[:, None] * zone_shift[None, :]
+
+    return offsets
+
+
 def augment_obj_file(
     obj_path: Path,
     n_copies: int,
-    noise_fraction: float,
+    enable_noise: bool,
+    noise_fraction: float | None,
+    enable_shift: bool,
+    shift_zones: int,
+    shift_radius: float,
+    shift_falloff: float,
+    shift_strength: float,
     rng: np.random.Generator,
 ) -> list[Path]:
     """Directly manipulates OBJ text to guarantee UV preservation."""
@@ -117,15 +155,29 @@ def augment_obj_file(
         return []
 
     vertices = np.array([_parse_vertex_line(lines[i]) for i in vertex_indices])
-    local_scale = _compute_local_vertex_scale(lines, face_indices, vertices)
+    local_scale = _compute_local_vertex_scale(lines, face_indices, vertices) if enable_noise else None
 
     created = []
     stem = obj_path.stem
     suffix = obj_path.suffix
 
     for copy_idx in range(n_copies):
-        noise = rng.normal(0.0, noise_fraction, vertices.shape) * local_scale[:, None]
-        perturbed = vertices + noise
+        offsets = np.zeros_like(vertices)
+
+        if enable_noise:
+            offsets += rng.normal(0.0, noise_fraction, vertices.shape) * local_scale[:, None]
+
+        if enable_shift:
+            offsets += _compute_shift_offsets(
+                vertices=vertices,
+                n_zones=shift_zones,
+                radius=shift_radius,
+                falloff=shift_falloff,
+                strength=shift_strength,
+                rng=rng,
+            )
+
+        perturbed = vertices + offsets
 
         new_lines = lines.copy()
         for line_idx, v_idx in zip(vertex_indices, range(len(perturbed))):
@@ -139,12 +191,45 @@ def augment_obj_file(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Augment meshes via density-aware Gaussian vertex perturbation.')
+    parser = argparse.ArgumentParser(description='Augment meshes via relative vertex noise and/or smooth regional shifts.')
     parser.add_argument('mesh_dir', help='Directory containing .obj files')
     parser.add_argument('--copies', type=int, default=3, help='Augmented copies per mesh (default: 3)')
-    parser.add_argument('--noise', type=float, default=0.05, help='Gaussian noise as fraction of local mean edge length (default: 0.05)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default: 42)')
+
+    parser.add_argument('--enable-noise', '--enable_noise', action='store_true', help='Enable density-aware Gaussian vertex noise')
+    parser.add_argument('--noise', type=float, default=None, help='Gaussian noise as fraction of local mean edge length')
+
+    parser.add_argument('--enable-shift', '--enable_shift', action='store_true', help='Enable smooth regional vertex shifts')
+    parser.add_argument('--shift-zones', '--shift_zones', type=int, default=4, help='Number of random shift zones per copy (default: 4)')
+    parser.add_argument('--shift-radius', '--shift_radius', type=float, default=0.15, help='Shift zone radius in mesh units (default: 0.15)')
+    parser.add_argument('--shift-falloff', '--shift_falloff', type=float, default=2.0, help='Shift falloff exponent; larger values localize the shift more strongly (default: 2.0)')
+    parser.add_argument('--shift-strength', '--shift_strength', type=float, default=0.02, help='Gaussian shift vector std in mesh units (default: 0.02)')
     args = parser.parse_args()
+
+    if not args.enable_noise and not args.enable_shift:
+        print('[error] enable at least one augmentation mode: --enable-noise and/or --enable-shift')
+        sys.exit(1)
+    if args.enable_noise and args.noise is None:
+        print('[error] --enable-noise requires --noise')
+        sys.exit(1)
+    if not args.enable_noise and args.noise is not None:
+        print('[error] --noise was provided but --enable-noise is not enabled')
+        sys.exit(1)
+    if args.enable_noise and args.noise < 0.0:
+        print('[error] --noise must be non-negative')
+        sys.exit(1)
+    if args.enable_shift and args.shift_zones <= 0:
+        print('[error] --shift-zones must be positive')
+        sys.exit(1)
+    if args.enable_shift and args.shift_radius <= 0.0:
+        print('[error] --shift-radius must be positive')
+        sys.exit(1)
+    if args.enable_shift and args.shift_falloff <= 0.0:
+        print('[error] --shift-falloff must be positive')
+        sys.exit(1)
+    if args.enable_shift and args.shift_strength < 0.0:
+        print('[error] --shift-strength must be non-negative')
+        sys.exit(1)
 
     mesh_dir = Path(args.mesh_dir)
     if not mesh_dir.is_dir():
@@ -162,11 +247,30 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     total_created = 0
+    modes = []
+    if args.enable_noise:
+        modes.append(f'noise={args.noise}')
+    if args.enable_shift:
+        modes.append(
+            f'shift_zones={args.shift_zones}, shift_radius={args.shift_radius}, '
+            f'shift_falloff={args.shift_falloff}, shift_strength={args.shift_strength}'
+        )
 
-    print(f"augmenting {len(obj_files)} mesh(es) with {args.copies} copies each (noise={args.noise})...\n")
+    print(f"augmenting {len(obj_files)} mesh(es) with {args.copies} copies each ({'; '.join(modes)})...\n")
 
     for obj_path in obj_files:
-        created = augment_obj_file(obj_path, args.copies, args.noise, rng)
+        created = augment_obj_file(
+            obj_path=obj_path,
+            n_copies=args.copies,
+            enable_noise=args.enable_noise,
+            noise_fraction=args.noise,
+            enable_shift=args.enable_shift,
+            shift_zones=args.shift_zones,
+            shift_radius=args.shift_radius,
+            shift_falloff=args.shift_falloff,
+            shift_strength=args.shift_strength,
+            rng=rng,
+        )
         total_created += len(created)
         print(f"  {obj_path.name} -> {len(created)} augmented copies")
 
