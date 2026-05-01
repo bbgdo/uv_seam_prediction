@@ -25,7 +25,8 @@ from models.meshcnn_full.mesh import MeshCNNSample, load_meshcnn_dataset
 from models.meshcnn_full.model import MeshCNNSegmenter
 from models.utils.dataset import compute_pos_weight, load_split_json_metadata, split_dataset
 from models.utils.losses import focal_bce_with_logits
-from models.utils.metrics import edge_f1
+from models.utils.metrics import edge_f1, threshold_sweep
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
 
 
 def set_global_seed(seed: int) -> None:
@@ -48,18 +49,111 @@ def _load_manifest(dataset_path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding='utf-8'))
 
 
-def _feature_metadata(sample: MeshCNNSample, manifest: dict[str, Any]) -> dict[str, Any]:
+def _coerce_feature_names(value) -> list[str] | None:
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return None
+
+
+def resolve_meshcnn_feature_selection(args) -> ResolvedFeatureSet:
+    return resolve_feature_selection(
+        args.feature_group,
+        enable_ao=args.enable_ao,
+        enable_dihedral=args.enable_dihedral,
+        enable_symmetry=args.enable_symmetry,
+        enable_density=args.enable_density,
+        enable_thickness_sdf=args.enable_thickness_sdf,
+    )
+
+
+def _available_meshcnn_feature_names(
+    dataset: list[MeshCNNSample],
+    manifest: dict[str, Any] | None,
+) -> list[str]:
+    if not dataset:
+        raise ValueError('MeshCNN dataset is empty')
+
+    manifest_names = _coerce_feature_names((manifest or {}).get('feature_names'))
+    first_names = _coerce_feature_names(getattr(dataset[0], 'feature_names', None))
+    available = manifest_names or first_names
+    if available is None:
+        raise ValueError('MeshCNN dataset is missing feature_names metadata')
+
+    for sample_idx, sample in enumerate(dataset):
+        sample_names = _coerce_feature_names(getattr(sample, 'feature_names', None))
+        if sample_names is None:
+            raise ValueError(f'MeshCNN sample {sample_idx} is missing feature_names metadata')
+        if sample_names != available:
+            raise ValueError(
+                f'MeshCNN sample {sample_idx} feature_names differ from the dataset feature_names metadata'
+            )
+        feature_dim = int(sample.edge_features.shape[1])
+        if feature_dim != len(available):
+            raise ValueError(
+                f'MeshCNN sample {sample_idx} edge_features dim {feature_dim} does not match '
+                f'feature_names length {len(available)}'
+            )
+    return available
+
+
+def _selected_feature_metadata(
+    sample: MeshCNNSample,
+    manifest: dict[str, Any] | None,
+    selection: ResolvedFeatureSet,
+    source_feature_names: list[str],
+) -> dict[str, Any]:
+    manifest = manifest or {}
     return {
-        'feature_group': manifest.get('feature_group', sample.feature_group),
-        'feature_preset': manifest.get('feature_preset', sample.feature_preset),
-        'feature_names': manifest.get('feature_names', list(sample.feature_names)),
-        'feature_flags': manifest.get('feature_flags', dict(sample.feature_flags)),
-        'feature_dim': int(manifest.get('feature_dim', sample.in_channels)),
+        'feature_group': selection.feature_group,
+        'feature_preset': selection.feature_preset,
+        'feature_names': list(selection.feature_names),
+        'feature_flags': selection.feature_flags.as_dict(),
+        'feature_dim': len(selection.feature_names),
         'endpoint_order': manifest.get('endpoint_order', sample.endpoint_order),
-        'density_config': manifest.get('density_config', sample.density_config),
+        'density_config': selection.density_config,
         'label_source': manifest.get('label_source', sample.label_source),
         'sample_format': manifest.get('sample_format', 'meshcnn_full_v2'),
+        'source_feature_names': list(source_feature_names),
+        'original_feature_names': list(source_feature_names),
     }
+
+
+def slice_meshcnn_dataset_features(
+    dataset: list[MeshCNNSample],
+    selection: ResolvedFeatureSet,
+    manifest: dict[str, Any] | None = None,
+) -> tuple[list[MeshCNNSample], dict[str, Any]]:
+    available = _available_meshcnn_feature_names(dataset, manifest)
+    index_by_name = {name: idx for idx, name in enumerate(available)}
+    missing = [name for name in selection.feature_names if name not in index_by_name]
+    if missing:
+        raise ValueError(
+            f"MeshCNN dataset is missing requested feature(s): {missing}; "
+            f'available feature_names={available}'
+        )
+
+    selected_indices = torch.as_tensor(
+        [index_by_name[name] for name in selection.feature_names],
+        dtype=torch.long,
+    )
+    for sample_idx, sample in enumerate(dataset):
+        sample.edge_features = torch.index_select(
+            sample.edge_features.detach().cpu(),
+            dim=1,
+            index=selected_indices,
+        ).contiguous()
+        sample.feature_group = selection.feature_group
+        sample.feature_preset = selection.feature_preset
+        sample.feature_names = list(selection.feature_names)
+        sample.feature_flags = selection.feature_flags.as_dict()
+        sample.density_config = dict(selection.density_config) if selection.density_config else None
+        if int(sample.edge_features.shape[1]) != len(selection.feature_names):
+            raise ValueError(
+                f'MeshCNN sample {sample_idx} sliced feature dim {int(sample.edge_features.shape[1])} '
+                f'does not match selected feature count {len(selection.feature_names)}'
+            )
+
+    return dataset, _selected_feature_metadata(dataset[0], manifest, selection, available)
 
 
 def _validate_dataset_tensors_cpu(dataset: list[MeshCNNSample]) -> None:
@@ -336,6 +430,25 @@ def _run_epoch(
     return total_loss / max(len(samples), 1), metrics, _finalize_debug(epoch_debug)
 
 
+@torch.no_grad()
+def _predict_logits_labels(
+    model: MeshCNNSegmenter,
+    samples: list[MeshCNNSample],
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    model.eval()
+    logits = []
+    labels = []
+    for sample in samples:
+        logits.append(model(sample).detach().cpu())
+        labels.append(sample.edge_labels.detach().cpu())
+    return torch.cat(logits), torch.cat(labels)
+
+
+def _confusion_counts(metrics: dict[str, Any]) -> dict[str, int]:
+    return {key: int(metrics[key]) for key in ('tp', 'fp', 'fn', 'tn') if key in metrics}
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', encoding='utf-8') as handle:
@@ -367,6 +480,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--group-mode', choices=('legacy', 'family'), default='family')
     parser.add_argument('--split-json-in', default=None)
     parser.add_argument('--split-json-out', default=None)
+    parser.add_argument('--resolution-tag', default=None)
+    parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default='paper14')
+    parser.add_argument('--enable-ao', action='store_true')
+    parser.add_argument('--enable-dihedral', action='store_true')
+    parser.add_argument('--enable-symmetry', action='store_true')
+    parser.add_argument('--enable-density', action='store_true')
+    parser.add_argument('--enable-thickness-sdf', action='store_true')
     args = parser.parse_args(argv)
 
     split_metadata = load_split_json_metadata(args.split_json_in) if args.split_json_in else {}
@@ -379,13 +499,17 @@ def main(argv: list[str] | None = None) -> None:
     _validate_dataset_tensors_cpu(dataset)
     print('[info] dataset tensors: cpu')
     manifest = _load_manifest(dataset_path)
-    feature_metadata = _feature_metadata(dataset[0], manifest)
-    in_channels = int(feature_metadata.get('feature_dim') or dataset[0].edge_features.shape[1])
-    actual_channels = int(dataset[0].edge_features.shape[1])
-    if in_channels != actual_channels:
-        print(f'[info] manifest feature_dim={in_channels}, sample tensor has {actual_channels}; using tensor shape')
-        in_channels = actual_channels
-        feature_metadata['feature_dim'] = actual_channels
+    source_feature_dim = int(manifest.get('feature_dim', dataset[0].edge_features.shape[1]))
+    actual_source_channels = int(dataset[0].edge_features.shape[1])
+    if source_feature_dim != actual_source_channels:
+        print(
+            f'[info] manifest feature_dim={source_feature_dim}, sample tensor has '
+            f'{actual_source_channels}; using tensor shape for source validation'
+        )
+    selection = resolve_meshcnn_feature_selection(args)
+    dataset, feature_metadata = slice_meshcnn_dataset_features(dataset, selection, manifest)
+    in_channels = int(dataset[0].edge_features.shape[1])
+    feature_metadata['feature_dim'] = in_channels
 
     train, val, test, split_info = split_dataset(
         dataset,
@@ -396,6 +520,7 @@ def main(argv: list[str] | None = None) -> None:
         split_json_in=args.split_json_in,
         split_json_out=args.split_json_out,
         dataset_path=dataset_path,
+        resolution_tag=args.resolution_tag,
     )
     if not train or not val or not test:
         raise ValueError('train/val/test split produced an empty split; use a larger dataset or adjust ratios')
@@ -439,6 +564,7 @@ def main(argv: list[str] | None = None) -> None:
         'test_ratio': args.test_ratio,
         'split_json_in': str(args.split_json_in) if args.split_json_in else None,
         'split_json_out': str(args.split_json_out) if args.split_json_out else None,
+        'resolution_tag': args.resolution_tag,
         'train_graphs': len(train),
         'val_graphs': len(val),
         'test_graphs': len(test),
@@ -549,13 +675,39 @@ def main(argv: list[str] | None = None) -> None:
         args.loss,
         args.focal_gamma,
     )
+    val_logits, val_labels = _predict_logits_labels(model, val, device)
+    test_logits, test_labels = _predict_logits_labels(model, test, device)
+    val_sweep = threshold_sweep(val_logits, val_labels)
+    test_sweep = threshold_sweep(test_logits, test_labels)
+    best_validation_threshold = float(val_sweep['best']['threshold'])
+    test_metrics_threshold_0_5 = edge_f1(test_logits, test_labels, threshold=0.5)
+    test_metrics_best_validation_threshold = edge_f1(
+        test_logits,
+        test_labels,
+        threshold=best_validation_threshold,
+    )
+    _write_json(run_dir / 'val_threshold_sweep.json', val_sweep)
+    _write_json(run_dir / 'test_threshold_sweep.json', test_sweep)
     summary = {
         'best_epoch': best_epoch,
         'best_val_f1': best_val_f1,
+        'best_validation_threshold': best_validation_threshold,
         'test_loss': test_loss,
         **{f'test_{key}': value for key, value in test_metrics.items() if isinstance(value, (int, float))},
+        'test_metrics_threshold_0_5': test_metrics_threshold_0_5,
+        'test_metrics_best_validation_threshold': test_metrics_best_validation_threshold,
+        'test_confusion_threshold_0_5': _confusion_counts(test_metrics_threshold_0_5),
+        'test_confusion_best_validation_threshold': _confusion_counts(test_metrics_best_validation_threshold),
+        'feature_metadata': feature_metadata,
+        'model_config': model_config,
     }
     _write_json(run_dir / 'summary.json', summary)
+    payload['best_validation_threshold'] = best_validation_threshold
+    payload['val_threshold_sweep'] = val_sweep
+    payload['test_threshold_sweep'] = test_sweep
+    payload['test_metrics_threshold_0_5'] = test_metrics_threshold_0_5
+    payload['test_metrics_best_validation_threshold'] = test_metrics_best_validation_threshold
+    torch.save(payload, best_path)
     print(
         f'test | loss {test_loss:.4f} f1 {test_metrics["f1"]:.4f} '
         f'p {test_metrics["precision"]:.4f} r {test_metrics["recall"]:.4f}'

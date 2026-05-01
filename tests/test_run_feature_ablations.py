@@ -5,24 +5,31 @@ import unittest
 from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 import torch
 from torch_geometric.data import Data
 
+from models.meshcnn_full.mesh import MeshCNNSample
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 from tools.run_feature_ablations import (
     EXPERIMENT_SPECS,
     FULL_ABLATION_SUITE,
     THRESHOLD_05_PREFIX,
     VAL_BEST_PREFIX,
+    build_experiment_payload,
     build_train_command,
     experiment_feature_selection,
     generate_split_files,
     paired_delta_summary,
+    parse_args,
     run_experiment,
+    run_suite,
     split_path_for_seed,
+    validate_dataset_roles,
     validate_experiment_selection,
     validate_custom_dataset_metadata,
+    validate_meshcnn_dataset_metadata,
     validate_paper_dataset_metadata,
     validate_split_files,
 )
@@ -54,6 +61,37 @@ def _custom_data(feature_names: list[str] | None = None, endpoint_order: str = '
     data.feature_names = names
     data.endpoint_order = endpoint_order
     return data
+
+
+def _meshcnn_sample(feature_names: list[str] | None = None, endpoint_order: str = 'random') -> MeshCNNSample:
+    names = feature_names or list(resolve_feature_selection(
+        'custom',
+        enable_ao=True,
+        enable_dihedral=True,
+        enable_symmetry=True,
+        enable_density=True,
+        enable_thickness_sdf=True,
+    ).feature_names)
+    edge_count = 3
+    faces = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    return MeshCNNSample(
+        vertices=torch.zeros(3, 3),
+        faces=faces,
+        unique_edges=torch.tensor([[0, 1], [0, 2], [1, 2]], dtype=torch.long),
+        edge_features=torch.zeros(edge_count, len(names)),
+        edge_labels=torch.zeros(edge_count),
+        edge_neighbors=torch.full((edge_count, 4), -1, dtype=torch.long),
+        edge_to_faces=torch.full((edge_count, 2), -1, dtype=torch.long),
+        face_to_edges=torch.zeros(1, 3, dtype=torch.long),
+        boundary_mask=torch.ones(edge_count, dtype=torch.bool),
+        file_path='mesh_0.obj',
+        feature_group='custom',
+        feature_preset='custom',
+        feature_names=names,
+        feature_flags={},
+        endpoint_order=endpoint_order,
+        label_source='exact_obj',
+    )
 
 
 def _summary(seed: int, fpr_best: float, f1_best: float, fpr_05: float, f1_05: float) -> dict:
@@ -184,6 +222,85 @@ class FeatureAblationRunnerTests(unittest.TestCase):
     def test_validate_experiment_selection_accepts_all_specs(self):
         validate_experiment_selection(list(EXPERIMENT_SPECS), model='graphsage')
         validate_experiment_selection(list(EXPERIMENT_SPECS), model='gatv2')
+        validate_experiment_selection(list(EXPERIMENT_SPECS), model='sparsemeshcnn')
+        with self.assertRaisesRegex(ValueError, 'unsupported ablation model'):
+            validate_experiment_selection(list(EXPERIMENT_SPECS), model='meshcnn_full')
+
+    def test_parse_args_accepts_sparsemeshcnn_and_rejects_meshcnn_full(self):
+        args = parse_args([
+            '--model', 'sparsemeshcnn',
+            '--meshcnn-dataset', 'meshcnn.pt',
+            '--seeds', '1',
+            '--epochs', '1',
+            '--output-root', 'out',
+        ])
+        self.assertEqual(args.model, 'sparsemeshcnn')
+
+        with self.assertRaises(SystemExit):
+            parse_args([
+                '--model', 'meshcnn_full',
+                '--meshcnn-dataset', 'meshcnn.pt',
+                '--seeds', '1',
+                '--epochs', '1',
+                '--output-root', 'out',
+            ])
+
+    def test_meshcnn_dataset_validation_uses_superset_features(self):
+        validate_meshcnn_dataset_metadata([_meshcnn_sample()], ['control14', 'ao_density_sdf'])
+        with self.assertRaisesRegex(ValueError, 'thickness_sdf'):
+            validate_meshcnn_dataset_metadata([_meshcnn_sample(list(PAPER14_FEATURE_NAMES))], ['sdf'])
+
+    def test_meshcnn_dataset_is_required_without_custom_dataset(self):
+        args = Namespace(
+            model='sparsemeshcnn',
+            meshcnn_dataset=None,
+            custom_dataset=None,
+            resolution_tag='all',
+        )
+        with self.assertRaisesRegex(ValueError, '--meshcnn-dataset is required'):
+            validate_dataset_roles(args, ['control14'])
+
+        args.meshcnn_dataset = 'meshcnn.pt'
+        with mock.patch(
+            'tools.run_feature_ablations.load_filtered_meshcnn_dataset',
+            return_value=[_meshcnn_sample()],
+        ):
+            datasets = validate_dataset_roles(args, ['control14'])
+        self.assertIn('meshcnn', datasets)
+
+    def test_meshcnn_generate_splits_uses_meshcnn_dataset(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            samples = [_meshcnn_sample() for _ in range(4)]
+            for idx, sample in enumerate(samples):
+                sample.file_path = f'mesh_{idx}.obj'
+            args = Namespace(
+                model='sparsemeshcnn',
+                meshcnn_dataset='meshcnn.pt',
+                custom_dataset=None,
+                paper_dataset=None,
+                experiments=['control14'],
+                output_root=str(root),
+                splits_dir=str(root / 'splits'),
+                seeds=[3],
+                resolution_tag='all',
+                group_mode='legacy',
+                epochs=1,
+                generate_splits=True,
+                only_generate_splits=True,
+                val_ratio=0.25,
+                test_ratio=0.25,
+                keep_going=False,
+            )
+
+            with mock.patch(
+                'tools.run_feature_ablations.load_filtered_meshcnn_dataset',
+                return_value=samples,
+            ):
+                payloads = run_suite(args)
+
+            self.assertEqual(payloads, {})
+            self.assertTrue(split_path_for_seed(Path(args.splits_dir), 3).exists())
 
     def test_split_generation_and_validation_reuse_dataset_agnostic_files(self):
         with TemporaryDirectory() as tmp:
@@ -365,6 +482,36 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertIn('--enable-density', all_five_command)
         self.assertIn('--enable-thickness-sdf', all_five_command)
 
+    def test_meshcnn_subprocess_command_construction(self):
+        command = build_train_command(
+            spec=EXPERIMENT_SPECS['ao_density_sdf'],
+            paper_dataset=None,
+            custom_dataset=None,
+            meshcnn_dataset='meshcnn_superset.pt',
+            run_dir=Path('out') / 'sparsemeshcnn' / 'experiments' / 'ao_density_sdf' / 'seed_7',
+            split_json=Path('splits') / 'seed_7.json',
+            seed=7,
+            resolution_tag='all',
+            group_mode='family',
+            epochs=3,
+            model='sparsemeshcnn',
+        )
+
+        self.assertEqual(command[0], sys.executable)
+        self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), command)
+        self.assertNotIn(str(Path('tools') / 'run_baseline.py'), command)
+        for flag in ('--dataset', '--run-dir', '--epochs', '--seed', '--group-mode', '--split-json-in'):
+            self.assertIn(flag, command)
+        self.assertEqual(command[command.index('--dataset') + 1], 'meshcnn_superset.pt')
+        self.assertEqual(command[command.index('--feature-group') + 1], 'custom')
+        self.assertIn('--enable-ao', command)
+        self.assertIn('--enable-density', command)
+        self.assertIn('--enable-thickness-sdf', command)
+        self.assertNotIn('--enable-dihedral', command)
+        self.assertNotIn('--enable-symmetry', command)
+        for forbidden in ('--model', '--preset', '--strict-paper-protocol', '--paper-dataset'):
+            self.assertNotIn(forbidden, command)
+
     def test_run_experiment_reuses_existing_split_jsons(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -385,6 +532,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             args = Namespace(
                 paper_dataset='paper.pt',
                 custom_dataset='custom.pt',
+                meshcnn_dataset=None,
                 output_root=str(root),
                 splits_dir=str(splits_dir),
                 seeds=[1, 2],
@@ -432,7 +580,67 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]['status'], 'failed')
-        self.assertIn('baseline runner exited with 9', records[0]['error'])
+        self.assertIn('train runner exited with 9', records[0]['error'])
+
+    def test_run_experiment_uses_sparsemeshcnn_output_path(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            splits_dir = root / 'splits'
+            splits_dir.mkdir()
+            split_path_for_seed(splits_dir, 1).write_text('{}')
+            commands = []
+
+            def fake_runner(command, check):
+                commands.append(command)
+                run_dir = Path(command[command.index('--run-dir') + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / 'summary.json').write_text(json.dumps(_summary(1, 0.1, 0.5, 0.2, 0.4)))
+
+            args = Namespace(
+                paper_dataset=None,
+                custom_dataset=None,
+                meshcnn_dataset='meshcnn.pt',
+                output_root=str(root),
+                splits_dir=str(splits_dir),
+                seeds=[1],
+                resolution_tag='all',
+                group_mode='family',
+                epochs=1,
+                keep_going=False,
+                model='sparsemeshcnn',
+            )
+
+            records = run_experiment(args=args, spec=EXPERIMENT_SPECS['control14'], runner=fake_runner)
+
+        self.assertEqual(records[0]['status'], 'completed')
+        self.assertEqual(
+            records[0]['run_dir'],
+            str(root / 'sparsemeshcnn' / 'experiments' / 'control14' / 'seed_1'),
+        )
+        self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), commands[0])
+
+    def test_sparsemeshcnn_payload_reports_public_model_name(self):
+        args = Namespace(
+            model='sparsemeshcnn',
+            paper_dataset=None,
+            custom_dataset=None,
+            meshcnn_dataset='meshcnn.pt',
+            resolution_tag='all',
+            group_mode='family',
+            epochs=1,
+            seeds=[1],
+            splits_dir='splits',
+        )
+
+        payload = build_experiment_payload(
+            args=args,
+            spec=EXPERIMENT_SPECS['control14'],
+            records=[],
+        )
+
+        self.assertEqual(payload['model'], 'sparsemeshcnn')
+        self.assertEqual(payload['dataset'], 'meshcnn.pt')
+        self.assertIsNone(payload['preset'])
 
 
 if __name__ == '__main__':

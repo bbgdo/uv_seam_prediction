@@ -6,12 +6,13 @@ import tempfile
 import numpy as np
 import torch
 
-from models.meshcnn_full.mesh import MutableMeshTopology, build_mesh_adjacency
+from models.meshcnn_full.mesh import MeshCNNSample, MutableMeshTopology, build_mesh_adjacency
 from models.meshcnn_full.model import MeshCNNSegmenter
 from models.meshcnn_full.pool import MeshPool
+from models.meshcnn_full.train import slice_meshcnn_dataset_features
 from models.meshcnn_full.unpool import MeshUnpool
 from preprocessing.build_meshcnn_dataset_v2 import build_meshcnn_sample
-from preprocessing.feature_registry import resolve_feature_selection
+from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 
 
 OBJ_TWO_TRIANGLES = """
@@ -92,6 +93,43 @@ def _nonmanifold_result_mesh():
         [1, 4, 7],
     ], dtype=np.int64)
     return vertices, faces
+
+
+def _full_custom_selection():
+    return resolve_feature_selection(
+        'custom',
+        enable_ao=True,
+        enable_dihedral=True,
+        enable_symmetry=True,
+        enable_density=True,
+        enable_thickness_sdf=True,
+    )
+
+
+def _sample_with_features(feature_names: list[str] | tuple[str, ...] | None = None) -> MeshCNNSample:
+    names = list(feature_names or _full_custom_selection().feature_names)
+    edge_count = 4
+    feature_dim = len(names)
+    faces = torch.tensor([[0, 1, 2], [1, 0, 3]], dtype=torch.long)
+    return MeshCNNSample(
+        vertices=torch.zeros(4, 3),
+        faces=faces,
+        unique_edges=torch.tensor([[0, 1], [0, 2], [0, 3], [1, 2]], dtype=torch.long),
+        edge_features=torch.arange(edge_count * feature_dim, dtype=torch.float32).reshape(edge_count, feature_dim),
+        edge_labels=torch.zeros(edge_count),
+        edge_neighbors=torch.full((edge_count, 4), -1, dtype=torch.long),
+        edge_to_faces=torch.full((edge_count, 2), -1, dtype=torch.long),
+        face_to_edges=torch.zeros(2, 3, dtype=torch.long),
+        boundary_mask=torch.ones(edge_count, dtype=torch.bool),
+        file_path='toy.obj',
+        feature_group='custom',
+        feature_preset='custom',
+        feature_names=names,
+        feature_flags=_full_custom_selection().feature_flags.as_dict(),
+        endpoint_order='random',
+        label_source='exact_obj',
+        density_config=_full_custom_selection().density_config,
+    )
 
 
 class MeshCNNFullTests(unittest.TestCase):
@@ -177,6 +215,68 @@ class MeshCNNFullTests(unittest.TestCase):
             logits = model(sample)
             self.assertEqual(logits.shape, sample.edge_labels.shape)
             self.assertTrue(torch.isfinite(logits).all())
+
+    def test_slice_meshcnn_dataset_to_control14(self):
+        sample = _sample_with_features()
+        _, metadata = slice_meshcnn_dataset_features(
+            [sample],
+            resolve_feature_selection('custom'),
+        )
+
+        self.assertEqual(sample.edge_features.shape[1], 14)
+        self.assertEqual(tuple(sample.feature_names), PAPER14_FEATURE_NAMES)
+        self.assertEqual(metadata['feature_names'], list(PAPER14_FEATURE_NAMES))
+        self.assertEqual(metadata['feature_dim'], 14)
+
+    def test_slice_meshcnn_dataset_to_all_optional_features_updates_metadata(self):
+        selection = _full_custom_selection()
+        sample = _sample_with_features()
+        _, metadata = slice_meshcnn_dataset_features([sample], selection)
+
+        self.assertEqual(tuple(sample.feature_names), selection.feature_names)
+        self.assertEqual(sample.feature_flags, selection.feature_flags.as_dict())
+        self.assertEqual(sample.density_config, selection.density_config)
+        self.assertEqual(metadata['feature_names'], list(selection.feature_names))
+        self.assertEqual(metadata['feature_flags'], selection.feature_flags.as_dict())
+        self.assertEqual(metadata['feature_dim'], len(selection.feature_names))
+
+    def test_slice_meshcnn_dataset_preserves_selected_column_values_in_order(self):
+        source = _sample_with_features()
+        original = source.edge_features.clone()
+        selection = resolve_feature_selection(
+            'custom',
+            enable_ao=True,
+            enable_density=True,
+            enable_thickness_sdf=True,
+        )
+        available = list(source.feature_names)
+        expected_indices = torch.tensor([available.index(name) for name in selection.feature_names])
+
+        slice_meshcnn_dataset_features([source], selection)
+
+        self.assertTrue(torch.equal(source.edge_features, original.index_select(1, expected_indices)))
+
+    def test_slice_meshcnn_dataset_missing_feature_raises(self):
+        source = _sample_with_features(PAPER14_FEATURE_NAMES)
+        selection = resolve_feature_selection('custom', enable_thickness_sdf=True)
+
+        with self.assertRaisesRegex(ValueError, 'thickness_sdf'):
+            slice_meshcnn_dataset_features([source], selection)
+
+    def test_slice_meshcnn_dataset_inconsistent_feature_names_raise(self):
+        first = _sample_with_features()
+        second = _sample_with_features()
+        second.feature_names = list(reversed(second.feature_names))
+
+        with self.assertRaisesRegex(ValueError, 'feature_names differ'):
+            slice_meshcnn_dataset_features([first, second], resolve_feature_selection('custom'))
+
+    def test_slice_meshcnn_dataset_feature_dim_mismatch_raises(self):
+        source = _sample_with_features()
+        source.edge_features = source.edge_features[:, :-1]
+
+        with self.assertRaisesRegex(ValueError, 'edge_features dim'):
+            slice_meshcnn_dataset_features([source], resolve_feature_selection('custom'))
 
 
 if __name__ == '__main__':
