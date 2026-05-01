@@ -29,15 +29,16 @@ from models.utils.seam_topology import (  # noqa: E402
     diagnostics_to_json_dict,
     topology_pipeline_result_to_json_dict,
 )
-from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.obj_to_dataset_graph import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.obj_parser import parse_obj  # noqa: E402
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology  # noqa: E402
 
 
-MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn')
-FEATURE_BUNDLES = ('auto', 'paper14_locked', 'extended18', 'ao_density', 'custom')
+MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'sparsemeshcnn')
+FEATURE_BUNDLES = ('auto', 'paper14', 'ao_density', 'custom')
+_MODEL_TYPE_ALIASES: dict[str, str] = {}
 
 
 class PredictionError(RuntimeError):
@@ -50,17 +51,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Predict UV seam edges for a raw OBJ mesh.')
     parser.add_argument('--mesh-path', required=True)
     parser.add_argument('--model-weights', required=True)
-    parser.add_argument('--feature-bundle', default='auto', choices=FEATURE_BUNDLES)
+    parser.add_argument(
+        '--feature-bundle',
+        default='auto',
+        help='feature bundle: auto, paper14, ao_density, or custom',
+    )
     parser.add_argument('--output-json', required=True)
     parser.add_argument('--threshold', type=float, default=None)
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
-    parser.add_argument('--model-type', choices=MODEL_TYPES, default='auto')
+    parser.add_argument(
+        '--model-type',
+        default='auto',
+        help='model family: auto, graphsage, gatv2, or sparsemeshcnn',
+    )
     parser.add_argument('--config-json', default=None)
     parser.add_argument('--summary-json', default=None)
     parser.add_argument('--enable-ao', action='store_true')
     parser.add_argument('--enable-dihedral', action='store_true')
     parser.add_argument('--enable-symmetry', action='store_true')
     parser.add_argument('--enable-density', action='store_true')
+    parser.add_argument('--enable-thickness-sdf', action='store_true')
     parser.add_argument('--endpoint-seed', type=int, default=42)
     parser.add_argument('--write-all-edges', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
@@ -75,7 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         '--postprocess-r-bridge', type=int, default=6,
-        help='Deprecated alias for --postprocess-max-bridge-edges.'
+        help=argparse.SUPPRESS
     )
     parser.add_argument(
         '--postprocess-max-bridge-edges', type=int, default=None,
@@ -115,7 +125,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction, default=True,
         help='Whether to use mesh-boundary vertices as structural anchors.'
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.feature_bundle = _normalize_feature_bundle_arg(args.feature_bundle)
+    args.model_type = _normalize_cli_model_type(args.model_type)
+    return args
+
+
+def _normalize_feature_bundle_arg(value: str) -> str:
+    normalized = str(value).strip().lower().replace('-', '_')
+    if normalized not in FEATURE_BUNDLES:
+        raise SystemExit(
+            f"error: argument --feature-bundle: invalid choice: {value!r} "
+            f"(choose from {', '.join(FEATURE_BUNDLES)})"
+        )
+    return normalized
+
+
+def _normalize_cli_model_type(value: str) -> str:
+    normalized = str(value).strip().lower().replace('-', '_')
+    normalized = _MODEL_TYPE_ALIASES.get(normalized, normalized)
+    if normalized not in MODEL_TYPES:
+        raise SystemExit(
+            f"error: argument --model-type: invalid choice: {value!r} "
+            f"(choose from {', '.join(MODEL_TYPES)})"
+        )
+    return normalized
 
 
 def load_json(path: Path, label: str) -> dict[str, Any]:
@@ -190,7 +224,8 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Path) -> str:
     if requested != 'auto':
-        return _normalize_model_name(requested) or requested
+        resolved = _normalize_model_name(requested)
+        return resolved or requested
 
     for key in ('model', 'model_name'):
         resolved = _normalize_model_name(config.get(key))
@@ -232,6 +267,7 @@ def resolve_feature_bundle(
         'enable_dihedral': bool(args.enable_dihedral),
         'enable_symmetry': bool(args.enable_symmetry),
         'enable_density': bool(args.enable_density),
+        'enable_thickness_sdf': bool(args.enable_thickness_sdf),
     }
     any_toggle = any(toggles.values())
 
@@ -250,10 +286,8 @@ def resolve_feature_bundle(
             'InvalidFeatureBundle',
         )
 
-    if args.feature_bundle == 'paper14_locked':
+    if args.feature_bundle == 'paper14':
         return resolve_feature_selection('paper14'), 'random', args.feature_bundle
-    if args.feature_bundle == 'extended18':
-        return resolve_feature_selection('extended18'), 'fixed', args.feature_bundle
     if args.feature_bundle == 'ao_density':
         return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', args.feature_bundle
 
@@ -269,6 +303,7 @@ def resolve_feature_bundle(
             enable_dihedral=args.enable_dihedral,
             enable_symmetry=args.enable_symmetry,
             enable_density=args.enable_density,
+            enable_thickness_sdf=args.enable_thickness_sdf,
         ),
         'fixed',
         args.feature_bundle,
@@ -282,8 +317,6 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
 
         if group in ('paper14', 'paper') or preset in ('paper14', 'paper'):
             return resolve_feature_selection('paper14'), 'random', 'auto'
-        if group in ('extended18', 'extended') or preset in ('extended18', 'extended'):
-            return resolve_feature_selection('extended18'), 'fixed', 'auto'
         if group == 'custom' or preset == 'custom':
             flags = _infer_feature_flags(metadata)
             return (
@@ -305,8 +338,6 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
             names = tuple(feature_names)
             if names == resolve_feature_selection('paper14').feature_names:
                 return resolve_feature_selection('paper14'), 'random', 'auto'
-            if names == resolve_feature_selection('extended18').feature_names:
-                return resolve_feature_selection('extended18'), 'fixed', 'auto'
             flags = _infer_feature_flags({'feature_names': feature_names})
             return (
                 resolve_feature_selection(
@@ -682,6 +713,13 @@ def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch
     return extract_state_dict(load_weights_payload(weights_path, device))
 
 
+def _public_model_type(model_type: str) -> str:
+    """Map internal dispatch type to the public model name for output metadata."""
+    if model_type == 'meshcnn_full':
+        return 'sparsemeshcnn'
+    return model_type
+
+
 def build_prediction_model(model_type: str, model_kwargs: dict[str, Any]) -> torch.nn.Module:
     if model_type == 'meshcnn_full':
         return MeshCNNSegmenter(**model_kwargs)
@@ -821,7 +859,8 @@ def build_output_payload(
         'mesh_path': str(mesh_path.resolve()),
         'output_json': str(output_json.resolve()),
         'model': {
-            'model_type': model_type,
+            'model_type': _public_model_type(model_type),
+            **({'internal_model_type': model_type} if model_type != _public_model_type(model_type) else {}),
             'weights_path': str(weights_path.resolve()),
             'config_path': str(config_path.resolve()),
             'summary_path': str(summary_path.resolve()),

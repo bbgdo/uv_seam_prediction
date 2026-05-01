@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from models.utils.filename_parsing import FilenameParseConfig, legacy_base_name, parse_mesh_name
+from models.utils.filename_parsing import FilenameParseConfig, parse_mesh_name
 
 
 class FilenameParsingTests(unittest.TestCase):
@@ -43,11 +43,6 @@ class FilenameParsingTests(unittest.TestCase):
         self.assertEqual(info.family_id, 'house')
         self.assertEqual(info.resolution_tag, 'lod3')
         self.assertTrue(info.is_augmented)
-
-    def test_legacy_base_name_keeps_resolution(self):
-        self.assertEqual(legacy_base_name('chair_10000f_aug2.obj'), 'chair_10000f')
-        self.assertEqual(legacy_base_name('man013_h_aug0.obj'), 'man013_h')
-
 
 if __name__ == '__main__':
     unittest.main()

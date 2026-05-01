@@ -1140,7 +1140,7 @@ class EndpointBridgingTests(unittest.TestCase):
             config_path=Path('config.json'),
             summary_path=Path('summary.json'),
             model_type='graphsage',
-            feature_bundle='paper14_locked',
+            feature_bundle='paper14',
             selection=SimpleNamespace(feature_group='paper14', feature_names=(), feature_count=0),
             threshold=0.5,
             device='cpu',

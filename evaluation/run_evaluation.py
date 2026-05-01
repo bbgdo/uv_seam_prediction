@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import numpy as np
@@ -15,11 +14,12 @@ if _ROOT not in sys.path:
 
 import torch
 from preprocessing.compute_features import compute_edge_features
-from preprocessing.build_dual_graph import build_dual_graph_data
 from models.utils.seam_topology import apply_topology_pipeline, build_seam_graph_view
+from preprocessing.obj_to_dataset_graph import build_dual_data
 from preprocessing.obj_parser import parse_obj
 from preprocessing.topology import WeldConfig, build_topology
 from evaluation.uv_metrics import parse_obj_with_uv, compute_all_uv_metrics
+from models.meshcnn_full.mesh import build_mesh_adjacency
 
 import trimesh
 
@@ -27,7 +27,6 @@ _C_OURS = '#2196F3'
 _C_GT = '#4CAF50'
 _C_SMART = '#FF5722'
 _DPI = 150
-
 
 def _load_model(weights_path: str, model_type: str, device: torch.device):
     if model_type == 'graphsage':
@@ -37,8 +36,8 @@ def _load_model(weights_path: str, model_type: str, device: torch.device):
         from models.gatv2.model import DualGATv2
         model = DualGATv2().to(device)
     elif model_type == 'meshcnn':
-        from models.meshcnn.model import MeshCNNClassifier
-        model = MeshCNNClassifier().to(device)
+        from models.meshcnn_full.model import SparseMeshUNetSegmenter
+        model = SparseMeshUNetSegmenter().to(device)
     else:
         raise ValueError(f'Unknown model type: {model_type!r}')
 
@@ -61,14 +60,7 @@ def _infer_seam_indices(
     features, unique_edges, _ = compute_edge_features(mesh)
 
     if model_type == 'meshcnn':
-        from preprocessing.build_meshcnn_data import build_edge_neighbors
-        src = unique_edges[:, 0]
-        dst = unique_edges[:, 1]
-        edge_key_to_idx = {
-            (int(min(src[i], dst[i])), int(max(src[i], dst[i]))): i
-            for i in range(len(unique_edges))
-        }
-        neighbors = build_edge_neighbors(src, dst, faces, edge_key_to_idx)
+        _, _, _, neighbors, _ = build_mesh_adjacency(faces, unique_edges)
         x = torch.from_numpy(features).float().to(device)
         nb = torch.from_numpy(neighbors).long().to(device)
         with torch.no_grad():
@@ -91,7 +83,7 @@ def _infer_seam_indices(
             faces=torch.from_numpy(faces),
         )
         data.file_path = str(mesh_path)
-        dual_data = build_dual_graph_data(data)
+        dual_data = build_dual_data(data)
         x = dual_data.x.to(device)
         ei = dual_data.edge_index.to(device)
         with torch.no_grad():
@@ -319,13 +311,15 @@ def _plot_per_mesh_scatter(per_mesh: list[dict], output_path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='UV-level evaluation pipeline.')
+    parser = argparse.ArgumentParser(
+        description='Deprecated internal UV-level evaluation pipeline for archived unwrap studies.'
+    )
     parser.add_argument('--test-meshes', required=True,
                         help='Directory of .obj test meshes')
     parser.add_argument('--dual-dataset', default='dataset_dual.pt',
                         help='Path to dual graph dataset (for reference, not loaded here)')
     parser.add_argument('--weights', required=True, help='Path to best_model.pth')
-    parser.add_argument('--model-type', required=True, choices=['graphsage', 'gatv2', 'meshcnn'])
+    parser.add_argument('--model-type', required=True, choices=['graphsage', 'gatv2', 'sparsemeshcnn'])
     parser.add_argument('--blender-exe', default='blender',
                         help='Blender executable path (default: blender)')
     parser.add_argument('--output-dir', required=True,
@@ -335,6 +329,8 @@ def main() -> None:
     parser.add_argument('--max-meshes', type=int, default=None,
                         help='Limit number of meshes evaluated (for testing)')
     args = parser.parse_args()
+    if args.model_type == 'sparsemeshcnn':
+        args.model_type = 'meshcnn'
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -351,7 +347,7 @@ def main() -> None:
         print(f'[eval] no .obj files found in {mesh_dir}')
         sys.exit(1)
 
-    print(f'[eval] evaluating {len(mesh_paths)} mesh(es) → {out_dir}')
+    print(f'[eval] evaluating {len(mesh_paths)} mesh(es) -> {out_dir}')
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = _load_model(args.weights, args.model_type, device)

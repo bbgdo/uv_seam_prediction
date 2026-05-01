@@ -25,7 +25,6 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'hidden': config.hidden_size,
         'num_layers': config.num_layers,
         'dropout': config.dropout,
-        'lambda_conn': config.lambda_conn,
         'patience': config.patience,
         'in_dim': config.in_dim,
         'pos_weight': config.pos_weight,
@@ -43,7 +42,7 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'val_ratio': 0.15,
         'test_ratio': 0.10,
         'seed': None,
-        'group_mode': None,
+        'group_mode': 'family',
         'split_json_in': None,
         'split_json_out': None,
         'resolution_tag': 'all',
@@ -77,15 +76,13 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
     parser.add_argument('--heads', type=int, default=None)
     parser.add_argument('--num-layers', type=int, default=None)
     parser.add_argument('--dropout', type=float, default=None)
-    parser.add_argument('--lambda-conn', type=float, default=None,
-                        help='connectivity penalty weight (0 = disabled, try 0.1)')
     parser.add_argument('--patience', type=int, default=None, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed for training and generated splits (default: 42 or split JSON seed)')
-    parser.add_argument('--group-mode', choices=['legacy', 'family'], default=None,
-                        help='grouping mode for generated or loaded splits (default: legacy or split JSON value)')
+    parser.add_argument('--group-mode', choices=['family'], default='family',
+                        help='dataset split grouping protocol (family only)')
     parser.add_argument('--split-json-in', default=None, help='load train/val/test group ids from this JSON file')
     parser.add_argument('--split-json-out', default=None, help='save train/val/test group ids to this JSON file')
     parser.add_argument('--in-dim', type=int, default=None, help='dual node feature dim (default: 18)')
@@ -101,8 +98,8 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
                         help='focal loss gamma (0=plain BCE, 2=standard focal)')
     parser.add_argument('--strict-paper-protocol', action='store_true',
                         help='fail unless dataset and options match the paper-faithful GraphSeam protocol')
-    parser.add_argument('--feature-group', choices=['paper14', 'extended18', 'custom'], default=None,
-                        help='feature bundle to train on (default: paper14 for --preset paper, otherwise extended18)')
+    parser.add_argument('--feature-group', choices=['paper14', 'custom'], default=None,
+                        help='feature bundle to train on (default: paper14)')
     parser.add_argument('--enable-ao', action='store_true',
                         help='enable AO endpoint features for --feature-group custom')
     parser.add_argument('--enable-dihedral', action='store_true',

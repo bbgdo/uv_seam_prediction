@@ -1,5 +1,6 @@
 import argparse
 import csv
+import itertools
 import json
 import statistics
 import subprocess
@@ -16,7 +17,7 @@ from models.utils.dataset import (  # noqa: E402
     load_split_json_metadata,
     split_dataset,
 )
-from models.baselines.registry import SUPPORTED_BASELINES  # noqa: E402
+from models.meshcnn_full.mesh import load_meshcnn_dataset  # noqa: E402
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection  # noqa: E402
 
 
@@ -24,6 +25,10 @@ METRIC_KEYS = ('f1', 'precision', 'recall', 'fpr', 'tpr', 'accuracy')
 DELTA_METRIC_KEYS = ('fpr', 'recall', 'f1', 'accuracy')
 THRESHOLD_05_PREFIX = 'test_0_5'
 VAL_BEST_PREFIX = 'test_val_best'
+GNN_MODELS = ('graphsage', 'gatv2')
+SPARSE_MESHCNN_MODEL = 'sparsemeshcnn'
+SPARSE_MESHCNN_TRAIN_SCRIPT = Path('models') / 'meshcnn_full' / 'train.py'
+ABLATION_MODELS = (*GNN_MODELS, SPARSE_MESHCNN_MODEL)
 
 
 @dataclass(frozen=True)
@@ -39,114 +44,27 @@ class ExperimentSpec:
     strict_paper_protocol: bool = False
 
 
-EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
-    'paper14_locked': ExperimentSpec(
-        name='paper14_locked',
-        dataset_role='paper',
-        feature_group='paper14',
-        strict_paper_protocol=True,
-    ),
-    'custom14_control': ExperimentSpec(
-        name='custom14_control',
-        dataset_role='custom',
-        feature_group='custom',
-    ),
-    'ao_only': ExperimentSpec(
-        name='ao_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-    ),
-    'symmetry_only': ExperimentSpec(
-        name='symmetry_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_symmetry=True,
-    ),
-    'density_only': ExperimentSpec(
-        name='density_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_density=True,
-    ),
-    'sdf_only': ExperimentSpec(
-        name='sdf_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_thickness_sdf=True,
-    ),
-    'ao_symmetry': ExperimentSpec(
-        name='ao_symmetry',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_symmetry=True,
-    ),
-    'ao_density': ExperimentSpec(
-        name='ao_density',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_density=True,
-    ),
-    'ao_density_sdf': ExperimentSpec(
-        name='ao_density_sdf',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_density=True,
-        enable_thickness_sdf=True,
-    ),
-    'symmetry_density': ExperimentSpec(
-        name='symmetry_density',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_symmetry=True,
-        enable_density=True,
-    ),
-    'ao_symmetry_density': ExperimentSpec(
-        name='ao_symmetry_density',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_symmetry=True,
-        enable_density=True,
-    ),
-    'dihedral_only': ExperimentSpec(
-        name='dihedral_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_dihedral=True,
-    ),
-    'extended18_equiv': ExperimentSpec(
-        name='extended18_equiv',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_dihedral=True,
-        enable_symmetry=True,
-    ),
-    'full_custom': ExperimentSpec(
-        name='full_custom',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_dihedral=True,
-        enable_symmetry=True,
-        enable_density=True,
-    ),
-    'full_custom_sdf': ExperimentSpec(
-        name='full_custom_sdf',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_dihedral=True,
-        enable_symmetry=True,
-        enable_density=True,
-        enable_thickness_sdf=True,
-    ),
-}
+_FEATURE_TOKENS = ('ao', 'dihedral', 'symmetry', 'density', 'sdf')
+_FLAG_KEYS = ('enable_ao', 'enable_dihedral', 'enable_symmetry', 'enable_density', 'enable_thickness_sdf')
 
+
+def _build_experiment_specs() -> dict[str, ExperimentSpec]:
+    specs: dict[str, ExperimentSpec] = {
+        'control14': ExperimentSpec(name='control14', dataset_role='custom', feature_group='custom'),
+    }
+    for size in range(1, len(_FEATURE_TOKENS) + 1):
+        for combo in itertools.combinations(range(len(_FEATURE_TOKENS)), size):
+            name = '_'.join(_FEATURE_TOKENS[i] for i in combo)
+            specs[name] = ExperimentSpec(
+                name=name,
+                dataset_role='custom',
+                feature_group='custom',
+                **{_FLAG_KEYS[i]: True for i in combo},
+            )
+    return specs
+
+
+EXPERIMENT_SPECS: dict[str, ExperimentSpec] = _build_experiment_specs()
 FULL_ABLATION_SUITE = tuple(EXPERIMENT_SPECS)
 
 
@@ -170,13 +88,16 @@ def get_experiment_spec(name: str) -> ExperimentSpec:
         raise ValueError(f"unknown experiment {name!r}; choose one of: {choices}") from exc
 
 
+def is_meshcnn_model(model: str) -> bool:
+    return model == SPARSE_MESHCNN_MODEL
+
+
 def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
-    strict_experiments = [
-        name for name in experiment_names
-        if get_experiment_spec(name).strict_paper_protocol
-    ]
-    if model != 'graphsage' and strict_experiments:
-        raise ValueError('paper14_locked / strict paper protocol is GraphSAGE-only')
+    if model not in ABLATION_MODELS:
+        choices = ', '.join(ABLATION_MODELS)
+        raise ValueError(f"unsupported ablation model {model!r}; choose one of: {choices}")
+    for name in experiment_names:
+        get_experiment_spec(name)
 
 
 def split_path_for_seed(splits_dir: Path, seed: int) -> Path:
@@ -308,26 +229,69 @@ def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str])
             )
 
 
+def validate_meshcnn_dataset_metadata(dataset: list, experiment_names: list[str]) -> None:
+    if not dataset:
+        raise ValueError('MeshCNN dataset is empty after resolution filtering')
+    _require_uniform_metadata(dataset, role='MeshCNN', key='endpoint_order', expected='random')
+
+    label_sources, missing_label_source = _unique_string_values(dataset, 'label_source')
+    if label_sources and label_sources != ['exact_obj']:
+        detail = f"observed={label_sources}"
+        if missing_label_source:
+            detail += f", missing={missing_label_source}"
+        raise ValueError(f"MeshCNN dataset label_source must be 'exact_obj' when present ({detail})")
+
+    available_names = _coerce_feature_names(_metadata_value(dataset[0], 'feature_names'))
+    if available_names is None:
+        raise ValueError('MeshCNN dataset sample 0 is missing feature_names metadata')
+
+    for sample_idx, sample in enumerate(dataset):
+        names = _coerce_feature_names(_metadata_value(sample, 'feature_names'))
+        if names is None:
+            raise ValueError(f'MeshCNN dataset sample {sample_idx} is missing feature_names metadata')
+        if names != available_names:
+            raise ValueError(f'MeshCNN dataset sample {sample_idx} feature_names differ from sample 0')
+        edge_features = getattr(sample, 'edge_features', None)
+        if edge_features is not None and int(edge_features.shape[1]) != len(names):
+            raise ValueError(
+                f'MeshCNN dataset sample {sample_idx} feature_names length {len(names)} '
+                f'does not match edge_features dim {int(edge_features.shape[1])}'
+            )
+
+    for name in experiment_names:
+        missing = [
+            feature
+            for feature in experiment_feature_selection(name).feature_names
+            if feature not in available_names
+        ]
+        if missing:
+            raise ValueError(
+                f"MeshCNN dataset is missing requested feature(s) for {name}: {missing}; "
+                f"available feature_names={available_names}"
+            )
+
+
 def load_filtered_dataset(path: str, resolution_tag: str) -> list:
     return filter_dataset_by_resolution(load_dataset(path), resolution_tag)
 
 
+def load_filtered_meshcnn_dataset(path: str, resolution_tag: str) -> list:
+    return filter_dataset_by_resolution(load_meshcnn_dataset(path), resolution_tag)
+
+
 def validate_dataset_roles(args: argparse.Namespace, experiment_names: list[str]) -> dict[str, list]:
-    roles = {get_experiment_spec(name).dataset_role for name in experiment_names}
     datasets: dict[str, list] = {}
+    if is_meshcnn_model(getattr(args, 'model', 'graphsage')):
+        if not args.meshcnn_dataset:
+            raise ValueError('--meshcnn-dataset is required for sparsemeshcnn')
+        datasets['meshcnn'] = load_filtered_meshcnn_dataset(args.meshcnn_dataset, args.resolution_tag)
+        validate_meshcnn_dataset_metadata(datasets['meshcnn'], experiment_names)
+        return datasets
 
-    if 'paper' in roles or args.paper_dataset:
-        if not args.paper_dataset:
-            raise ValueError('--paper-dataset is required for paper14_locked')
-        datasets['paper'] = load_filtered_dataset(args.paper_dataset, args.resolution_tag)
-        validate_paper_dataset_metadata(datasets['paper'])
-
-    if 'custom' in roles or args.custom_dataset:
-        if not args.custom_dataset:
-            raise ValueError('--custom-dataset is required for custom ablation experiments')
-        datasets['custom'] = load_filtered_dataset(args.custom_dataset, args.resolution_tag)
-        validate_custom_dataset_metadata(datasets['custom'], experiment_names)
-
+    if not args.custom_dataset:
+        raise ValueError('--custom-dataset is required')
+    datasets['custom'] = load_filtered_dataset(args.custom_dataset, args.resolution_tag)
+    validate_custom_dataset_metadata(datasets['custom'], experiment_names)
     return datasets
 
 
@@ -406,6 +370,7 @@ def build_train_command(
     spec: ExperimentSpec,
     paper_dataset: str | None,
     custom_dataset: str | None,
+    meshcnn_dataset: str | None = None,
     run_dir: Path,
     split_json: Path,
     seed: int,
@@ -414,6 +379,44 @@ def build_train_command(
     epochs: int,
     model: str = 'graphsage',
 ) -> list[str]:
+    if model not in ABLATION_MODELS:
+        choices = ', '.join(ABLATION_MODELS)
+        raise ValueError(f"unsupported ablation model {model!r}; choose one of: {choices}")
+    if is_meshcnn_model(model):
+        if not meshcnn_dataset:
+            raise ValueError(f'{spec.name} requires a MeshCNN dataset')
+        command = [
+            sys.executable,
+            str(SPARSE_MESHCNN_TRAIN_SCRIPT),
+            '--dataset',
+            meshcnn_dataset,
+            '--run-dir',
+            str(run_dir),
+            '--epochs',
+            str(epochs),
+            '--seed',
+            str(seed),
+            '--group-mode',
+            group_mode,
+            '--split-json-in',
+            str(split_json),
+            '--resolution-tag',
+            resolution_tag,
+            '--feature-group',
+            spec.feature_group,
+        ]
+        if spec.enable_ao:
+            command.append('--enable-ao')
+        if spec.enable_dihedral:
+            command.append('--enable-dihedral')
+        if spec.enable_symmetry:
+            command.append('--enable-symmetry')
+        if spec.enable_density:
+            command.append('--enable-density')
+        if spec.enable_thickness_sdf:
+            command.append('--enable-thickness-sdf')
+        return command
+
     dataset = paper_dataset if spec.dataset_role == 'paper' else custom_dataset
     if not dataset:
         raise ValueError(f"{spec.name} requires a {spec.dataset_role} dataset")
@@ -581,12 +584,16 @@ def build_experiment_payload(
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     selection = experiment_feature_selection(spec.name)
+    model = getattr(args, 'model', 'graphsage')
+    dataset = args.meshcnn_dataset if is_meshcnn_model(model) else (
+        args.paper_dataset if spec.dataset_role == 'paper' else args.custom_dataset
+    )
     return {
         'experiment': spec.name,
-        'model': getattr(args, 'model', 'graphsage'),
+        'model': model,
         'dataset_role': spec.dataset_role,
-        'dataset': args.paper_dataset if spec.dataset_role == 'paper' else args.custom_dataset,
-        'preset': 'paper' if getattr(args, 'model', 'graphsage') == 'graphsage' else 'extended',
+        'dataset': dataset,
+        'preset': None if is_meshcnn_model(model) else ('paper' if model == 'graphsage' else 'extended'),
         'strict_paper_protocol': spec.strict_paper_protocol,
         'feature_group': spec.feature_group,
         'feature_flags': selection.feature_flags.as_dict(),
@@ -677,6 +684,7 @@ def run_experiment(
             spec=spec,
             paper_dataset=args.paper_dataset,
             custom_dataset=args.custom_dataset,
+            meshcnn_dataset=getattr(args, 'meshcnn_dataset', None),
             run_dir=run_dir,
             split_json=split_json,
             seed=seed,
@@ -691,7 +699,7 @@ def run_experiment(
             runner(command, check=True)
             records.append(collect_success_record(seed, run_dir, split_json))
         except subprocess.CalledProcessError as exc:
-            records.append(failure_record(seed, run_dir, split_json, f'baseline runner exited with {exc.returncode}'))
+            records.append(failure_record(seed, run_dir, split_json, f'train runner exited with {exc.returncode}'))
             if not args.keep_going:
                 return records
         except Exception as exc:
@@ -708,7 +716,7 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
     splits_dir = Path(args.splits_dir)
 
     if args.generate_splits:
-        source_dataset = datasets.get('custom') or datasets.get('paper')
+        source_dataset = datasets.get('custom') or datasets.get('meshcnn') or datasets.get('paper')
         if source_dataset is None:
             raise ValueError('no dataset available for split generation')
         generate_split_files(
@@ -746,43 +754,31 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
 def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) -> None:
     _write_json(output_root / 'suite_summary.json', {'experiments': payloads})
 
-    if 'custom14_control' in payloads:
-        control_records = payloads['custom14_control']['runs']
+    if 'control14' in payloads:
+        control_records = payloads['control14']['runs']
         suite_deltas: dict[str, Any] = {}
         for name, payload in payloads.items():
             delta = paired_delta_summary(
                 experiment_name=name,
                 experiment_records=payload['runs'],
-                control_name='custom14_control',
+                control_name='control14',
                 control_records=control_records,
             )
             suite_deltas[name] = delta
             write_delta_reports(
-                output_root / 'experiments' / name / 'paired_delta_vs_custom14_control',
+                output_root / 'experiments' / name / 'paired_delta_vs_control14',
                 delta,
             )
-        _write_json(output_root / 'paired_deltas_vs_custom14_control.json', suite_deltas)
-
-    if 'paper14_locked' in payloads and 'custom14_control' in payloads:
-        delta = paired_delta_summary(
-            experiment_name='custom14_control',
-            experiment_records=payloads['custom14_control']['runs'],
-            control_name='paper14_locked',
-            control_records=payloads['paper14_locked']['runs'],
-        )
-        write_delta_reports(
-            output_root / 'experiments' / 'custom14_control' / 'paired_delta_vs_paper14_locked',
-            delta,
-        )
-        _write_json(output_root / 'paired_delta_custom14_control_vs_paper14_locked.json', delta)
+        _write_json(output_root / 'paired_deltas_vs_control14.json', suite_deltas)
 
 
 def parser_epilog() -> str:
     return """Examples:
-  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --label-source exact_obj --feature-group paper14 --endpoint-order random --save --overwrite --output <paper_dataset.pt>
-  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --label-source exact_obj --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
-  python tools/run_feature_ablations.py --model graphsage --paper-dataset <paper_dataset.pt> --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf sdf_only --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python preprocessing/obj_to_dataset_graph.py <mesh_dir> --feature-group paper14 --endpoint-order random --save --overwrite --output <paper_dataset.pt>
+  python preprocessing/obj_to_dataset_graph.py <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
+  python tools/run_feature_ablations.py --model graphsage --custom-dataset <custom_dataset.pt> --experiments control14 ao_density ao_dihedral_symmetry ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
 """
 
 
@@ -792,18 +788,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         epilog=parser_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('--model', choices=SUPPORTED_BASELINES, default='graphsage')
+    parser.add_argument('--model', choices=ABLATION_MODELS, default='graphsage')
     parser.add_argument('--paper-dataset', default=None, help='locked paper14 dual dataset')
     parser.add_argument('--custom-dataset', default=None, help='custom superset dual dataset')
+    parser.add_argument('--meshcnn-dataset', default=None, help='MeshCNN custom superset dataset')
     parser.add_argument(
         '--experiments',
         nargs='+',
         choices=tuple(EXPERIMENT_SPECS),
-        default=['paper14_locked', 'custom14_control'],
+        default=['control14'],
     )
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
     parser.add_argument('--resolution-tag', default='all')
-    parser.add_argument('--group-mode', choices=['legacy', 'family'], default='family')
+    parser.add_argument('--group-mode', choices=['family'], default='family')
     parser.add_argument('--epochs', type=int, required=True)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--splits-dir', default=None)
@@ -815,7 +812,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--full-suite',
         action='store_true',
-        help='run paper14_locked, custom14_control, and every named custom ablation',
+        help='run control14 and all feature-combination ablations',
     )
     args = parser.parse_args(argv)
     if args.full_suite:

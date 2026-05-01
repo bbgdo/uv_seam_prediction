@@ -16,9 +16,9 @@ from models.common.baseline_train import _model_kwargs, apply_runtime_feature_se
 from models.baselines.registry import get_baseline
 from tools.run_baseline import parse_args as parse_baseline_args
 from models.utils.experiment_log import ExperimentLogger
-from preprocessing.build_dual_graph import build_dual_graph_data
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.feature_registry import get_feature_group, resolve_feature_selection
+from preprocessing.obj_to_dataset_graph import build_dual_data
 
 
 def _tiny_mesh() -> trimesh.Trimesh:
@@ -76,18 +76,21 @@ class GraphSeamBaselineTests(unittest.TestCase):
         mesh = _tiny_mesh()
 
         paper, edges, _ = compute_edge_features(mesh, feature_preset='paper14', endpoint_order='random')
-        extended, extended_edges, _ = compute_edge_features(mesh, feature_preset='extended18')
 
         self.assertEqual(paper.shape, (len(edges), 14))
-        self.assertEqual(extended.shape, (len(extended_edges), 18))
+
+    def test_feature_registry_rejects_extended18(self):
+        with self.assertRaises(ValueError):
+            get_feature_group('extended18')
+        with self.assertRaises(ValueError):
+            resolve_feature_selection('extended18')
 
     def test_feature_registry_scaffold_lists_existing_baselines(self):
         self.assertEqual(get_feature_group('paper14').feature_preset, 'paper14')
-        self.assertEqual(len(get_feature_group('extended18').feature_names), 18)
+        self.assertEqual(get_feature_group('custom').feature_preset, 'custom')
 
     def test_feature_registry_resolves_custom_toggles(self):
         paper = resolve_feature_selection('paper14')
-        extended = resolve_feature_selection('extended18')
         ao_only = resolve_feature_selection('custom', enable_ao=True)
         symmetry_only = resolve_feature_selection('custom', enable_symmetry=True)
         density_only = resolve_feature_selection('custom', enable_density=True)
@@ -99,7 +102,6 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
 
         self.assertEqual(paper.feature_count, 14)
-        self.assertEqual(extended.feature_count, 18)
         self.assertEqual(ao_only.feature_names[-1], 'ao_j')
         self.assertEqual(symmetry_only.feature_names[-1], 'symmetry_dist')
         self.assertEqual(density_only.feature_names[-2:], ('density_mean', 'density_diff'))
@@ -152,7 +154,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         data.feature_flags = {'ao': False, 'signed_dihedral': False, 'symmetry': False, 'density': True}
         data.density_config = {'neighborhood': '2-ring'}
 
-        dual = build_dual_graph_data(data)
+        dual = build_dual_data(data)
 
         self.assertEqual(dual.feature_names, data.feature_names)
         self.assertEqual(dual.feature_group, 'custom')
@@ -184,7 +186,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
             apply_runtime_feature_selection([data], requested)
 
-    def test_runtime_feature_selection_accepts_paper14_locked_shape(self):
+    def test_runtime_feature_selection_accepts_paper14_shape(self):
         requested = resolve_feature_selection('paper14')
         data = Data(x=torch.zeros(2, 14))
         data.feature_preset = 'paper14'
@@ -261,8 +263,8 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
     def test_strict_paper_protocol_rejects_inconsistent_metadata(self):
         data = Data(x=torch.zeros(3, 14))
-        data.label_source = 'legacy_uv_remap'
-        data.feature_preset = 'extended18'
+        data.label_source = 'wrong_source'
+        data.feature_preset = 'wrong_preset'
         args = Namespace(
             preset='paper',
             resolution_tag='all',

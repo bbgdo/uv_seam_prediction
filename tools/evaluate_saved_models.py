@@ -537,7 +537,6 @@ def _runtime_config_from_saved(config: dict[str, Any]):
         pos_weight=config.get('pos_weight'),
         focal_gamma=config.get('focal_gamma'),
         patience=config.get('patience'),
-        lambda_conn=config.get('lambda_conn'),
         heads=config.get('heads'),
         aggr=config.get('aggr'),
         skip_connections=config.get('skip_connections'),
@@ -584,7 +583,7 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
     _, val, test, split_info = split_dataset(
         dataset,
         seed=target.seed,
-        group_mode=config.get('group_mode') or split_payload.get('group_mode', 'legacy'),
+        group_mode=config.get('group_mode') or split_payload.get('group_mode', 'family'),
         split_json_in=target.split_path,
         dataset_path=split_dataset_path,
         resolution_tag=resolution_tag,
@@ -743,7 +742,7 @@ def _paired_delta_vs_control(
         per_seed.append(row)
     return {
         'experiment': experiment,
-        'control': 'custom14_control',
+        'control': 'control14',
         'paired_seed_count': len(per_seed),
         'paired_seeds': paired_seeds,
         'per_seed': per_seed,
@@ -839,17 +838,17 @@ def aggregate_reevaluations(
         }
 
     paired_vs_control = {}
-    control_rows = by_experiment.get('custom14_control')
+    control_rows = by_experiment.get('control14')
     if control_rows:
         for experiment, rows in by_experiment.items():
-            if experiment == 'custom14_control':
+            if experiment == 'control14':
                 continue
             paired_vs_control[experiment] = _paired_delta_vs_control(experiment, rows, control_rows)
 
     payload = {
         'run_count': len(completed),
         'experiments': experiment_summaries,
-        'paired_delta_vs_custom14_control': paired_vs_control,
+        'paired_delta_vs_control14': paired_vs_control,
     }
 
     if reference_control is not None:

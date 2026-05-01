@@ -18,7 +18,7 @@ predict_seams = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = predict_seams
 spec.loader.exec_module(predict_seams)
 
-from preprocessing.build_dual_graph import build_dual_edge_index_from_unique_edges
+from preprocessing.obj_to_dataset_graph import build_dual_edge_index_from_unique_edges
 from preprocessing.obj_parser import parse_obj_text
 from preprocessing.topology import WeldConfig, build_topology
 
@@ -33,13 +33,14 @@ f 1 3 4
 """
 
 
-def _args(feature_bundle='paper14_locked', **overrides):
+def _args(feature_bundle='paper14', **overrides):
     values = {
         'feature_bundle': feature_bundle,
         'enable_ao': False,
         'enable_dihedral': False,
         'enable_symmetry': False,
         'enable_density': False,
+        'enable_thickness_sdf': False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -84,8 +85,21 @@ class PredictSeamsTests(unittest.TestCase):
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
 
+    def test_cli_rejects_meshcnn_full_as_model_type(self):
+        with self.assertRaises(SystemExit):
+            predict_seams._normalize_cli_model_type('meshcnn_full')
+        with self.assertRaises(SystemExit):
+            predict_seams._normalize_cli_model_type('meshcnn')
+        with self.assertRaises(SystemExit):
+            predict_seams._normalize_cli_model_type('sparse_meshcnn')
+
+    def test_cli_accepts_sparsemeshcnn_model_type(self):
+        self.assertEqual(predict_seams._normalize_cli_model_type('sparsemeshcnn'), 'sparsemeshcnn')
+        self.assertEqual(predict_seams._normalize_cli_model_type('gatv2'), 'gatv2')
+        self.assertEqual(predict_seams._normalize_cli_model_type('graphsage'), 'graphsage')
+
     def test_feature_bundle_resolution(self):
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(selection.feature_count, 14)
         self.assertEqual(endpoint_order, 'random')
@@ -111,7 +125,7 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
 
         payload = predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
@@ -120,7 +134,7 @@ class PredictSeamsTests(unittest.TestCase):
             config_path=Path('config.json'),
             summary_path=Path('summary.json'),
             model_type='gatv2',
-            feature_bundle='paper14_locked',
+            feature_bundle='paper14',
             selection=selection,
             threshold=0.75,
             device=torch.device('cpu'),
@@ -142,7 +156,7 @@ class PredictSeamsTests(unittest.TestCase):
     def test_meshcnn_inference_sample_is_unlabeled(self):
         topology = _square_topology()
         feature_mesh = predict_seams.build_feature_mesh_from_canonical_topology(topology)
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         edge_features = np.zeros((len(topology.canonical_edges), selection.feature_count), dtype=np.float32)
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
 
@@ -329,7 +343,7 @@ class PredictSeamsTests(unittest.TestCase):
             '--threshold', '0.5',
             '--device', 'cpu',
             '--model-type', 'gatv2',
-            '--feature-bundle', 'paper14_locked',
+            '--feature-bundle', 'paper14',
         ])
         args.postprocess = postprocess
         return args
@@ -339,7 +353,7 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         return predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
             output_json=Path('out.json'),
@@ -347,7 +361,7 @@ class PredictSeamsTests(unittest.TestCase):
             config_path=Path('config.json'),
             summary_path=Path('summary.json'),
             model_type='gatv2',
-            feature_bundle='paper14_locked',
+            feature_bundle='paper14',
             selection=selection,
             threshold=0.75,
             device=torch.device('cpu'),
@@ -357,6 +371,86 @@ class PredictSeamsTests(unittest.TestCase):
             seam_mask=seam_mask,
             write_all_edges=write_all_edges,
         )
+
+
+class OutputPayloadModelTypeTests(unittest.TestCase):
+    def _base_payload(self, model_type: str) -> dict:
+        topology = _square_topology()
+        unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
+        probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
+        seam_mask = probabilities >= 0.75
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
+        return predict_seams.build_output_payload(
+            mesh_path=Path('mesh.obj'),
+            output_json=Path('out.json'),
+            weights_path=Path('best_model.pth'),
+            config_path=Path('config.json'),
+            summary_path=Path('summary.json'),
+            model_type=model_type,
+            feature_bundle='paper14',
+            selection=selection,
+            threshold=0.75,
+            device=torch.device('cpu'),
+            topology=topology,
+            unique_edges=unique_edges,
+            probabilities=probabilities,
+            seam_mask=seam_mask,
+            write_all_edges=False,
+        )
+
+    def test_sparsemeshcnn_internal_type_maps_to_public_name_in_output(self):
+        payload = self._base_payload('meshcnn_full')
+        self.assertEqual(payload['model']['model_type'], 'sparsemeshcnn')
+        self.assertEqual(payload['model']['internal_model_type'], 'meshcnn_full')
+
+    def test_gatv2_model_type_unchanged_in_output(self):
+        payload = self._base_payload('gatv2')
+        self.assertEqual(payload['model']['model_type'], 'gatv2')
+        self.assertNotIn('internal_model_type', payload['model'])
+
+    def test_graphsage_model_type_unchanged_in_output(self):
+        payload = self._base_payload('graphsage')
+        self.assertEqual(payload['model']['model_type'], 'graphsage')
+        self.assertNotIn('internal_model_type', payload['model'])
+
+
+class ThicknessSdfFlagTests(unittest.TestCase):
+    def test_parser_accepts_enable_thickness_sdf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mesh = Path(tmp) / 'mesh.obj'
+            mesh.write_text('', encoding='utf-8')
+            out = Path(tmp) / 'out.json'
+            weights = Path(tmp) / 'weights.pth'
+            weights.write_bytes(b'')
+            args = predict_seams.parse_args([
+                '--mesh-path', str(mesh),
+                '--model-weights', str(weights),
+                '--output-json', str(out),
+                '--feature-bundle', 'custom',
+                '--enable-ao',
+                '--enable-thickness-sdf',
+            ])
+        self.assertTrue(args.enable_thickness_sdf)
+
+    def test_custom_bundle_with_sdf_flag_includes_sdf_feature(self):
+        args = _args('custom', enable_ao=True, enable_thickness_sdf=True)
+        selection, _, _ = predict_seams.resolve_feature_bundle(args, {}, {})
+        self.assertTrue(any('sdf' in name or 'thickness' in name for name in selection.feature_names))
+
+    def test_custom_bundle_without_sdf_flag_excludes_sdf_feature(self):
+        args = _args('custom', enable_ao=True)
+        selection, _, _ = predict_seams.resolve_feature_bundle(args, {}, {})
+        self.assertFalse(any('sdf' in name or 'thickness' in name for name in selection.feature_names))
+
+    def test_sdf_toggle_blocked_outside_custom_bundle(self):
+        args = _args('paper14', enable_thickness_sdf=True)
+        with self.assertRaises(predict_seams.PredictionError):
+            predict_seams.resolve_feature_bundle(args, {}, {})
+
+    def test_sdf_toggle_blocked_in_auto_bundle(self):
+        args = _args('auto', enable_thickness_sdf=True)
+        with self.assertRaises(predict_seams.PredictionError):
+            predict_seams.resolve_feature_bundle(args, {}, {})
 
 
 if __name__ == '__main__':
