@@ -32,7 +32,6 @@ The public model name in the ablation runner is `sparsemeshcnn`. `models/meshcnn
 
 - `paper14` is the paper baseline bundle.
 - `custom` is the runtime-selectable superset.
-- `control14` is the custom 14-feature control.
 - Optional custom features are `ao`, `dihedral`, `symmetry`, `density`, and `sdf`.
 - Split protocol is `family` only.
 - No connectivity loss is used.
