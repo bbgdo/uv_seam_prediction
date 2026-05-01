@@ -1,6 +1,6 @@
 # UV Seam Predictor — ML Pipeline
 
-An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks, deployed as a Blender add-on. Three architectures are compared: DualGraphSAGE, DualGATv2 (both on the dual graph), and MeshCNN (fixed 4-neighbor edge convolution on the original mesh).
+An end-to-end pipeline for automatically placing UV seams on 3D meshes using Graph Neural Networks, deployed as a Blender add-on. Three architectures are compared: DualGraphSAGE, DualGATv2 (both on the dual graph), and SparseMeshCNN (fixed 4-neighbor edge convolution on the original mesh).
 
 ## Overview
 
@@ -29,10 +29,10 @@ Raw 3D files
     → [preprocessing]                    cleanup, format conversion, scale normalization
     → [augment_meshes.py]                data augmentation (Gaussian vertex perturbation)
     → [obj_to_dataset_graph.py]              build the maintained PyG GNN dataset entrypoint
-    → [build_meshcnn_data.py]                build MeshCNN dataset (dataset_meshcnn.pt)
+    → [build_meshcnn_dataset_v2.py]          build SparseMeshCNN `MeshCNNSample` dataset
     → [models/dual_graphsage/train.py]       train DualGraphSAGE on dual graph
     → [models/gatv2/train.py]                train DualGATv2 on dual graph
-    → [models/meshcnn/train.py]              train MeshCNN on original mesh
+    → [models/meshcnn_full/train.py]         train SparseMeshCNN on original mesh
     → [evaluation/run_evaluation.py]         UV-level evaluation (unwrap + metrics)
     → [evaluation/compare_models.py]         cross-model comparison tables + plots
     → [blender_bridge]                       load weights, run inference inside Blender
@@ -136,21 +136,33 @@ python preprocessing/augment_meshes.py ./3d-objs --copies 3 --noise 0.05
 
 </details>
 
-### MeshCNN dataset (`dataset_meshcnn.pt`)
+### SparseMeshCNN dataset (`dataset_meshcnn_full_*.pt`)
 
-MeshCNN operates on original mesh topology using a fixed 4-neighbor structure. Run `preprocessing/build_meshcnn_data.py` to convert `dataset.pt`:
+SparseMeshCNN uses a separate `MeshCNNSample` dataset format and training path in `models/meshcnn_full/train.py`. The official builder is `preprocessing/build_meshcnn_dataset_v2.py`.
+
+Paper-equivalent dataset:
 
 ```bash
-python preprocessing/build_meshcnn_data.py --input dataset.pt --output dataset_meshcnn.pt
+python preprocessing/build_meshcnn_dataset.py ./meshes \
+  --output dataset_meshcnn_full_paper14.pt \
+  --feature-group paper14
 ```
 
-| Tensor | Shape | Description |
-|---|---|---|
-| `x` | `[E, 11]` | 11-dim edge features (same as `dataset.pt`) |
-| `edge_neighbors` | `[E, 4]` | 4 neighboring edge indices per edge (-1 = boundary) |
-| `y` | `[E]` | seam labels |
+Ablation superset dataset for runtime slicing:
 
-Interior edges have all 4 neighbors; boundary edges have -1 in positions 2–3.
+```bash
+python preprocessing/build_meshcnn_dataset.py ./meshes \
+  --output dataset_meshcnn_full_custom_superset_random.pt \
+  --feature-group custom \
+  --enable-ao \
+  --enable-dihedral \
+  --enable-symmetry \
+  --enable-density \
+  --enable-thickness-sdf \
+  --endpoint-order random
+```
+
+The builder writes `feature_names`, `feature_group`, `feature_preset`, `feature_flags`, `endpoint_order`, `label_source='exact_obj'`, `density_config` when present, and matching `edge_features` tensors for runtime slicing.
 
 ---
 

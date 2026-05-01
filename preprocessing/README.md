@@ -150,7 +150,9 @@ Use `--feature-group paper14` (default) for GraphSeam-style endpoint `[normalize
 
 `obj_to_dataset_graph.py` also exposes the maintained dual-view helpers used by the GNN pipeline: `build_dual_data(...)` and `build_dual_edge_index_from_unique_edges(...)`.
 
-SparseMeshCNN remains separate and still uses `build_meshcnn_data.py`.
+SparseMeshCNN remains separate and uses `build_meshcnn_dataset_v2.py` as the official `MeshCNNSample` builder.
+
+Use `--feature-group paper14` for the paper-equivalent dataset. For SparseMeshCNN ablations, build one custom superset dataset with `--feature-group custom`, enable the optional feature flags you need, and pass `--endpoint-order random` so runtime slicing in `models/meshcnn_full/train.py` can reuse that dataset across experiments.
 
 ---
 

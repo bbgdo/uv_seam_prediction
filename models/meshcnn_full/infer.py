@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.meshcnn_full.model import build_model_from_checkpoint_payload
 from models.utils.seam_topology import apply_topology_pipeline, build_seam_graph_view
-from preprocessing.build_meshcnn_dataset_v2 import build_meshcnn_sample
+from preprocessing.build_meshcnn_dataset import build_meshcnn_sample
 from preprocessing.feature_registry import resolve_feature_selection
 from preprocessing.obj_parser import parse_obj
 from preprocessing.topology import WeldConfig, build_topology

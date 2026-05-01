@@ -11,7 +11,7 @@ from models.meshcnn_full.model import MeshCNNSegmenter
 from models.meshcnn_full.pool import MeshPool
 from models.meshcnn_full.train import slice_meshcnn_dataset_features
 from models.meshcnn_full.unpool import MeshUnpool
-from preprocessing.build_meshcnn_dataset_v2 import build_meshcnn_sample
+from preprocessing.build_meshcnn_dataset import build_dataset_manifest, build_meshcnn_sample
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 
 
@@ -216,6 +216,46 @@ class MeshCNNFullTests(unittest.TestCase):
             self.assertEqual(logits.shape, sample.edge_labels.shape)
             self.assertTrue(torch.isfinite(logits).all())
 
+    def test_official_builder_custom_superset_random_metadata_matches_feature_registry(self):
+        selection = _full_custom_selection()
+        with _obj_file(OBJ_TETRA) as path:
+            sample = build_meshcnn_sample(
+                path,
+                selection,
+                endpoint_order='random',
+            )
+
+        self.assertEqual(sample.feature_group, 'custom')
+        self.assertEqual(sample.feature_preset, 'custom')
+        self.assertEqual(tuple(sample.feature_names), selection.feature_names)
+        self.assertEqual(sample.feature_flags, selection.feature_flags.as_dict())
+        self.assertEqual(sample.endpoint_order, 'random')
+        self.assertEqual(sample.label_source, 'exact_obj')
+        self.assertEqual(sample.density_config, selection.density_config)
+        self.assertEqual(sample.edge_features.shape[1], len(sample.feature_names))
+        for required in ('ao_i', 'ao_j', 'signed_dihedral', 'symmetry_dist', 'density_mean', 'density_diff', 'thickness_sdf'):
+            self.assertIn(required, sample.feature_names)
+
+    def test_official_builder_manifest_carries_runtime_slicing_metadata(self):
+        selection = _full_custom_selection()
+        with _obj_file(OBJ_TETRA) as path:
+            sample = build_meshcnn_sample(
+                path,
+                selection,
+                endpoint_order='random',
+            )
+            manifest = build_dataset_manifest([sample], path.with_suffix('.pt'))
+
+        self.assertEqual(manifest['sample_format'], 'meshcnn_full_v2')
+        self.assertEqual(manifest['feature_group'], 'custom')
+        self.assertEqual(manifest['feature_preset'], 'custom')
+        self.assertEqual(manifest['feature_names'], list(selection.feature_names))
+        self.assertEqual(manifest['feature_flags'], selection.feature_flags.as_dict())
+        self.assertEqual(manifest['feature_dim'], len(selection.feature_names))
+        self.assertEqual(manifest['endpoint_order'], 'random')
+        self.assertEqual(manifest['label_source'], 'exact_obj')
+        self.assertEqual(manifest['density_config'], selection.density_config)
+
     def test_slice_meshcnn_dataset_to_control14(self):
         sample = _sample_with_features()
         _, metadata = slice_meshcnn_dataset_features(
@@ -277,6 +317,32 @@ class MeshCNNFullTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'edge_features dim'):
             slice_meshcnn_dataset_features([source], resolve_feature_selection('custom'))
+
+    def test_runtime_slicing_accepts_official_builder_metadata(self):
+        source_selection = _full_custom_selection()
+        target_selection = resolve_feature_selection(
+            'custom',
+            enable_ao=True,
+            enable_density=True,
+            enable_thickness_sdf=True,
+        )
+        with _obj_file(OBJ_TETRA) as path:
+            sample = build_meshcnn_sample(
+                path,
+                source_selection,
+                endpoint_order='random',
+            )
+            manifest = build_dataset_manifest([sample], path.with_suffix('.pt'))
+
+        _, metadata = slice_meshcnn_dataset_features([sample], target_selection, manifest)
+
+        self.assertEqual(sample.edge_features.shape[1], len(target_selection.feature_names))
+        self.assertEqual(sample.feature_names, list(target_selection.feature_names))
+        self.assertEqual(metadata['feature_names'], list(target_selection.feature_names))
+        self.assertEqual(metadata['feature_flags'], target_selection.feature_flags.as_dict())
+        self.assertEqual(metadata['endpoint_order'], 'random')
+        self.assertEqual(metadata['label_source'], 'exact_obj')
+        self.assertEqual(metadata['sample_format'], 'meshcnn_full_v2')
 
 
 if __name__ == '__main__':

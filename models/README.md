@@ -89,7 +89,7 @@ This architecture serves as the third comparison point for the diploma: all thre
 | `num_layers` | 4 | MeshConv layers |
 | `dropout` | 0.3 | applied between layers |
 
-**Data preprocessing:** Run `preprocessing/build_meshcnn_data.py` to add `edge_neighbors [E, 4]` to the dataset before training.
+**Data preprocessing:** Build the SparseMeshCNN `MeshCNNSample` dataset with `preprocessing/build_meshcnn_dataset_v2.py`. For ablations, generate one custom superset dataset and let `models/meshcnn_full/train.py` slice features at runtime.
 
 </details>
 
@@ -131,17 +131,21 @@ python models/gatv2/train.py \
     --epochs 100 --hidden 64 --heads 8 --lr 5e-4
 ```
 
-### MeshCNN — `meshcnn/train.py`
+### SparseMeshCNN — `meshcnn_full/train.py`
 
 ```bash
-# Step 1: build MeshCNN dataset (adds 4-neighbor indices)
-python preprocessing/build_meshcnn_data.py --input dataset.pt --output dataset_meshcnn.pt
+# Step 1: build the official SparseMeshCNN dataset
+python preprocessing/build_meshcnn_dataset.py ./meshes \
+    --output dataset_meshcnn_full_custom_superset_random.pt \
+    --feature-group custom \
+    --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf \
+    --endpoint-order random
 
 # Step 2: train
-python models/meshcnn/train.py \
-    --dataset dataset_meshcnn.pt \
-    --run-dir runs/meshcnn_001 \
-    --epochs 100 --hidden 64 --num-layers 4
+python models/meshcnn_full/train.py \
+    --dataset dataset_meshcnn_full_custom_superset_random.pt \
+    --run-dir runs/sparsemeshcnn_001 \
+    --epochs 100 --hidden 64
 ```
 
 <details>

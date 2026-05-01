@@ -20,6 +20,7 @@ from preprocessing.obj_to_dataset_graph import build_dual_data
 from preprocessing.obj_parser import parse_obj
 from preprocessing.topology import WeldConfig, build_topology
 from evaluation.uv_metrics import parse_obj_with_uv, compute_all_uv_metrics
+from models.meshcnn_full.mesh import build_mesh_adjacency
 
 import trimesh
 
@@ -61,14 +62,7 @@ def _infer_seam_indices(
     features, unique_edges, _ = compute_edge_features(mesh)
 
     if model_type == 'meshcnn':
-        from preprocessing.build_meshcnn_data import build_edge_neighbors
-        src = unique_edges[:, 0]
-        dst = unique_edges[:, 1]
-        edge_key_to_idx = {
-            (int(min(src[i], dst[i])), int(max(src[i], dst[i]))): i
-            for i in range(len(unique_edges))
-        }
-        neighbors = build_edge_neighbors(src, dst, faces, edge_key_to_idx)
+        _, _, _, neighbors, _ = build_mesh_adjacency(faces, unique_edges)
         x = torch.from_numpy(features).float().to(device)
         nb = torch.from_numpy(neighbors).long().to(device)
         with torch.no_grad():
