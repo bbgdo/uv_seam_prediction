@@ -1,60 +1,46 @@
 # Preprocessing
 
-The maintained dataset builders are:
+Maintained dataset builders:
 
-- `obj_to_dataset_graph.py` for the PyG dual-graph dataset used by GraphSAGE and GATv2
-- `build_meshcnn_dataset_v2.py` for the SparseMeshCNN dataset
+- `preprocessing/obj_to_dataset_graph.py` for GraphSAGE/GATv2 PyG datasets
+- `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN datasets
 
-## GNN / PyG Dataset
+## GNN / PyG Builder
 
-```bash
-python obj_to_dataset_graph.py ./3d-objs \
-  --feature-group paper14 \
-  --endpoint-order random \
-  --save \
-  --output dataset_paper14_dual.pt
-```
-
-For engineered features, build a custom superset dataset:
+Use `preprocessing/obj_to_dataset_graph.py` for `paper14` and `custom` PyG datasets.
 
 ```bash
-python obj_to_dataset_graph.py ./3d-objs \
-  --feature-group custom \
-  --enable-ao \
-  --enable-dihedral \
-  --enable-symmetry \
-  --enable-density \
-  --enable-thickness-sdf \
-  --endpoint-order random \
-  --save \
-  --output dataset_custom_dual.pt
+.venv/Scripts/python.exe preprocessing/obj_to_dataset_graph.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
+.venv/Scripts/python.exe preprocessing/obj_to_dataset_graph.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
 ```
 
-`paper14` and `custom` are the maintained feature groups. Label extraction uses exact OBJ seam truth.
+## SparseMeshCNN Builder
 
-## SparseMeshCNN Dataset
+Use `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN. Build one custom superset dataset with all optional custom features enabled:
 
 ```bash
-python build_meshcnn_dataset_v2.py ./3d-objs \
-  --feature-group custom \
-  --enable-ao \
-  --enable-dihedral \
-  --enable-symmetry \
-  --enable-density \
-  --enable-thickness-sdf \
-  --endpoint-order random \
-  --save \
-  --output dataset_sparsemeshcnn_custom.pt
+.venv/Scripts/python.exe preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
 ```
 
-Use one custom superset dataset for SparseMeshCNN ablations and let `models/meshcnn_full/train.py` slice features at runtime.
+`tools/run_feature_ablations.py --model sparsemeshcnn` slices this superset at runtime. No per-ablation SparseMeshCNN datasets are required.
+
+## Dataset Metadata
+
+Serialized datasets and manifests should expose the same maintained metadata surface:
+
+- `feature_names`
+- `feature_group`
+- `feature_preset`
+- `feature_flags`
+- `endpoint_order`
+- `label_source='exact_obj'`
+- family split compatibility
 
 ## Dataset Audit
 
-```bash
-python ../tools/audit_dataset.py ./3d-objs --json-out audit_raw.json --csv-out audit_raw.csv
-python ../tools/audit_dataset.py ../dataset_paper14_dual.pt --json-out audit_paper14.json --csv-out audit_paper14.csv
-python ../tools/audit_dataset.py ../dataset_custom_dual.pt --json-out audit_custom.json --csv-out audit_custom.csv
-```
+Use `tools/audit_dataset.py` to inspect raw OBJ directories or serialized datasets and verify family-only split compatibility:
 
-`tools/audit_dataset.py` reports family IDs, resolution tags, augmentation status, seam ratios, and simulated split leakage. Leakage checks use family grouping only.
+```bash
+.venv/Scripts/python.exe tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-out outputs/audit_raw.csv
+.venv/Scripts/python.exe tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
+```

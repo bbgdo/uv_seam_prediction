@@ -1,34 +1,35 @@
 # Evaluation
 
-The maintained evaluation surface is:
+Maintained evaluation entrypoints:
 
-- `tools/predict_seams.py` for single-mesh inference
-- `tools/evaluate_dir_topology.py` for bulk topology and post-processing evaluation
-- `tools/evaluate_saved_models.py` for offline reevaluation of saved checkpoints
+- `tools/predict_seams.py` for inference
+- `tools/evaluate_dir_topology.py` for topology and post-processing evaluation
+- `tools/evaluate_saved_models.py` for reevaluating saved checkpoints
+
+## Inference
+
+`tools/predict_seams.py` is the maintained inference bridge.
+
+```bash
+.venv/Scripts/python.exe tools/predict_seams.py --mesh-path data/objs/example.obj --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --output-json outputs/predictions/example.json
+```
 
 ## Topology Evaluation
 
-```bash
-python tools/evaluate_dir_topology.py \
-  --input-dir ./3d-objs \
-  --model-weights runs/graphsage_paper14/best_model.pth \
-  --feature-bundle paper14 \
-  --csv-out topology_eval.csv
-```
+`tools/evaluate_dir_topology.py` is the maintained topology and post-processing evaluation entrypoint.
 
-This utility reuses `tools/predict_seams.py`, records per-mesh seam counts and topology telemetry, and can optionally keep per-mesh JSON payloads for inspection.
+```bash
+.venv/Scripts/python.exe tools/evaluate_dir_topology.py --input-dir data/objs --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --csv-out outputs/predictions/topology.csv
+```
 
 ## Saved Checkpoint Reevaluation
 
+`tools/evaluate_saved_models.py` is the maintained entrypoint for reevaluating saved checkpoints.
+
 ```bash
-python tools/evaluate_saved_models.py \
-  --runs-root runs/ablations_graphsage \
-  --splits-dir runs/ablations_graphsage/splits \
-  --custom-dataset dataset_custom_dual.pt
+.venv/Scripts/python.exe tools/evaluate_saved_models.py --runs-root runs/ablations/graphsage --splits-dir runs/ablations/graphsage/splits --custom-dataset datasets/gnn_custom.pt
 ```
 
-This utility reevaluates stored `best_model.pth` checkpoints, recomputes the exact validation-optimal threshold, and writes per-run and aggregate JSON reports.
+## Deprecated Script
 
-## Archived Script
-
-`run_evaluation.py` is kept only for older UV unwrap comparison studies. It is not the maintained evaluation entrypoint for current training and inference flows.
+`evaluation/run_evaluation.py` is deprecated/internal. Do not use it as the current workflow entrypoint.

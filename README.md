@@ -1,114 +1,89 @@
 # UV Seam Prediction
 
-PyTorch tooling for UV seam prediction on triangulated OBJ meshes. The maintained training surface is:
+PyTorch tooling for UV seam prediction on triangulated OBJ meshes.
 
-- `preprocessing/obj_to_dataset_graph.py` for the PyG dual-graph dataset used by GraphSAGE and GATv2
-- `preprocessing/build_meshcnn_dataset_v2.py` for the SparseMeshCNN dataset
-- `tools/run_baseline.py` for single-run GraphSAGE or GATv2 training
-- `tools/run_feature_ablations.py` for cross-model ablations over GraphSAGE, GATv2, and SparseMeshCNN
+Maintained entrypoints:
+
+- `preprocessing/obj_to_dataset_graph.py` for GraphSAGE/GATv2 PyG datasets
+- `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN datasets
+- `tools/run_baseline.py` for single GraphSAGE/GATv2 training
+- `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations
 - `models/meshcnn_full/train.py` for direct SparseMeshCNN training
-- `tools/predict_seams.py` for inference and Blender integration
+- `tools/predict_seams.py` for inference
+- `tools/evaluate_dir_topology.py` for topology and post-processing evaluation
+- `tools/evaluate_saved_models.py` for reevaluating saved checkpoints
 
-## Official Entry Points
+## Reproducibility Workflow
 
-### Build datasets
-
-```bash
-python preprocessing/obj_to_dataset_graph.py ./3d-objs \
-  --feature-group paper14 \
-  --endpoint-order random \
-  --save \
-  --output dataset_paper14_dual.pt
-
-python preprocessing/obj_to_dataset_graph.py ./3d-objs \
-  --feature-group custom \
-  --enable-ao \
-  --enable-dihedral \
-  --enable-symmetry \
-  --enable-density \
-  --enable-thickness-sdf \
-  --endpoint-order random \
-  --save \
-  --output dataset_custom_dual.pt
-
-python preprocessing/build_meshcnn_dataset_v2.py ./3d-objs \
-  --feature-group custom \
-  --enable-ao \
-  --enable-dihedral \
-  --enable-symmetry \
-  --enable-density \
-  --enable-thickness-sdf \
-  --endpoint-order random \
-  --save \
-  --output dataset_sparsemeshcnn_custom.pt
-```
-
-`exact_obj` is the maintained label source. Split generation and loading use family grouping only.
-
-### Train one GNN baseline
+Validate exact OBJ seam truth before building datasets:
 
 ```bash
-python tools/run_baseline.py \
-  --model graphsage \
-  --dataset dataset_paper14_dual.pt \
-  --feature-group paper14 \
-  --run-dir runs/graphsage_paper14
-
-python tools/run_baseline.py \
-  --model gatv2 \
-  --dataset dataset_custom_dual.pt \
-  --feature-group custom \
-  --enable-ao \
-  --enable-density \
-  --run-dir runs/gatv2_custom
+.venv/Scripts/python.exe tools/validate_seam_truth.py --mesh-dir data/objs
 ```
 
-### Run ablations
+Build the maintained PyG datasets:
 
 ```bash
-python tools/run_feature_ablations.py \
-  --model graphsage \
-  --custom-dataset dataset_custom_dual.pt \
-  --experiments control14 ao_density ao_dihedral_symmetry ao_dihedral_symmetry_density_sdf \
-  --seeds 7 11 19 \
-  --epochs 100 \
-  --output-root runs/ablations_graphsage \
-  --generate-splits
+.venv/Scripts/python.exe preprocessing/obj_to_dataset_graph.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
+.venv/Scripts/python.exe preprocessing/obj_to_dataset_graph.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
 ```
 
-Use `--model sparsemeshcnn` with `--meshcnn-dataset` for SparseMeshCNN ablations.
-
-### Train SparseMeshCNN directly
+Build one SparseMeshCNN custom superset dataset for all SparseMeshCNN ablations:
 
 ```bash
-python models/meshcnn_full/train.py \
-  --dataset dataset_sparsemeshcnn_custom.pt \
-  --feature-group custom \
-  --run-dir runs/sparsemeshcnn_custom
+.venv/Scripts/python.exe preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
 ```
 
-### Predict seams
+Audit dataset contents and family split leakage:
 
 ```bash
-python tools/predict_seams.py \
-  --mesh-path mesh.obj \
-  --model-weights runs/graphsage_paper14/best_model.pth \
-  --output-json prediction.json \
-  --feature-bundle paper14
+.venv/Scripts/python.exe tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-out outputs/audit_raw.csv
+.venv/Scripts/python.exe tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
 ```
 
-Public inference model names are `graphsage`, `gatv2`, and `sparsemeshcnn`.
+Run a single GraphSAGE or GATv2 training job:
 
-## Utilities
+```bash
+.venv/Scripts/python.exe tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --preset paper --run-dir runs/models/graphsage_paper14
+.venv/Scripts/python.exe tools/run_baseline.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
+```
 
-- `tools/audit_dataset.py`: inspect raw OBJ directories or serialized datasets and check family-split leakage
-- `tools/validate_seam_truth.py`: parity-check exact OBJ seam extraction
-- `tools/evaluate_dir_topology.py`: bulk topology and post-processing evaluation over a directory of meshes
-- `tools/evaluate_saved_models.py`: offline reevaluation of saved checkpoints with exact validation-threshold search
+Run GraphSAGE and GATv2 feature ablations on the custom superset dataset:
 
-## Internal Or Archived Tools
+```bash
+.venv/Scripts/python.exe tools/run_feature_ablations.py --model graphsage --custom-dataset datasets/gnn_custom.pt --experiments control14 ao density ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root runs/ablations/graphsage --generate-splits
+.venv/Scripts/python.exe tools/run_feature_ablations.py --model gatv2 --custom-dataset datasets/gnn_custom.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/gatv2 --generate-splits
+```
 
-- `tools/run_graphseam_baseline.py`: internal multi-seed paper-protocol batch wrapper around `tools/run_baseline.py`
-- `evaluation/run_evaluation.py`: deprecated internal UV-study script kept for archival unwrap experiments
+Run SparseMeshCNN ablations on the single custom superset dataset:
 
-For more detail, see [preprocessing/README.md](preprocessing/README.md), [models/README.md](models/README.md), and [evaluation/README.md](evaluation/README.md).
+```bash
+.venv/Scripts/python.exe tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
+```
+
+Run inference with the maintained bridge:
+
+```bash
+.venv/Scripts/python.exe tools/predict_seams.py --mesh-path data/objs/example.obj --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --output-json outputs/predictions/example.json
+```
+
+Run topology and post-processing evaluation:
+
+```bash
+.venv/Scripts/python.exe tools/evaluate_dir_topology.py --input-dir data/objs --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --csv-out outputs/predictions/topology.csv
+```
+
+Reevaluate saved checkpoints:
+
+```bash
+.venv/Scripts/python.exe tools/evaluate_saved_models.py --runs-root runs/ablations/graphsage --splits-dir runs/ablations/graphsage/splits --custom-dataset datasets/gnn_custom.pt
+```
+
+Notes:
+
+- Label source is `exact_obj`.
+- Split protocol is `family` only.
+- Canonical feature names are `paper14`, `custom`, and `control14`.
+- SparseMeshCNN is the public model name. `models/meshcnn_full/` is the internal module path only.
+
+See [preprocessing/README.md](preprocessing/README.md), [models/README.md](models/README.md), and [evaluation/README.md](evaluation/README.md) for the maintained command surface.
