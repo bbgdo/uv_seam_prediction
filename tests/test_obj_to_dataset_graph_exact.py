@@ -65,7 +65,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
                 path,
                 feature_preset='paper14',
                 endpoint_order='fixed',
-                label_source='exact_obj',
             )
 
             expected_edges = [list(edge) for edge in topology.canonical_edges]
@@ -84,7 +83,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
                 path,
                 feature_preset='paper14',
                 endpoint_order='fixed',
-                label_source='exact_obj',
             )
 
             labels_by_edge = {
@@ -105,7 +103,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
                 path,
                 feature_preset='paper14',
                 endpoint_order='fixed',
-                label_source='exact_obj',
             )
             edge_count = len(data.unique_edges)
 
@@ -128,18 +125,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
 
             self.assertEqual(data.label_source, 'exact_obj')
 
-    def test_legacy_path_remains_importable_and_callable(self):
-        with _obj_file(NON_SEAM_SHARED_EDGE) as path:
-            data = process_mesh(
-                path,
-                feature_preset='paper14',
-                endpoint_order='fixed',
-                label_source='legacy_uv_remap',
-            )
-
-            self.assertIsNotNone(data)
-            self.assertEqual(data.label_source, 'legacy_uv_remap')
-
     def test_feature_mesh_from_canonical_topology_preserves_edge_order(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             topology, _ = _topology_and_truth(path)
@@ -161,7 +146,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             build_dataset_main([
                 str(mesh_dir),
                 '--max-meshes', '1',
-                '--label-source', 'exact_obj',
                 '--feature-preset', 'paper14',
                 '--endpoint-order', 'fixed',
                 '--save',
@@ -207,7 +191,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             build_dataset_main([
                 str(mesh_dir),
                 '--max-meshes', '1',
-                '--label-source', 'exact_obj',
                 '--feature-preset', 'paper14',
                 '--endpoint-order', 'fixed',
                 '--save',
@@ -236,7 +219,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
                 path,
                 feature_preset='paper14',
                 endpoint_order='fixed',
-                label_source='exact_obj',
             )
 
             dual = build_dual_graph_data(data)
@@ -248,27 +230,6 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertEqual(dual.weld_mode, 'exact')
             self.assertEqual(dual.seam_edge_count, data.seam_edge_count)
             self.assertEqual(dual.boundary_edge_count, data.boundary_edge_count)
-
-    def test_legacy_dataset_output_path_still_works_when_explicit(self):
-        with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
-            output_path = mesh_dir.parent / 'dataset.pt'
-
-            build_dataset_main([
-                str(mesh_dir),
-                '--max-meshes', '1',
-                '--label-source', 'legacy_uv_remap',
-                '--feature-preset', 'paper14',
-                '--endpoint-order', 'fixed',
-                '--save',
-                '--output', str(output_path),
-            ])
-
-            self.assertTrue(output_path.exists())
-            self.assertFalse(manifest_path_for_dataset(output_path).exists())
-            dataset = torch.load(output_path, weights_only=False)
-            self.assertEqual(len(dataset), 1)
-            self.assertEqual(dataset[0].label_source, 'legacy_uv_remap')
-
 
 if __name__ == '__main__':
     unittest.main()

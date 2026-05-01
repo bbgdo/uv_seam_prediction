@@ -779,8 +779,8 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
 
 def parser_epilog() -> str:
     return """Examples:
-  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --label-source exact_obj --feature-group paper14 --endpoint-order random --save --overwrite --output <paper_dataset.pt>
-  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --label-source exact_obj --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
+  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --feature-group paper14 --endpoint-order random --save --overwrite --output <paper_dataset.pt>
+  python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
   python tools/run_feature_ablations.py --model graphsage --paper-dataset <paper_dataset.pt> --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf sdf_only --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
 """

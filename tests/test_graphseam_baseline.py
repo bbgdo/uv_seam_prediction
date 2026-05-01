@@ -261,7 +261,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
     def test_strict_paper_protocol_rejects_inconsistent_metadata(self):
         data = Data(x=torch.zeros(3, 14))
-        data.label_source = 'legacy_uv_remap'
+        data.label_source = 'wrong_source'
         data.feature_preset = 'extended18'
         args = Namespace(
             preset='paper',
