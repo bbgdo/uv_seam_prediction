@@ -38,11 +38,7 @@ from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology
 
 MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'sparsemeshcnn')
 FEATURE_BUNDLES = ('auto', 'paper14', 'ao_density', 'custom')
-_MODEL_TYPE_ALIASES = {
-    'meshcnn_full': 'sparsemeshcnn',
-    'meshcnn': 'sparsemeshcnn',
-    'sparse_meshcnn': 'sparsemeshcnn',
-}
+_MODEL_TYPE_ALIASES: dict[str, str] = {}
 
 
 class PredictionError(RuntimeError):

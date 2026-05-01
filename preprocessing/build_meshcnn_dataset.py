@@ -23,7 +23,7 @@ from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import WeldConfig, build_topology
 
 
-DEFAULT_OUTPUT = 'dataset_meshcnn_full_paper14.pt'
+DEFAULT_OUTPUT = 'dataset_sparsemeshcnn_paper14.pt'
 
 
 def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:

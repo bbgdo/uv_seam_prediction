@@ -1,6 +1,8 @@
+import json
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 import tempfile
 
 import numpy as np
@@ -11,7 +13,7 @@ from models.meshcnn_full.model import MeshCNNSegmenter
 from models.meshcnn_full.pool import MeshPool
 from models.meshcnn_full.train import slice_meshcnn_dataset_features
 from models.meshcnn_full.unpool import MeshUnpool
-from preprocessing.build_meshcnn_dataset import build_dataset_manifest, build_meshcnn_sample
+from preprocessing.build_meshcnn_dataset import DEFAULT_OUTPUT, build_dataset_manifest, build_meshcnn_sample
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 
 
@@ -343,6 +345,59 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(metadata['endpoint_order'], 'random')
         self.assertEqual(metadata['label_source'], 'exact_obj')
         self.assertEqual(metadata['sample_format'], 'meshcnn_full_v2')
+
+
+class TrainConfigMetadataTests(unittest.TestCase):
+    def test_train_config_writes_sparsemeshcnn_model_name(self):
+        from models.meshcnn_full import train as train_module
+
+        sample = _sample_with_features(list(PAPER14_FEATURE_NAMES))
+        samples = [sample]
+        fake_metrics = {'f1': 0.5, 'precision': 0.5, 'recall': 0.5}
+        fake_sweep = {'best': {'threshold': 0.5, 'f1': 0.5}, 'curve': []}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_pt = Path(tmp) / 'dataset_sparsemeshcnn_paper14.pt'
+            dataset_pt.touch()
+            run_dir = Path(tmp) / 'run'
+
+            with (
+                patch.object(train_module, 'load_meshcnn_dataset', return_value=samples),
+                patch.object(train_module, '_validate_dataset_tensors_cpu'),
+                patch.object(train_module, '_load_manifest', return_value={}),
+                patch.object(train_module, 'split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
+                patch.object(train_module, 'compute_pos_weight', return_value=torch.tensor([1.0])),
+                patch.object(train_module, '_run_epoch', return_value=(0.5, fake_metrics, {})),
+                patch.object(train_module, '_predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
+                patch.object(train_module, 'threshold_sweep', return_value=fake_sweep),
+                patch('torch.save'),
+                patch('torch.load', return_value={
+                    'model_state': {},
+                    'model_config': {'in_channels': 14, 'hidden_channels': 16, 'dropout': 0.2, 'pool_ratios': (0.85, 0.75), 'min_edges': 32},
+                    'feature_metadata': {},
+                    'train_config': {},
+                    'best_epoch': 1,
+                    'best_val_f1': 0.5,
+                }),
+                patch.object(train_module.MeshCNNSegmenter, 'load_state_dict'),
+            ):
+                train_module.main([
+                    '--dataset', str(dataset_pt),
+                    '--run-dir', str(run_dir),
+                    '--epochs', '1',
+                    '--hidden', '16',
+                    '--pool-ratios', '0.85,0.75',
+                ])
+
+            config = json.loads((run_dir / 'config.json').read_text(encoding='utf-8'))
+            self.assertEqual(config['model'], 'sparsemeshcnn')
+            self.assertEqual(config['internal_model_type'], 'meshcnn_full')
+
+
+class BuilderDefaultOutputTests(unittest.TestCase):
+    def test_default_output_uses_sparsemeshcnn_name(self):
+        self.assertIn('sparsemeshcnn', DEFAULT_OUTPUT)
+        self.assertNotIn('meshcnn_full', DEFAULT_OUTPUT)
 
 
 if __name__ == '__main__':

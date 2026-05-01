@@ -84,6 +84,19 @@ class PredictSeamsTests(unittest.TestCase):
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
 
+    def test_cli_rejects_meshcnn_full_as_model_type(self):
+        with self.assertRaises(SystemExit):
+            predict_seams._normalize_cli_model_type('meshcnn_full')
+        with self.assertRaises(SystemExit):
+            predict_seams._normalize_cli_model_type('meshcnn')
+        with self.assertRaises(SystemExit):
+            predict_seams._normalize_cli_model_type('sparse_meshcnn')
+
+    def test_cli_accepts_sparsemeshcnn_model_type(self):
+        self.assertEqual(predict_seams._normalize_cli_model_type('sparsemeshcnn'), 'sparsemeshcnn')
+        self.assertEqual(predict_seams._normalize_cli_model_type('gatv2'), 'gatv2')
+        self.assertEqual(predict_seams._normalize_cli_model_type('graphsage'), 'graphsage')
+
     def test_feature_bundle_resolution(self):
         selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         self.assertEqual(selection.feature_group, 'paper14')

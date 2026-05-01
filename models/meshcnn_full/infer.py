@@ -60,7 +60,7 @@ def predict_obj(
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description='Run isolated MeshCNN-full UV seam inference.')
+    parser = argparse.ArgumentParser(description='Run SparseMeshCNN UV seam inference.')
     parser.add_argument('--obj', required=True, help='Input OBJ path')
     parser.add_argument('--checkpoint', required=True, help='Path to best_model.pth')
     parser.add_argument('--output-probs', default=None, help='Optional .npz path for probabilities and edge indices')

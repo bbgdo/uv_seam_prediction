@@ -458,9 +458,9 @@ def _write_json(path: Path, payload: Any) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    parser = argparse.ArgumentParser(description='Train isolated MeshCNN-full edge segmentation.')
-    parser.add_argument('--dataset', default='dataset_meshcnn_full_paper14.pt')
-    parser.add_argument('--run-dir', default=f'runs/meshcnn_full_{timestamp}')
+    parser = argparse.ArgumentParser(description='Train SparseMeshCNN edge segmentation.')
+    parser.add_argument('--dataset', default='dataset_sparsemeshcnn_paper14.pt')
+    parser.add_argument('--run-dir', default=f'runs/sparsemeshcnn_{timestamp}')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--weight-decay', type=float, default=1e-4)
@@ -550,7 +550,8 @@ def main(argv: list[str] | None = None) -> None:
     run_dir = Path(args.run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     config_payload = {
-        'model': 'meshcnn_full',
+        'model': 'sparsemeshcnn',
+        'internal_model_type': 'meshcnn_full',
         'dataset': str(dataset_path),
         'model_config': model_config,
         'feature_metadata': feature_metadata,
