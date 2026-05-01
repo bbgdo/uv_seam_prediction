@@ -1,5 +1,6 @@
 import argparse
 import csv
+import itertools
 import json
 import statistics
 import subprocess
@@ -39,114 +40,27 @@ class ExperimentSpec:
     strict_paper_protocol: bool = False
 
 
-EXPERIMENT_SPECS: dict[str, ExperimentSpec] = {
-    'paper14_locked': ExperimentSpec(
-        name='paper14_locked',
-        dataset_role='paper',
-        feature_group='paper14',
-        strict_paper_protocol=True,
-    ),
-    'custom14_control': ExperimentSpec(
-        name='custom14_control',
-        dataset_role='custom',
-        feature_group='custom',
-    ),
-    'ao_only': ExperimentSpec(
-        name='ao_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-    ),
-    'symmetry_only': ExperimentSpec(
-        name='symmetry_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_symmetry=True,
-    ),
-    'density_only': ExperimentSpec(
-        name='density_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_density=True,
-    ),
-    'sdf_only': ExperimentSpec(
-        name='sdf_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_thickness_sdf=True,
-    ),
-    'ao_symmetry': ExperimentSpec(
-        name='ao_symmetry',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_symmetry=True,
-    ),
-    'ao_density': ExperimentSpec(
-        name='ao_density',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_density=True,
-    ),
-    'ao_density_sdf': ExperimentSpec(
-        name='ao_density_sdf',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_density=True,
-        enable_thickness_sdf=True,
-    ),
-    'symmetry_density': ExperimentSpec(
-        name='symmetry_density',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_symmetry=True,
-        enable_density=True,
-    ),
-    'ao_symmetry_density': ExperimentSpec(
-        name='ao_symmetry_density',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_symmetry=True,
-        enable_density=True,
-    ),
-    'dihedral_only': ExperimentSpec(
-        name='dihedral_only',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_dihedral=True,
-    ),
-    'ao_dihedral_symmetry': ExperimentSpec(
-        name='ao_dihedral_symmetry',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_dihedral=True,
-        enable_symmetry=True,
-    ),
-    'ao_dihedral_symmetry_density': ExperimentSpec(
-        name='full_custom',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_dihedral=True,
-        enable_symmetry=True,
-        enable_density=True,
-    ),
-    'full_custom': ExperimentSpec(
-        name='full_custom_sdf',
-        dataset_role='custom',
-        feature_group='custom',
-        enable_ao=True,
-        enable_dihedral=True,
-        enable_symmetry=True,
-        enable_density=True,
-        enable_thickness_sdf=True,
-    ),
-}
+_FEATURE_TOKENS = ('ao', 'dihedral', 'symmetry', 'density', 'sdf')
+_FLAG_KEYS = ('enable_ao', 'enable_dihedral', 'enable_symmetry', 'enable_density', 'enable_thickness_sdf')
 
+
+def _build_experiment_specs() -> dict[str, ExperimentSpec]:
+    specs: dict[str, ExperimentSpec] = {
+        'control14': ExperimentSpec(name='control14', dataset_role='custom', feature_group='custom'),
+    }
+    for size in range(1, len(_FEATURE_TOKENS) + 1):
+        for combo in itertools.combinations(range(len(_FEATURE_TOKENS)), size):
+            name = '_'.join(_FEATURE_TOKENS[i] for i in combo)
+            specs[name] = ExperimentSpec(
+                name=name,
+                dataset_role='custom',
+                feature_group='custom',
+                **{_FLAG_KEYS[i]: True for i in combo},
+            )
+    return specs
+
+
+EXPERIMENT_SPECS: dict[str, ExperimentSpec] = _build_experiment_specs()
 FULL_ABLATION_SUITE = tuple(EXPERIMENT_SPECS)
 
 
@@ -171,12 +85,8 @@ def get_experiment_spec(name: str) -> ExperimentSpec:
 
 
 def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
-    strict_experiments = [
-        name for name in experiment_names
-        if get_experiment_spec(name).strict_paper_protocol
-    ]
-    if model != 'graphsage' and strict_experiments:
-        raise ValueError('paper14_locked / strict paper protocol is GraphSAGE-only')
+    for name in experiment_names:
+        get_experiment_spec(name)
 
 
 def split_path_for_seed(splits_dir: Path, seed: int) -> Path:
@@ -313,21 +223,11 @@ def load_filtered_dataset(path: str, resolution_tag: str) -> list:
 
 
 def validate_dataset_roles(args: argparse.Namespace, experiment_names: list[str]) -> dict[str, list]:
-    roles = {get_experiment_spec(name).dataset_role for name in experiment_names}
     datasets: dict[str, list] = {}
-
-    if 'paper' in roles or args.paper_dataset:
-        if not args.paper_dataset:
-            raise ValueError('--paper-dataset is required for paper14_locked')
-        datasets['paper'] = load_filtered_dataset(args.paper_dataset, args.resolution_tag)
-        validate_paper_dataset_metadata(datasets['paper'])
-
-    if 'custom' in roles or args.custom_dataset:
-        if not args.custom_dataset:
-            raise ValueError('--custom-dataset is required for custom ablation experiments')
-        datasets['custom'] = load_filtered_dataset(args.custom_dataset, args.resolution_tag)
-        validate_custom_dataset_metadata(datasets['custom'], experiment_names)
-
+    if not args.custom_dataset:
+        raise ValueError('--custom-dataset is required')
+    datasets['custom'] = load_filtered_dataset(args.custom_dataset, args.resolution_tag)
+    validate_custom_dataset_metadata(datasets['custom'], experiment_names)
     return datasets
 
 
@@ -746,43 +646,30 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
 def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) -> None:
     _write_json(output_root / 'suite_summary.json', {'experiments': payloads})
 
-    if 'custom14_control' in payloads:
-        control_records = payloads['custom14_control']['runs']
+    if 'control14' in payloads:
+        control_records = payloads['control14']['runs']
         suite_deltas: dict[str, Any] = {}
         for name, payload in payloads.items():
             delta = paired_delta_summary(
                 experiment_name=name,
                 experiment_records=payload['runs'],
-                control_name='custom14_control',
+                control_name='control14',
                 control_records=control_records,
             )
             suite_deltas[name] = delta
             write_delta_reports(
-                output_root / 'experiments' / name / 'paired_delta_vs_custom14_control',
+                output_root / 'experiments' / name / 'paired_delta_vs_control14',
                 delta,
             )
-        _write_json(output_root / 'paired_deltas_vs_custom14_control.json', suite_deltas)
-
-    if 'paper14_locked' in payloads and 'custom14_control' in payloads:
-        delta = paired_delta_summary(
-            experiment_name='custom14_control',
-            experiment_records=payloads['custom14_control']['runs'],
-            control_name='paper14_locked',
-            control_records=payloads['paper14_locked']['runs'],
-        )
-        write_delta_reports(
-            output_root / 'experiments' / 'custom14_control' / 'paired_delta_vs_paper14_locked',
-            delta,
-        )
-        _write_json(output_root / 'paired_delta_custom14_control_vs_paper14_locked.json', delta)
+        _write_json(output_root / 'paired_deltas_vs_control14.json', suite_deltas)
 
 
 def parser_epilog() -> str:
     return """Examples:
   python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --feature-group paper14 --endpoint-order random --save --overwrite --output <paper_dataset.pt>
   python preprocessing/obj_to_dataset_graph.py --mesh-dir <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
-  python tools/run_feature_ablations.py --model graphsage --paper-dataset <paper_dataset.pt> --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --experiments custom14_control ao_density ao_density_sdf full_custom full_custom_sdf sdf_only --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model graphsage --custom-dataset <custom_dataset.pt> --experiments control14 ao_density ao_dihedral_symmetry ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
 """
 
 
@@ -799,7 +686,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         '--experiments',
         nargs='+',
         choices=tuple(EXPERIMENT_SPECS),
-        default=['paper14_locked', 'custom14_control'],
+        default=['control14'],
     )
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
     parser.add_argument('--resolution-tag', default='all')
@@ -815,7 +702,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--full-suite',
         action='store_true',
-        help='run paper14_locked, custom14_control, and every named custom ablation',
+        help='run control14 and all feature-combination ablations',
     )
     args = parser.parse_args(argv)
     if args.full_suite:

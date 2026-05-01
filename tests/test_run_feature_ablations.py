@@ -12,6 +12,7 @@ from torch_geometric.data import Data
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 from tools.run_feature_ablations import (
     EXPERIMENT_SPECS,
+    FULL_ABLATION_SUITE,
     THRESHOLD_05_PREFIX,
     VAL_BEST_PREFIX,
     build_train_command,
@@ -80,48 +81,93 @@ def _summary(seed: int, fpr_best: float, f1_best: float, fpr_05: float, f1_05: f
     }
 
 
+_EXPECTED_ORDER = [
+    'control14',
+    'ao', 'dihedral', 'symmetry', 'density', 'sdf',
+    'ao_dihedral', 'ao_symmetry', 'ao_density', 'ao_sdf',
+    'dihedral_symmetry', 'dihedral_density', 'dihedral_sdf',
+    'symmetry_density', 'symmetry_sdf', 'density_sdf',
+    'ao_dihedral_symmetry', 'ao_dihedral_density', 'ao_dihedral_sdf',
+    'ao_symmetry_density', 'ao_symmetry_sdf', 'ao_density_sdf',
+    'dihedral_symmetry_density', 'dihedral_symmetry_sdf', 'dihedral_density_sdf',
+    'symmetry_density_sdf',
+    'ao_dihedral_symmetry_density', 'ao_dihedral_symmetry_sdf',
+    'ao_dihedral_density_sdf', 'ao_symmetry_density_sdf', 'dihedral_symmetry_density_sdf',
+    'ao_dihedral_symmetry_density_sdf',
+]
+
+
 class FeatureAblationRunnerTests(unittest.TestCase):
+    def test_experiment_suite_structure(self):
+        self.assertEqual(len(EXPERIMENT_SPECS), 32)
+        self.assertNotIn('paper14_locked', EXPERIMENT_SPECS)
+        self.assertNotIn('custom14_control', EXPERIMENT_SPECS)
+        self.assertIn('control14', EXPERIMENT_SPECS)
+        self.assertNotIn('full_custom', EXPERIMENT_SPECS)
+        self.assertNotIn('full_custom_sdf', EXPERIMENT_SPECS)
+        self.assertNotIn('ao_only', EXPERIMENT_SPECS)
+        self.assertNotIn('sdf_only', EXPERIMENT_SPECS)
+        self.assertNotIn('dihedral_only', EXPERIMENT_SPECS)
+        self.assertNotIn('symmetry_only', EXPERIMENT_SPECS)
+        self.assertNotIn('density_only', EXPERIMENT_SPECS)
+
+    def test_every_key_equals_spec_name(self):
+        for key, spec in EXPERIMENT_SPECS.items():
+            self.assertEqual(key, spec.name, f"key {key!r} != spec.name {spec.name!r}")
+
+    def test_all_experiments_use_custom_dataset_role_and_group(self):
+        for name, spec in EXPERIMENT_SPECS.items():
+            self.assertEqual(spec.dataset_role, 'custom', f"{name}: wrong dataset_role")
+            self.assertEqual(spec.feature_group, 'custom', f"{name}: wrong feature_group")
+
+    def test_experiment_order(self):
+        self.assertEqual(list(EXPERIMENT_SPECS.keys()), _EXPECTED_ORDER)
+        self.assertEqual(list(FULL_ABLATION_SUITE), _EXPECTED_ORDER)
+
     def test_experiment_name_to_feature_selection_mapping(self):
-        control = experiment_feature_selection('custom14_control')
+        control = experiment_feature_selection('control14')
         ao_dih_sym = experiment_feature_selection('ao_dihedral_symmetry')
-        full_custom = experiment_feature_selection('full_custom')
-        sdf_only = experiment_feature_selection('sdf_only')
         ao_density_sdf = experiment_feature_selection('ao_density_sdf')
-        full_custom_sdf = experiment_feature_selection('full_custom_sdf')
+        all_five = experiment_feature_selection('ao_dihedral_symmetry_density_sdf')
 
         self.assertEqual(control.feature_group, 'custom')
         self.assertEqual(control.feature_names, PAPER14_FEATURE_NAMES)
+
         self.assertTrue(ao_dih_sym.feature_flags.ao)
         self.assertTrue(ao_dih_sym.feature_flags.signed_dihedral)
         self.assertTrue(ao_dih_sym.feature_flags.symmetry)
         self.assertFalse(ao_dih_sym.feature_flags.density)
         self.assertEqual(ao_dih_sym.feature_count, 18)
-        self.assertTrue(full_custom.feature_flags.density)
-        self.assertEqual(full_custom.feature_names[-2:], ('density_mean', 'density_diff'))
-        self.assertTrue(sdf_only.feature_flags.thickness_sdf)
-        self.assertEqual(sdf_only.feature_names[-1], 'thickness_sdf')
+
         self.assertTrue(ao_density_sdf.feature_flags.ao)
         self.assertTrue(ao_density_sdf.feature_flags.density)
         self.assertTrue(ao_density_sdf.feature_flags.thickness_sdf)
         self.assertEqual(ao_density_sdf.feature_names[-3:], ('density_mean', 'density_diff', 'thickness_sdf'))
-        self.assertTrue(full_custom_sdf.feature_flags.thickness_sdf)
-        self.assertEqual(full_custom_sdf.feature_names[-3:], ('density_mean', 'density_diff', 'thickness_sdf'))
+
+        self.assertTrue(all_five.feature_flags.ao)
+        self.assertTrue(all_five.feature_flags.signed_dihedral)
+        self.assertTrue(all_five.feature_flags.symmetry)
+        self.assertTrue(all_five.feature_flags.density)
+        self.assertTrue(all_five.feature_flags.thickness_sdf)
 
     def test_endpoint_order_safety_checks(self):
         validate_paper_dataset_metadata([_paper_data()])
-        validate_custom_dataset_metadata([_custom_data()], ['full_custom'])
+        validate_custom_dataset_metadata([_custom_data()], ['ao_dihedral_symmetry_density_sdf'])
 
         with self.assertRaisesRegex(ValueError, "endpoint_order must be 'random'"):
             validate_paper_dataset_metadata([_paper_data(endpoint_order='fixed')])
         with self.assertRaisesRegex(ValueError, "endpoint_order must be 'random'"):
-            validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['custom14_control'])
+            validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
 
     def test_failure_on_missing_features_or_wrong_dataset_metadata(self):
         with self.assertRaisesRegex(ValueError, "feature_group must be 'paper14'"):
             validate_paper_dataset_metadata([_paper_data(feature_group='custom')])
 
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
-            validate_custom_dataset_metadata([_custom_data(list(PAPER14_FEATURE_NAMES))], ['full_custom'])
+            validate_custom_dataset_metadata(
+                [_custom_data(list(PAPER14_FEATURE_NAMES))],
+                ['ao_dihedral_symmetry_density_sdf'],
+            )
         without_sdf = resolve_feature_selection(
             'custom',
             enable_ao=True,
@@ -130,12 +176,14 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             enable_density=True,
         ).feature_names
         with self.assertRaisesRegex(ValueError, 'thickness_sdf'):
-            validate_custom_dataset_metadata([_custom_data(list(without_sdf))], ['full_custom_sdf'])
+            validate_custom_dataset_metadata(
+                [_custom_data(list(without_sdf))],
+                ['ao_dihedral_symmetry_density_sdf'],
+            )
 
-    def test_strict_paper_protocol_rejects_non_graphsage(self):
-        validate_experiment_selection(['paper14_locked'], model='graphsage')
-        with self.assertRaisesRegex(ValueError, 'GraphSAGE-only'):
-            validate_experiment_selection(['paper14_locked'], model='gatv2')
+    def test_validate_experiment_selection_accepts_all_specs(self):
+        validate_experiment_selection(list(EXPERIMENT_SPECS), model='graphsage')
+        validate_experiment_selection(list(EXPERIMENT_SPECS), model='gatv2')
 
     def test_split_generation_and_validation_reuse_dataset_agnostic_files(self):
         with TemporaryDirectory() as tmp:
@@ -233,9 +281,9 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         ]
 
         delta = paired_delta_summary(
-            experiment_name='ao_only',
+            experiment_name='ao',
             experiment_records=experiment_records,
-            control_name='custom14_control',
+            control_name='control14',
             control_records=control_records,
         )
 
@@ -246,19 +294,8 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertIn('threshold_0_5_diagnostics', delta)
 
     def test_subprocess_command_construction(self):
-        paper_command = build_train_command(
-            spec=EXPERIMENT_SPECS['paper14_locked'],
-            paper_dataset='paper.pt',
-            custom_dataset='custom.pt',
-            run_dir=Path('runs') / 'paper',
-            split_json=Path('splits') / 'seed_7.json',
-            seed=7,
-            resolution_tag='all',
-            group_mode='family',
-            epochs=3,
-        )
         custom_command = build_train_command(
-            spec=EXPERIMENT_SPECS['full_custom'],
+            spec=EXPERIMENT_SPECS['ao_dihedral_symmetry'],
             paper_dataset='paper.pt',
             custom_dataset='custom.pt',
             run_dir=Path('runs') / 'full',
@@ -268,11 +305,11 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             group_mode='family',
             epochs=3,
         )
-        gatv2_paper_command = build_train_command(
-            spec=EXPERIMENT_SPECS['paper14_locked'],
+        gatv2_command = build_train_command(
+            spec=EXPERIMENT_SPECS['control14'],
             paper_dataset='paper.pt',
             custom_dataset='custom.pt',
-            run_dir=Path('runs') / 'gatv2_paper',
+            run_dir=Path('runs') / 'gatv2',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
             resolution_tag='all',
@@ -292,25 +329,41 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             epochs=3,
             model='gatv2',
         )
+        all_five_command = build_train_command(
+            spec=EXPERIMENT_SPECS['ao_dihedral_symmetry_density_sdf'],
+            paper_dataset='paper.pt',
+            custom_dataset='custom.pt',
+            run_dir=Path('runs') / 'all5',
+            split_json=Path('splits') / 'seed_7.json',
+            seed=7,
+            resolution_tag='all',
+            group_mode='family',
+            epochs=3,
+        )
 
-        self.assertEqual(paper_command[0], sys.executable)
-        self.assertIn(str(Path('tools') / 'run_baseline.py'), paper_command)
-        self.assertIn('--split-json-in', paper_command)
-        self.assertNotIn('--split-json-out', paper_command)
-        self.assertEqual(paper_command[paper_command.index('--model') + 1], 'graphsage')
-        self.assertIn('--strict-paper-protocol', paper_command)
+        self.assertEqual(custom_command[0], sys.executable)
+        self.assertIn(str(Path('tools') / 'run_baseline.py'), custom_command)
+        self.assertIn('--split-json-in', custom_command)
+        self.assertNotIn('--split-json-out', custom_command)
         self.assertNotIn('--strict-paper-protocol', custom_command)
-        self.assertEqual(gatv2_paper_command[gatv2_paper_command.index('--model') + 1], 'gatv2')
-        self.assertEqual(gatv2_paper_command[gatv2_paper_command.index('--preset') + 1], 'extended')
-        self.assertNotIn('--strict-paper-protocol', gatv2_paper_command)
         self.assertIn('--enable-ao', custom_command)
         self.assertIn('--enable-dihedral', custom_command)
         self.assertIn('--enable-symmetry', custom_command)
-        self.assertIn('--enable-density', custom_command)
+
+        self.assertEqual(gatv2_command[gatv2_command.index('--model') + 1], 'gatv2')
+        self.assertEqual(gatv2_command[gatv2_command.index('--preset') + 1], 'extended')
+        self.assertNotIn('--strict-paper-protocol', gatv2_command)
+
         self.assertEqual(sdf_command[sdf_command.index('--model') + 1], 'gatv2')
         self.assertIn('--enable-ao', sdf_command)
         self.assertIn('--enable-density', sdf_command)
         self.assertIn('--enable-thickness-sdf', sdf_command)
+
+        self.assertIn('--enable-ao', all_five_command)
+        self.assertIn('--enable-dihedral', all_five_command)
+        self.assertIn('--enable-symmetry', all_five_command)
+        self.assertIn('--enable-density', all_five_command)
+        self.assertIn('--enable-thickness-sdf', all_five_command)
 
     def test_run_experiment_reuses_existing_split_jsons(self):
         with TemporaryDirectory() as tmp:
@@ -342,13 +395,13 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 model='gatv2',
             )
 
-            spec = EXPERIMENT_SPECS['custom14_control']
+            spec = EXPERIMENT_SPECS['control14']
             records = run_experiment(args=args, spec=spec, runner=fake_runner)
 
         self.assertEqual([record['status'] for record in records], ['completed', 'completed'])
         self.assertEqual(
             records[0]['run_dir'],
-            str(root / 'gatv2' / 'experiments' / 'custom14_control' / 'seed_1'),
+            str(root / 'gatv2' / 'experiments' / 'control14' / 'seed_1'),
         )
         self.assertEqual(commands[0][commands[0].index('--split-json-in') + 1], str(splits_dir / 'seed_1.json'))
         self.assertEqual(commands[0][commands[0].index('--model') + 1], 'gatv2')
@@ -370,7 +423,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 keep_going=False,
                 model='graphsage',
             )
-            spec = EXPERIMENT_SPECS['custom14_control']
+            spec = EXPERIMENT_SPECS['control14']
 
             def fake_runner(command, check):
                 raise subprocess.CalledProcessError(9, command)
