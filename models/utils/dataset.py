@@ -7,7 +7,7 @@ from torch_geometric.data import Data
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from models.utils.filename_parsing import FilenameParseConfig, legacy_base_name, parse_mesh_name
+from models.utils.filename_parsing import FilenameParseConfig, parse_mesh_name
 
 
 SPLIT_GROUP_KEYS = {
@@ -31,12 +31,6 @@ def load_dataset(path: str | Path) -> list[Data]:
 
 
 def infer_resolution_selector(path_or_name: str | Path) -> str:
-    stem = legacy_base_name(path_or_name).lower()
-    if stem.endswith('_h'):
-        return 'h'
-    if stem.endswith('_l'):
-        return 'l'
-
     parsed_tag = parse_mesh_name(path_or_name).resolution_tag
     if parsed_tag:
         return parsed_tag
@@ -74,9 +68,7 @@ def _group_name(d: Data, group_mode: str, filename_config: FilenameParseConfig |
     path_or_name = getattr(d, 'file_path', '')
     if not path_or_name:
         return str(id(d))
-    if group_mode == 'family':
-        return parse_mesh_name(path_or_name, filename_config).family_id
-    return legacy_base_name(path_or_name)
+    return parse_mesh_name(path_or_name, filename_config).family_id
 
 
 def _group_dataset(
@@ -84,8 +76,8 @@ def _group_dataset(
     group_mode: str,
     filename_config: FilenameParseConfig | None = None,
 ) -> dict[str, list[Data]]:
-    if group_mode not in {'legacy', 'family'}:
-        raise ValueError(f"group_mode must be 'legacy' or 'family', got: {group_mode}")
+    if group_mode != 'family':
+        raise ValueError(f"group_mode must be 'family', got: {group_mode}")
 
     groups: dict[str, list[Data]] = {}
     for d in dataset:
@@ -269,9 +261,6 @@ def _validate_no_split_leakage(
     if unassigned_groups:
         raise ValueError(f"split does not assign filtered dataset group(s): {unassigned_groups}")
 
-    if group_mode != 'family':
-        return
-
     family_splits = {'train': set(), 'val': set(), 'test': set()}
     for split, group_ids in split_keys.items():
         for group_id in group_ids:
@@ -361,21 +350,14 @@ def split_dataset(
     val_ratio: float = 0.15,
     test_ratio: float = 0.10,
     seed: int = 42,
-    group_mode: str = 'legacy',
+    group_mode: str = 'family',
     filename_config: FilenameParseConfig | None = None,
     split_json_in: str | Path | None = None,
     split_json_out: str | Path | None = None,
     dataset_path: str | Path | None = None,
     resolution_tag: str | None = None,
 ) -> tuple[list[Data], list[Data], list[Data], dict]:
-    """Grouped by base mesh to prevent augmentation leakage.
-
-    The default legacy grouping only strips `_augN`. Use group_mode='family'
-    to also group common resolution variants of the same mesh.
-
-    Returns (train, val, test, split_info) where split_info maps
-    split name -> list of base mesh names.
-    """
+    """Grouped by mesh family to prevent augmentation and resolution leakage."""
     groups = _group_dataset(dataset, group_mode, filename_config)
 
     if split_json_in:

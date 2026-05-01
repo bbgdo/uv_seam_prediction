@@ -284,7 +284,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 splits_dir=str(root / 'splits'),
                 seeds=[3],
                 resolution_tag='all',
-                group_mode='legacy',
+                group_mode='family',
                 epochs=1,
                 generate_splits=True,
                 only_generate_splits=True,
@@ -314,7 +314,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 source_dataset=dataset,
                 splits_dir=splits_dir,
                 seeds=[11, 12],
-                group_mode='legacy',
+                group_mode='family',
                 resolution_tag='all',
                 val_ratio=0.2,
                 test_ratio=0.2,
@@ -322,7 +322,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
             payload = json.loads(split_path_for_seed(splits_dir, 11).read_text())
             self.assertIsNone(payload['dataset_path'])
-            args = Namespace(seeds=[11, 12], splits_dir=str(splits_dir), group_mode='legacy', resolution_tag='all')
+            args = Namespace(seeds=[11, 12], splits_dir=str(splits_dir), group_mode='family', resolution_tag='all')
             validate_split_files(args, {'custom': dataset})
 
     def test_split_validation_rejects_dataset_tied_split_files(self):

@@ -190,10 +190,10 @@ Each run produces `config.json`, `metrics.json`, `summary.json`, training plots 
 | `load_dataset(path)` | Load `.pt` file as a list of PyG `Data` objects |
 | `load_dual_dataset(path)` | Load original dataset and convert each graph to dual on-the-fly |
 | `filter_dataset_by_resolution(dataset, resolution_tag)` | Keep only meshes whose filename parses to a resolution tag |
-| `split_dataset(dataset, val_ratio, test_ratio, seed, group_mode='legacy')` | Reproducible train/val/test split |
+| `split_dataset(dataset, val_ratio, test_ratio, seed, group_mode='family')` | Reproducible family-grouped train/val/test split |
 | `compute_pos_weight(dataset)` | Compute `pos_weight` tensor for `BCEWithLogitsLoss` from train set class balance |
 
-`split_dataset` keeps the existing default behavior: `group_mode='legacy'` strips only `_augN` suffixes. Pass `group_mode='family'` to group resolution variants of the same mesh family as well, using the shared filename parser that strips suffixes such as `_10000f` and `_res12`.
+`split_dataset` uses family grouping only. Augmented and resolution-varied meshes from the same source family are always kept in the same split.
 
 ### `metrics.py`
 

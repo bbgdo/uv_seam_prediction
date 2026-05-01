@@ -800,7 +800,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
     parser.add_argument('--resolution-tag', default='all')
-    parser.add_argument('--group-mode', choices=['legacy', 'family'], default='family')
+    parser.add_argument('--group-mode', choices=['family'], default='family')
     parser.add_argument('--epochs', type=int, required=True)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--splits-dir', default=None)

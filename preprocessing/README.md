@@ -175,3 +175,4 @@ python ../tools/audit_dataset.py ../dataset.pt --json-out audit_dataset.json --c
 The audit reports family IDs, resolution tags, augmentation status, topology counts, seam ratios, merge statistics for raw OBJ input, detected symmetry axis, and possible split leakage.
 
 Filename parsing strips `_augN` and configurable resolution suffixes such as `_10000f` and `_res12`. Pass `--resolution-pattern` multiple times for project-specific naming rules.
+Leakage checks use family-level split grouping only.

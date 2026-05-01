@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--seed', type=int, default=None)
-    parser.add_argument('--group-mode', choices=('legacy', 'family'), default='family')
+    parser.add_argument('--group-mode', choices=('family',), default='family')
     parser.add_argument('--split-json-in', default=None)
     parser.add_argument('--split-json-out', default=None)
     parser.add_argument('--resolution-tag', default=None)

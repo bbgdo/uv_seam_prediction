@@ -16,7 +16,6 @@ sys.path.insert(0, str(ROOT))
 from models.utils.filename_parsing import (
     DEFAULT_RESOLUTION_PATTERNS,
     FilenameParseConfig,
-    legacy_base_name,
     parse_mesh_name,
 )
 from preprocessing.compute_features import build_edge_topology, detect_symmetry_axis
@@ -208,7 +207,9 @@ def _split_rows(
 
     grouped: dict[str, list[int]] = defaultdict(list)
     for idx, row in enumerate(rows):
-        key = row['family_id'] if group_mode == 'family' else legacy_base_name(row['stem'])
+        if group_mode != 'family':
+            raise ValueError(f"group_mode must be 'family', got: {group_mode}")
+        key = row['family_id']
         grouped[key].append(idx)
 
     keys = list(grouped.keys())
@@ -366,7 +367,7 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=42, help='Split seed used for leakage simulation')
     parser.add_argument('--val-ratio', type=float, default=0.15, help='Validation split ratio')
     parser.add_argument('--test-ratio', type=float, default=0.10, help='Test split ratio')
-    parser.add_argument('--split-group-mode', choices=['legacy', 'family'], default='legacy')
+    parser.add_argument('--split-group-mode', choices=['family'], default='family')
     parser.add_argument('--augmentation-pattern', default=r'_aug\d+$')
     parser.add_argument(
         '--resolution-pattern',

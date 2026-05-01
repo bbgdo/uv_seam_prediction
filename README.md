@@ -101,6 +101,7 @@ python tools/audit_dataset.py dataset_dual.pt --json-out audit_dual.json --csv-o
 The audit prints a short console summary and writes a JSON report plus a CSV table with one row per mesh. It infers family IDs, resolution tags, augmentation status, edge/seam counts, merge statistics when raw geometry is available, and possible train/val/test leakage using the configured split ratios.
 
 Family parsing strips augmentation suffixes such as `_aug0` and common resolution suffixes such as `_10000f` or `_res12`. Custom suffix rules can be passed with `--augmentation-pattern` and repeated `--resolution-pattern` flags.
+All train/val/test splitting uses family-level grouping so augmented and resolution-varied meshes from the same source stay in one split.
 
 </details>
 

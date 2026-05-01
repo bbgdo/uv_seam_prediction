@@ -296,7 +296,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
     parser.add_argument('--resolution-tag', default='all')
-    parser.add_argument('--group-mode', choices=['legacy', 'family'], default='family')
+    parser.add_argument('--group-mode', choices=['family'], default='family')
     parser.add_argument('--preset', choices=['paper'], default='paper')
     parser.add_argument('--epochs', type=int, required=True)
     parser.add_argument('--keep-going', action='store_true', help='continue after failed seed runs')

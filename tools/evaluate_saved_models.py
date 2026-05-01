@@ -583,7 +583,7 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
     _, val, test, split_info = split_dataset(
         dataset,
         seed=target.seed,
-        group_mode=config.get('group_mode') or split_payload.get('group_mode', 'legacy'),
+        group_mode=config.get('group_mode') or split_payload.get('group_mode', 'family'),
         split_json_in=target.split_path,
         dataset_path=split_dataset_path,
         resolution_tag=resolution_tag,

@@ -16,7 +16,7 @@ def _data(file_path):
 
 
 class DatasetGroupingTests(unittest.TestCase):
-    def test_default_grouping_keeps_resolution_variants_separate(self):
+    def test_default_grouping_uses_family_ids(self):
         dataset = [
             _data('mesh_10000f.obj'),
             _data('mesh_8000f.obj'),
@@ -26,8 +26,7 @@ class DatasetGroupingTests(unittest.TestCase):
         _, _, _, split_info = split_dataset(dataset, val_ratio=0.34, test_ratio=0.34, seed=1)
         keys = set(split_info['train'] + split_info['val'] + split_info['test'])
 
-        self.assertIn('mesh_10000f', keys)
-        self.assertIn('mesh_8000f', keys)
+        self.assertIn('mesh', keys)
         self.assertIn('other', keys)
 
     def test_family_grouping_combines_resolution_variants(self):
@@ -127,7 +126,7 @@ class DatasetGroupingTests(unittest.TestCase):
                 val_ratio=0.2,
                 test_ratio=0.2,
                 seed=123,
-                group_mode='legacy',
+                group_mode='family',
                 split_json_out=split_path,
                 dataset_path=dataset_path,
                 resolution_tag='10000f',
@@ -137,7 +136,7 @@ class DatasetGroupingTests(unittest.TestCase):
                 val_ratio=0.2,
                 test_ratio=0.2,
                 seed=999,
-                group_mode='legacy',
+                group_mode='family',
                 split_json_in=split_path,
                 dataset_path=dataset_path,
                 resolution_tag='10000f',
@@ -146,6 +145,12 @@ class DatasetGroupingTests(unittest.TestCase):
         self.assertEqual(saved_info['train'], loaded_info['train'])
         self.assertEqual(saved_info['val'], loaded_info['val'])
         self.assertEqual(saved_info['test'], loaded_info['test'])
+
+    def test_split_dataset_rejects_legacy_group_mode(self):
+        dataset = [_data('mesh_10000f.obj'), _data('other.obj')]
+
+        with self.assertRaisesRegex(ValueError, "group_mode must be 'family'"):
+            split_dataset(dataset, group_mode='legacy')
 
     def test_saved_split_json_schema_keys_are_stable(self):
         dataset = [_data(f'mesh_{idx}_10000f.obj') for idx in range(5)]

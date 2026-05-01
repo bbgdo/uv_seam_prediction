@@ -400,7 +400,7 @@ def train_baseline(args: argparse.Namespace) -> None:
         seed_value = 42
     seed = int(seed_value) if seed_value is not None else None
     split_seed = seed if seed is not None else 42
-    effective_group_mode = args.group_mode or split_metadata.get('group_mode', 'legacy')
+    effective_group_mode = args.group_mode or split_metadata.get('group_mode', 'family')
 
     if seed is not None:
         set_random_seeds(seed)

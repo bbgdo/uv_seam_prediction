@@ -45,7 +45,7 @@ def _stem_from_path_or_name(path_or_name: str | Path) -> str:
 
 
 def parse_mesh_name(path_or_name: str | Path, config: FilenameParseConfig | None = None) -> MeshNameInfo:
-    """Parse mesh names consistently for audit and optional family grouping."""
+    """Parse mesh names for family-level dataset grouping."""
     config = config or FilenameParseConfig()
     stem = _stem_from_path_or_name(path_or_name)
     family_id = stem
@@ -76,8 +76,3 @@ def parse_mesh_name(path_or_name: str | Path, config: FilenameParseConfig | None
         resolution_tag=resolution_tag,
         is_augmented=is_augmented,
     )
-
-
-def legacy_base_name(path_or_name: str | Path) -> str:
-    stem = _stem_from_path_or_name(path_or_name)
-    return re.sub(DEFAULT_AUGMENTATION_PATTERN, '', stem, flags=re.IGNORECASE)

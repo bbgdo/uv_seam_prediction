@@ -42,7 +42,7 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'val_ratio': 0.15,
         'test_ratio': 0.10,
         'seed': None,
-        'group_mode': None,
+        'group_mode': 'family',
         'split_json_in': None,
         'split_json_out': None,
         'resolution_tag': 'all',
@@ -81,8 +81,8 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed for training and generated splits (default: 42 or split JSON seed)')
-    parser.add_argument('--group-mode', choices=['legacy', 'family'], default=None,
-                        help='grouping mode for generated or loaded splits (default: legacy or split JSON value)')
+    parser.add_argument('--group-mode', choices=['family'], default='family',
+                        help='dataset split grouping protocol (family only)')
     parser.add_argument('--split-json-in', default=None, help='load train/val/test group ids from this JSON file')
     parser.add_argument('--split-json-out', default=None, help='save train/val/test group ids to this JSON file')
     parser.add_argument('--in-dim', type=int, default=None, help='dual node feature dim (default: 18)')
