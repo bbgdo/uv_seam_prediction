@@ -99,8 +99,6 @@ This architecture serves as the third comparison point for the diploma: all thre
 
 All training scripts share the same structure: `BCEWithLogitsLoss` with `pos_weight`, AdamW optimizer, `ReduceLROnPlateau` scheduler, early stopping on val F1, and integrated experiment logging.
 
-An optional **connectivity penalty** (`--lambda-conn`) penalizes isolated seam predictions — dual-graph nodes (or MeshCNN edges) whose predicted seam probability is high but whose neighbors have low probability.
-
 ### DualGraphSAGE — `dual_graphsage/train.py`
 
 ```bash
@@ -171,7 +169,6 @@ python models/meshcnn/train.py \
 | `--hidden` | 128 | 64 | 64 | hidden dim |
 | `--dropout` | 0.3 | 0.3 | 0.3 | dropout rate |
 | `--patience` | 15 | 15 | 15 | early-stop patience |
-| `--lambda-conn` | 0.0 | 0.0 | 0.0 | connectivity penalty weight |
 | `--heads` | — | 8 | — | attention heads (GATv2 only) |
 | `--num-layers` | — | — | 4 | MeshConv layers (MeshCNN only) |
 | `--in-channels` | — | — | auto | feature dim (auto-detected) |
@@ -208,8 +205,7 @@ Each run produces `config.json`, `metrics.json`, `summary.json`, training plots 
 
 | Function | Description |
 |---|---|
-| `connectivity_penalty(logits, edge_index)` | Penalizes isolated seam predictions: high-prob nodes with low-prob neighbors |
-| `seam_loss_with_connectivity(logits, labels, edge_index, pos_weight, lambda_conn)` | `BCEWithLogitsLoss` + weighted connectivity penalty |
+| `focal_bce_with_logits(logits, labels, pos_weight, gamma)` | Focal loss — down-weights easy examples, better for extreme class imbalance |
 
 ### `postprocess.py`
 

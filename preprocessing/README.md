@@ -121,7 +121,7 @@ Prints per-feature statistics (min, max, mean, std) and checks for NaN/Inf.
 | 9 | `ao_diff` | [0, 1] | AO difference at endpoints |
 | 10 | `symmetry_dist` | [0, 1] | Edge midpoint distance to symmetry plane |
 
-AO uses raycasting (pyembree > ray_triangle) when available, otherwise falls back to a normal-based approximation. Symmetry detection uses `scipy.spatial.cKDTree` for mirror-vertex matching.
+AO requires raycasting (pyembree preferred, ray_triangle as secondary). Raises `RuntimeError` if neither is available. Symmetry detection uses `scipy.spatial.cKDTree` for mirror-vertex matching.
 
 </details>
 

@@ -17,7 +17,7 @@ from models.utils.dataset import (
     split_dataset,
 )
 from models.utils.experiment_log import ExperimentLogger
-from models.utils.losses import focal_bce_with_logits, seam_loss_with_connectivity
+from models.utils.losses import focal_bce_with_logits
 from models.utils.metrics import RECALL_TPR_LABEL, edge_f1, threshold_sweep
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection
 
@@ -227,7 +227,6 @@ def build_runtime_config(args: argparse.Namespace) -> BaselineConfig:
         patience=args.patience,
         in_dim=args.in_dim,
         dropout=args.dropout,
-        lambda_conn=args.lambda_conn,
         heads=args.heads,
         aggr=args.aggr,
         skip_connections=args.skip_connections,
@@ -253,7 +252,6 @@ def _run_epoch(
     device: torch.device,
     pos_weight: torch.Tensor,
     optimizer: torch.optim.Optimizer | None = None,
-    lambda_conn: float = 0.0,
     focal_gamma: float = 2.0,
 ) -> tuple[float, dict]:
     training = optimizer is not None
@@ -270,11 +268,7 @@ def _run_epoch(
             y = data.y.to(device)
 
             logits = model(x, edge_index)
-
-            if lambda_conn > 0.0:
-                loss = seam_loss_with_connectivity(logits, y, edge_index, pos_weight, lambda_conn, focal_gamma)
-            else:
-                loss = focal_bce_with_logits(logits, y, pos_weight, focal_gamma)
+            loss = focal_bce_with_logits(logits, y, pos_weight, focal_gamma)
 
             if training:
                 optimizer.zero_grad()
@@ -345,7 +339,6 @@ def _logger_config(
         'num_layers': config.num_layers,
         'dropout': config.dropout,
         'lr': config.lr,
-        'lambda_conn': config.lambda_conn,
         'focal_gamma': config.focal_gamma,
         'patience': config.patience,
         'dataset': args.dataset,
@@ -486,7 +479,7 @@ def train_baseline(args: argparse.Namespace) -> None:
     for epoch in range(1, config.epochs + 1):
         t0 = time.time()
         train_loss, train_m = _run_epoch(
-            model, train, device, pos_weight, optimizer, config.lambda_conn, config.focal_gamma
+            model, train, device, pos_weight, optimizer, config.focal_gamma
         )
         val_loss, val_m = _run_epoch(model, val, device, pos_weight, focal_gamma=config.focal_gamma)
         epoch_time = time.time() - t0

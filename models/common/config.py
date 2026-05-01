@@ -20,7 +20,6 @@ class BaselineConfig:
     threshold_default: float = 0.5
     in_dim: int = 18
     dropout: float = 0.3
-    lambda_conn: float = 0.0
     weight_decay: float = 1e-4
     scheduler_factor: float = 0.5
     scheduler_patience: int = 5

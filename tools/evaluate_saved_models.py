@@ -537,7 +537,6 @@ def _runtime_config_from_saved(config: dict[str, Any]):
         pos_weight=config.get('pos_weight'),
         focal_gamma=config.get('focal_gamma'),
         patience=config.get('patience'),
-        lambda_conn=config.get('lambda_conn'),
         heads=config.get('heads'),
         aggr=config.get('aggr'),
         skip_connections=config.get('skip_connections'),

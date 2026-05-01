@@ -232,7 +232,7 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
     """Ambient occlusion per vertex via raycasting.
 
     AO = fraction of hemisphere rays that hit other geometry.
-    Falls back to a normal-based approximation if raycasting fails.
+    Raises RuntimeError if no working ray intersector is available.
     """
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
@@ -263,68 +263,40 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
         except Exception:
             continue
 
-    if intersector is not None:
-        ao_values = np.zeros(n_verts, dtype=np.float32)
-        batch_size = 256
-        for batch_start in range(0, n_verts, batch_size):
-            batch_end = min(batch_start + batch_size, n_verts)
-            batch_origins = []
-            batch_directions = []
+    if intersector is None:
+        raise RuntimeError(
+            'AO raycasting requires pyembree or trimesh ray_triangle; '
+            'install pyembree or ensure trimesh ray_triangle is functional.'
+        )
 
-            for v_idx in range(batch_start, batch_end):
-                normal = normals[v_idx]
-                origin = vertices[v_idx] + normal * epsilon
-                rot = _rotation_matrix_to_align(z_axis, normal)
-                directions = (rot @ hemisphere_samples.T).T
+    ao_values = np.zeros(n_verts, dtype=np.float32)
+    batch_size = 256
+    for batch_start in range(0, n_verts, batch_size):
+        batch_end = min(batch_start + batch_size, n_verts)
+        batch_origins = []
+        batch_directions = []
 
-                for d in directions:
-                    batch_origins.append(origin)
-                    batch_directions.append(d)
+        for v_idx in range(batch_start, batch_end):
+            normal = normals[v_idx]
+            origin = vertices[v_idx] + normal * epsilon
+            rot = _rotation_matrix_to_align(z_axis, normal)
+            directions = (rot @ hemisphere_samples.T).T
 
-            batch_origins = np.array(batch_origins)
-            batch_directions = np.array(batch_directions)
+            for d in directions:
+                batch_origins.append(origin)
+                batch_directions.append(d)
 
+        batch_origins = np.array(batch_origins)
+        batch_directions = np.array(batch_directions)
+
+        try:
             hits = intersector.intersects_any(batch_origins, batch_directions)
-            hits = hits.reshape(batch_end - batch_start, n_rays)
-            ao_values[batch_start:batch_end] = hits.mean(axis=1)
+        except Exception as exc:
+            raise RuntimeError(f'AO raycasting failed at batch {batch_start}: {exc}') from exc
+        hits = hits.reshape(batch_end - batch_start, n_rays)
+        ao_values[batch_start:batch_end] = hits.mean(axis=1)
 
-        return ao_values
-
-    # fallback: normal-based AO approximation
-    print('  [ao] raycasting unavailable, using normal-based approximation')
-    return _ao_normal_approximation(mesh)
-
-
-def _ao_normal_approximation(mesh: trimesh.Trimesh) -> np.ndarray:
-    """Crude AO proxy: for each vertex, check how many nearby vertices
-    have normals pointing toward it (suggesting occlusion).
-
-    Uses k-NN (k=16) instead of radius search for fully vectorized computation.
-    """
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
-    n_verts = len(vertices)
-
-    if cKDTree is None:
-        return np.full(n_verts, 0.5, dtype=np.float32)
-
-    k = min(16, n_verts - 1)
-    if k < 1:
-        return np.full(n_verts, 0.5, dtype=np.float32)
-
-    tree = cKDTree(vertices)
-    # single vectorized batch query — avoids O(N) Python loop
-    _, indices = tree.query(vertices, k=k + 1)  # [N, k+1], col 0 is self
-    nb_idx = indices[:, 1:]  # [N, k]
-
-    # directions from each neighbor to each vertex: [N, k, 3]
-    dirs = vertices[:, None, :] - vertices[nb_idx]
-    dirs = dirs / (np.linalg.norm(dirs, axis=2, keepdims=True) + 1e-12)
-
-    # alignment of neighbor normals with direction toward vertex
-    n_nbr = normals[nb_idx]  # [N, k, 3]
-    alignment = np.einsum('nki,nki->nk', n_nbr, dirs)  # [N, k]
-    return np.clip(np.mean(np.maximum(alignment, 0), axis=1), 0, 1).astype(np.float32)
+    return ao_values
 
 
 

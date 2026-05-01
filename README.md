@@ -178,14 +178,6 @@ Generates `comparison_f1.png` (overlaid F1 curves) and `comparison_table.png` (t
 
 ## Training Options
 
-### Connectivity loss (`--lambda-conn`)
-
-All three training scripts accept `--lambda-conn` (default `0.0`). When set, a differentiable penalty is added to the BCE loss that discourages isolated seam predictions on the dual graph — dual nodes with high seam probability but low-probability neighbors are penalized.
-
-```bash
-python models/dual_graphsage/train.py --dataset dataset_dual.pt --lambda-conn 0.1
-```
-
 ### Post-processing
 
 `models/utils/postprocess.py` applies inference-time cleanup to raw model probabilities:
@@ -204,4 +196,4 @@ python models/utils/postprocess.py \
 - Python 3.10+
 - `torch`, `torch-geometric`, `trimesh`, `scipy`, `matplotlib`
 - Blender 4.5 LTS (might work with Blender 4.0+) (for preprocessing scripts and the add-on)
-- Optional: `pyembree` (faster AO raycasting; falls back to normal-based approximation without it)
+- Optional: `pyembree` (faster AO raycasting; trimesh ray_triangle is used as fallback)

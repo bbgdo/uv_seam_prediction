@@ -25,7 +25,6 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'hidden': config.hidden_size,
         'num_layers': config.num_layers,
         'dropout': config.dropout,
-        'lambda_conn': config.lambda_conn,
         'patience': config.patience,
         'in_dim': config.in_dim,
         'pos_weight': config.pos_weight,
@@ -77,8 +76,6 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
     parser.add_argument('--heads', type=int, default=None)
     parser.add_argument('--num-layers', type=int, default=None)
     parser.add_argument('--dropout', type=float, default=None)
-    parser.add_argument('--lambda-conn', type=float, default=None,
-                        help='connectivity penalty weight (0 = disabled, try 0.1)')
     parser.add_argument('--patience', type=int, default=None, help='early-stop patience')
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
