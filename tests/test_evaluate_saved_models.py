@@ -108,7 +108,7 @@ def _write_reference_reeval(
     run_dir = reference_dir / f'seed_{seed}'
     run_dir.mkdir(parents=True, exist_ok=True)
     payload = _reeval(
-        'custom14_control',
+        'control14',
         seed,
         exact_f1=f1,
         half_f1=0.1,
@@ -254,7 +254,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
     def test_discover_saved_run_selects_dataset_role_from_experiment(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            run_dir = root / 'experiments' / 'custom14_control' / 'seed_7'
+            run_dir = root / 'experiments' / 'control14' / 'seed_7'
             run_dir.mkdir(parents=True)
             (run_dir / 'best_model.pth').write_bytes(b'checkpoint')
             (run_dir / 'config.json').write_text(json.dumps({
@@ -282,27 +282,27 @@ class EvaluateSavedModelsTests(unittest.TestCase):
                 splits_dir=str(splits_dir),
                 paper_dataset='paper_override.pt',
                 custom_dataset='custom_override.pt',
-                experiments=['custom14_control'],
+                experiments=['control14'],
                 seeds=[7],
             ))
 
         self.assertEqual(len(targets), 1)
         self.assertEqual(targets[0].dataset_role, 'custom')
         self.assertEqual(targets[0].dataset_path, Path('custom_override.pt'))
-        self.assertEqual(targets[0].experiment, 'custom14_control')
+        self.assertEqual(targets[0].experiment, 'control14')
 
     def test_aggregate_json_structure_from_mocked_reevaluations(self):
         payload = aggregate_reevaluations([
-            _reeval('custom14_control', 1, exact_f1=0.50, half_f1=0.40, delta_f1=0.02),
-            _reeval('custom14_control', 2, exact_f1=0.70, half_f1=0.60, delta_f1=0.03),
+            _reeval('control14', 1, exact_f1=0.50, half_f1=0.40, delta_f1=0.02),
+            _reeval('control14', 2, exact_f1=0.70, half_f1=0.60, delta_f1=0.03),
             _reeval('ao_only', 1, exact_f1=0.55, half_f1=0.45, delta_f1=0.04),
             _reeval('ao_only', 2, exact_f1=0.72, half_f1=0.62, delta_f1=0.05),
         ])
 
         self.assertEqual(payload['run_count'], 4)
-        self.assertIn('custom14_control', payload['experiments'])
+        self.assertIn('control14', payload['experiments'])
         self.assertAlmostEqual(
-            payload['experiments']['custom14_control']['test_exact_threshold']['f1']['mean'],
+            payload['experiments']['control14']['test_exact_threshold']['f1']['mean'],
             0.60,
         )
         self.assertAlmostEqual(
@@ -310,7 +310,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             0.045,
         )
         self.assertEqual(
-            payload['paired_delta_vs_custom14_control']['ao_only']['paired_seed_count'],
+            payload['paired_delta_vs_control14']['ao_only']['paired_seed_count'],
             2,
         )
         self.assertNotIn('external_reference_control', payload)
@@ -320,12 +320,12 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             root = Path(tmp)
             split_path = root / 'splits' / 'seed_1.json'
             _write_split(split_path, seed=1)
-            reference_dir = root / 'experiments' / 'custom14_control'
+            reference_dir = root / 'experiments' / 'control14'
             _write_reference_reeval(reference_dir, seed=1, split_path=split_path, f1=0.42)
 
             reference = load_reference_control_reevaluations(reference_dir)
 
-        self.assertEqual(reference.experiment_name, 'custom14_control')
+        self.assertEqual(reference.experiment_name, 'control14')
         self.assertEqual(sorted(reference.by_seed), [1])
         self.assertAlmostEqual(
             reference.by_seed[1]['payload']['metrics']['test']['exact_val_best']['f1'],
@@ -338,7 +338,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             root = Path(tmp)
             split_path = root / 'splits' / 'seed_1.json'
             _write_split(split_path, seed=1)
-            reference_dir = root / 'experiments' / 'custom14_control'
+            reference_dir = root / 'experiments' / 'control14'
             _write_reference_reeval(
                 reference_dir,
                 seed=1,
@@ -379,7 +379,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             _write_split(split_1, seed=1)
             _write_split(split_2_control, seed=2, train=['control_train'])
             _write_split(split_2_target, seed=2, train=['target_train'])
-            reference_dir = root / 'experiments' / 'custom14_control'
+            reference_dir = root / 'experiments' / 'control14'
             _write_reference_reeval(reference_dir, seed=1, split_path=split_1, f1=0.50)
             _write_reference_reeval(reference_dir, seed=2, split_path=split_2_control, f1=0.60)
             reference = load_reference_control_reevaluations(reference_dir)
@@ -404,7 +404,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             target_split = root / 'splits' / 'target_seed_1.json'
             _write_split(control_split, seed=1, train=['control_train'])
             _write_split(target_split, seed=1, train=['target_train'])
-            reference_dir = root / 'experiments' / 'custom14_control'
+            reference_dir = root / 'experiments' / 'control14'
             _write_reference_reeval(reference_dir, seed=1, split_path=control_split, f1=0.50)
             reference = load_reference_control_reevaluations(reference_dir)
 
@@ -417,7 +417,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
     def test_external_control_deltas_use_per_seed_metrics_not_control_aggregate(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            reference_dir = root / 'experiments' / 'custom14_control'
+            reference_dir = root / 'experiments' / 'control14'
             target_rows = []
             for seed, control_f1, target_f1 in [
                 (1, 0.10, 0.50),

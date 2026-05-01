@@ -138,8 +138,6 @@ _EXPECTED_ORDER = [
 class FeatureAblationRunnerTests(unittest.TestCase):
     def test_experiment_suite_structure(self):
         self.assertEqual(len(EXPERIMENT_SPECS), 32)
-        self.assertNotIn('paper14_locked', EXPERIMENT_SPECS)
-        self.assertNotIn('custom14_control', EXPERIMENT_SPECS)
         self.assertIn('control14', EXPERIMENT_SPECS)
         self.assertNotIn('full_custom', EXPERIMENT_SPECS)
         self.assertNotIn('full_custom_sdf', EXPERIMENT_SPECS)

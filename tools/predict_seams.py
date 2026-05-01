@@ -36,8 +36,13 @@ from preprocessing.obj_parser import parse_obj  # noqa: E402
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology  # noqa: E402
 
 
-MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn')
-FEATURE_BUNDLES = ('auto', 'paper14_locked', 'ao_density', 'custom')
+MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'sparsemeshcnn')
+FEATURE_BUNDLES = ('auto', 'paper14', 'ao_density', 'custom')
+_MODEL_TYPE_ALIASES = {
+    'meshcnn_full': 'sparsemeshcnn',
+    'meshcnn': 'sparsemeshcnn',
+    'sparse_meshcnn': 'sparsemeshcnn',
+}
 
 
 class PredictionError(RuntimeError):
@@ -50,11 +55,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Predict UV seam edges for a raw OBJ mesh.')
     parser.add_argument('--mesh-path', required=True)
     parser.add_argument('--model-weights', required=True)
-    parser.add_argument('--feature-bundle', default='auto', choices=FEATURE_BUNDLES)
+    parser.add_argument(
+        '--feature-bundle',
+        default='auto',
+        help='feature bundle: auto, paper14, ao_density, or custom',
+    )
     parser.add_argument('--output-json', required=True)
     parser.add_argument('--threshold', type=float, default=None)
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
-    parser.add_argument('--model-type', choices=MODEL_TYPES, default='auto')
+    parser.add_argument(
+        '--model-type',
+        default='auto',
+        help='model family: auto, graphsage, gatv2, or sparsemeshcnn',
+    )
     parser.add_argument('--config-json', default=None)
     parser.add_argument('--summary-json', default=None)
     parser.add_argument('--enable-ao', action='store_true')
@@ -115,7 +128,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction, default=True,
         help='Whether to use mesh-boundary vertices as structural anchors.'
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.feature_bundle = _normalize_feature_bundle_arg(args.feature_bundle)
+    args.model_type = _normalize_cli_model_type(args.model_type)
+    return args
+
+
+def _normalize_feature_bundle_arg(value: str) -> str:
+    normalized = str(value).strip().lower().replace('-', '_')
+    if normalized not in FEATURE_BUNDLES:
+        raise SystemExit(
+            f"error: argument --feature-bundle: invalid choice: {value!r} "
+            f"(choose from {', '.join(FEATURE_BUNDLES)})"
+        )
+    return normalized
+
+
+def _normalize_cli_model_type(value: str) -> str:
+    normalized = str(value).strip().lower().replace('-', '_')
+    normalized = _MODEL_TYPE_ALIASES.get(normalized, normalized)
+    if normalized not in MODEL_TYPES:
+        raise SystemExit(
+            f"error: argument --model-type: invalid choice: {value!r} "
+            f"(choose from {', '.join(MODEL_TYPES)})"
+        )
+    return normalized
 
 
 def load_json(path: Path, label: str) -> dict[str, Any]:
@@ -190,7 +227,8 @@ def postprocess_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Path) -> str:
     if requested != 'auto':
-        return _normalize_model_name(requested) or requested
+        resolved = _normalize_model_name(requested)
+        return resolved or requested
 
     for key in ('model', 'model_name'):
         resolved = _normalize_model_name(config.get(key))
@@ -250,7 +288,7 @@ def resolve_feature_bundle(
             'InvalidFeatureBundle',
         )
 
-    if args.feature_bundle == 'paper14_locked':
+    if args.feature_bundle == 'paper14':
         return resolve_feature_selection('paper14'), 'random', args.feature_bundle
     if args.feature_bundle == 'ao_density':
         return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', args.feature_bundle

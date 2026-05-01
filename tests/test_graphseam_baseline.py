@@ -186,7 +186,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
             apply_runtime_feature_selection([data], requested)
 
-    def test_runtime_feature_selection_accepts_paper14_locked_shape(self):
+    def test_runtime_feature_selection_accepts_paper14_shape(self):
         requested = resolve_feature_selection('paper14')
         data = Data(x=torch.zeros(2, 14))
         data.feature_preset = 'paper14'

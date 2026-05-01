@@ -33,7 +33,7 @@ f 1 3 4
 """
 
 
-def _args(feature_bundle='paper14_locked', **overrides):
+def _args(feature_bundle='paper14', **overrides):
     values = {
         'feature_bundle': feature_bundle,
         'enable_ao': False,
@@ -85,7 +85,7 @@ class PredictSeamsTests(unittest.TestCase):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
 
     def test_feature_bundle_resolution(self):
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(selection.feature_count, 14)
         self.assertEqual(endpoint_order, 'random')
@@ -111,7 +111,7 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
 
         payload = predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
@@ -120,7 +120,7 @@ class PredictSeamsTests(unittest.TestCase):
             config_path=Path('config.json'),
             summary_path=Path('summary.json'),
             model_type='gatv2',
-            feature_bundle='paper14_locked',
+            feature_bundle='paper14',
             selection=selection,
             threshold=0.75,
             device=torch.device('cpu'),
@@ -142,7 +142,7 @@ class PredictSeamsTests(unittest.TestCase):
     def test_meshcnn_inference_sample_is_unlabeled(self):
         topology = _square_topology()
         feature_mesh = predict_seams.build_feature_mesh_from_canonical_topology(topology)
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         edge_features = np.zeros((len(topology.canonical_edges), selection.feature_count), dtype=np.float32)
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
 
@@ -329,7 +329,7 @@ class PredictSeamsTests(unittest.TestCase):
             '--threshold', '0.5',
             '--device', 'cpu',
             '--model-type', 'gatv2',
-            '--feature-bundle', 'paper14_locked',
+            '--feature-bundle', 'paper14',
         ])
         args.postprocess = postprocess
         return args
@@ -339,7 +339,7 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14_locked'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
         return predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
             output_json=Path('out.json'),
@@ -347,7 +347,7 @@ class PredictSeamsTests(unittest.TestCase):
             config_path=Path('config.json'),
             summary_path=Path('summary.json'),
             model_type='gatv2',
-            feature_bundle='paper14_locked',
+            feature_bundle='paper14',
             selection=selection,
             threshold=0.75,
             device=torch.device('cpu'),

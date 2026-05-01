@@ -28,6 +28,11 @@ _C_OURS = '#2196F3'
 _C_GT = '#4CAF50'
 _C_SMART = '#FF5722'
 _DPI = 150
+_DEPRECATION_NOTICE = (
+    'warning: evaluation/run_evaluation.py is kept as an internal archival UV-study utility; '
+    'use tools/predict_seams.py for maintained inference and tools/evaluate_dir_topology.py '
+    'for maintained bulk topology evaluation'
+)
 
 
 def _load_model(weights_path: str, model_type: str, device: torch.device):
@@ -313,7 +318,9 @@ def _plot_per_mesh_scatter(per_mesh: list[dict], output_path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='UV-level evaluation pipeline.')
+    parser = argparse.ArgumentParser(
+        description='Deprecated internal UV-level evaluation pipeline for archived unwrap studies.'
+    )
     parser.add_argument('--test-meshes', required=True,
                         help='Directory of .obj test meshes')
     parser.add_argument('--dual-dataset', default='dataset_dual.pt',
@@ -345,7 +352,8 @@ def main() -> None:
         print(f'[eval] no .obj files found in {mesh_dir}')
         sys.exit(1)
 
-    print(f'[eval] evaluating {len(mesh_paths)} mesh(es) → {out_dir}')
+    print(_DEPRECATION_NOTICE)
+    print(f'[eval] evaluating {len(mesh_paths)} mesh(es) -> {out_dir}')
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = _load_model(args.weights, args.model_type, device)

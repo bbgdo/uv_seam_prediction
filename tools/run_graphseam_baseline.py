@@ -291,7 +291,9 @@ def run_batch(args: argparse.Namespace, runner=subprocess.run) -> list[dict[str,
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Run multi-seed GraphSeam paper-baseline experiments.')
+    parser = argparse.ArgumentParser(
+        description='Run multi-seed GraphSeam paper-protocol batches via tools/run_baseline.py.'
+    )
     parser.add_argument('--dataset', required=True)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
@@ -299,7 +301,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--group-mode', choices=['family'], default='family')
     parser.add_argument('--preset', choices=['paper'], default='paper')
     parser.add_argument('--epochs', type=int, required=True)
-    parser.add_argument('--keep-going', action='store_true', help='continue after failed seed runs')
+    parser.add_argument(
+        '--keep-going',
+        action='store_true',
+        help='continue after failed seed runs',
+    )
     return parser.parse_args()
 
 
