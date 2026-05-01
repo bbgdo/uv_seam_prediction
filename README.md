@@ -12,6 +12,8 @@ Maintained entrypoints:
 - `tools/predict_seams.py` for inference
 - `tools/evaluate_dir_topology.py` for topology and post-processing evaluation
 - `tools/evaluate_saved_models.py` for reevaluating saved checkpoints
+- `tools/audit_dataset.py` for dataset audit and family split leakage inspection
+- `tools/validate_seam_truth.py` for exact OBJ seam truth validation
 
 ## Reproducibility Workflow
 

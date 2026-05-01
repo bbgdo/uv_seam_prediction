@@ -461,7 +461,7 @@ def main(argv: list[str] | None = None) -> None:
         '--feature-preset',
         choices=FEATURE_PRESETS,
         default='paper14',
-        help='Deprecated alias for --feature-group; use --feature-group instead',
+        help=argparse.SUPPRESS,
     )
     parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default=None)
     parser.add_argument('--enable-ao', action='store_true', help='Enable AO endpoint features for custom group')
@@ -545,9 +545,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  total directed edges: {total_edges}")
         print(f"  total seam edges    : {int(total_seams)}  ({100*total_seams/max(total_edges,1):.2f}%)")
         print(f"  aggregate pos_weight: {agg_pos_weight:.4f}")
-        print(f"\n  use in training:")
-        print(f"      pos_weight = torch.tensor([{agg_pos_weight:.4f}])")
-        print(f"      criterion  = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)")
+        print(f"\n  train with: python tools/run_baseline.py --dataset <output.pt> --pos-weight {agg_pos_weight:.4f}")
         print(f"{'#'*60}\n")
 
     if args.save and dataset:

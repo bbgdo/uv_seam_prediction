@@ -70,6 +70,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--enable-dihedral', action='store_true')
     parser.add_argument('--enable-symmetry', action='store_true')
     parser.add_argument('--enable-density', action='store_true')
+    parser.add_argument('--enable-thickness-sdf', action='store_true')
     parser.add_argument('--endpoint-seed', type=int, default=42)
     parser.add_argument('--write-all-edges', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
@@ -84,7 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         '--postprocess-r-bridge', type=int, default=6,
-        help='Deprecated alias for --postprocess-max-bridge-edges.'
+        help=argparse.SUPPRESS
     )
     parser.add_argument(
         '--postprocess-max-bridge-edges', type=int, default=None,
@@ -266,6 +267,7 @@ def resolve_feature_bundle(
         'enable_dihedral': bool(args.enable_dihedral),
         'enable_symmetry': bool(args.enable_symmetry),
         'enable_density': bool(args.enable_density),
+        'enable_thickness_sdf': bool(args.enable_thickness_sdf),
     }
     any_toggle = any(toggles.values())
 
@@ -301,6 +303,7 @@ def resolve_feature_bundle(
             enable_dihedral=args.enable_dihedral,
             enable_symmetry=args.enable_symmetry,
             enable_density=args.enable_density,
+            enable_thickness_sdf=args.enable_thickness_sdf,
         ),
         'fixed',
         args.feature_bundle,
@@ -710,6 +713,13 @@ def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch
     return extract_state_dict(load_weights_payload(weights_path, device))
 
 
+def _public_model_type(model_type: str) -> str:
+    """Map internal dispatch type to the public model name for output metadata."""
+    if model_type == 'meshcnn_full':
+        return 'sparsemeshcnn'
+    return model_type
+
+
 def build_prediction_model(model_type: str, model_kwargs: dict[str, Any]) -> torch.nn.Module:
     if model_type == 'meshcnn_full':
         return MeshCNNSegmenter(**model_kwargs)
@@ -849,7 +859,8 @@ def build_output_payload(
         'mesh_path': str(mesh_path.resolve()),
         'output_json': str(output_json.resolve()),
         'model': {
-            'model_type': model_type,
+            'model_type': _public_model_type(model_type),
+            **({'internal_model_type': model_type} if model_type != _public_model_type(model_type) else {}),
             'weights_path': str(weights_path.resolve()),
             'config_path': str(config_path.resolve()),
             'summary_path': str(summary_path.resolve()),

@@ -319,7 +319,7 @@ def main() -> None:
     parser.add_argument('--dual-dataset', default='dataset_dual.pt',
                         help='Path to dual graph dataset (for reference, not loaded here)')
     parser.add_argument('--weights', required=True, help='Path to best_model.pth')
-    parser.add_argument('--model-type', required=True, choices=['graphsage', 'gatv2', 'meshcnn'])
+    parser.add_argument('--model-type', required=True, choices=['graphsage', 'gatv2', 'sparsemeshcnn'])
     parser.add_argument('--blender-exe', default='blender',
                         help='Blender executable path (default: blender)')
     parser.add_argument('--output-dir', required=True,
@@ -329,6 +329,8 @@ def main() -> None:
     parser.add_argument('--max-meshes', type=int, default=None,
                         help='Limit number of meshes evaluated (for testing)')
     args = parser.parse_args()
+    if args.model_type == 'sparsemeshcnn':
+        args.model_type = 'meshcnn'
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
