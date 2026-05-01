@@ -27,12 +27,6 @@ _C_OURS = '#2196F3'
 _C_GT = '#4CAF50'
 _C_SMART = '#FF5722'
 _DPI = 150
-_DEPRECATION_NOTICE = (
-    'warning: evaluation/run_evaluation.py is kept as an internal archival UV-study utility; '
-    'use tools/predict_seams.py for maintained inference and tools/evaluate_dir_topology.py '
-    'for maintained bulk topology evaluation'
-)
-
 
 def _load_model(weights_path: str, model_type: str, device: torch.device):
     if model_type == 'graphsage':
@@ -42,8 +36,8 @@ def _load_model(weights_path: str, model_type: str, device: torch.device):
         from models.gatv2.model import DualGATv2
         model = DualGATv2().to(device)
     elif model_type == 'meshcnn':
-        from models.meshcnn.model import MeshCNNClassifier
-        model = MeshCNNClassifier().to(device)
+        from models.meshcnn_full.model import SparseMeshUNetSegmenter
+        model = SparseMeshUNetSegmenter().to(device)
     else:
         raise ValueError(f'Unknown model type: {model_type!r}')
 
@@ -351,7 +345,6 @@ def main() -> None:
         print(f'[eval] no .obj files found in {mesh_dir}')
         sys.exit(1)
 
-    print(_DEPRECATION_NOTICE)
     print(f'[eval] evaluating {len(mesh_paths)} mesh(es) -> {out_dir}')
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
