@@ -10,8 +10,8 @@ Maintained dataset builders:
 Use `preprocessing/obj_to_dataset_graph.py` for `paper14` and `custom` PyG datasets.
 
 ```bash
-.venv/Scripts/python.exe preprocessing/obj_to_dataset_graph.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
-.venv/Scripts/python.exe preprocessing/obj_to_dataset_graph.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
+python preprocessing/obj_to_dataset_graph.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
+python preprocessing/obj_to_dataset_graph.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
 ```
 
 ## SparseMeshCNN Builder
@@ -19,7 +19,7 @@ Use `preprocessing/obj_to_dataset_graph.py` for `paper14` and `custom` PyG datas
 Use `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN. Build one custom superset dataset with all optional custom features enabled:
 
 ```bash
-.venv/Scripts/python.exe preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
+python preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
 ```
 
 `tools/run_feature_ablations.py --model sparsemeshcnn` slices this superset at runtime. No per-ablation SparseMeshCNN datasets are required.
@@ -41,6 +41,6 @@ Serialized datasets and manifests should expose the same maintained metadata sur
 Use `tools/audit_dataset.py` to inspect raw OBJ directories or serialized datasets and verify family-only split compatibility:
 
 ```bash
-.venv/Scripts/python.exe tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-out outputs/audit_raw.csv
-.venv/Scripts/python.exe tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
+python tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-out outputs/audit_raw.csv
+python tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
 ```

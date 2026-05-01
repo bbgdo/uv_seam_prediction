@@ -11,8 +11,8 @@ Maintained training entrypoints:
 Train GraphSAGE or GATv2 through `tools/run_baseline.py`.
 
 ```bash
-.venv/Scripts/python.exe tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --preset paper --run-dir runs/models/graphsage_paper14
-.venv/Scripts/python.exe tools/run_baseline.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
+python tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --preset paper --run-dir runs/models/graphsage_paper14
+python tools/run_baseline.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
 ```
 
 `paper14` is the paper feature baseline.
@@ -22,8 +22,8 @@ Train GraphSAGE or GATv2 through `tools/run_baseline.py`.
 Train SparseMeshCNN directly through `models/meshcnn_full/train.py` or run ablations through `tools/run_feature_ablations.py`.
 
 ```bash
-.venv/Scripts/python.exe models/meshcnn_full/train.py --dataset datasets/sparsemeshcnn_custom_superset.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/sparsemeshcnn_custom
-.venv/Scripts/python.exe tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
+python models/meshcnn_full/train.py --dataset datasets/sparsemeshcnn_custom_superset.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/sparsemeshcnn_custom
+python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
 ```
 
 The public model name in the ablation runner is `sparsemeshcnn`. `models/meshcnn_full/` is the internal path.
