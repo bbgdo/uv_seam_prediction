@@ -118,7 +118,6 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
             keep_temp_files = prefs.keep_temp_files
             validation.validate_configured_paths(prefs, settings)
             obj = validation.require_active_mesh_object(context)
-            validation.require_single_user_or_copy_allowed(obj, settings.make_single_user_mesh)
             validation.require_no_enabled_modifiers(obj)
             self._prefs = _resolved_preferences(prefs)
             self._run_settings = _resolved_run_settings(settings)
@@ -128,9 +127,6 @@ class UVSEAM_OT_predict_seams(bpy.types.Operator):
 
             if obj.mode != 'OBJECT':
                 _ensure_object_mode()
-
-            if obj.data.users > 1 and settings.make_single_user_mesh:
-                obj.data = obj.data.copy()
 
             self._topology_counts = _mesh_topology_counts(obj.data)
 
@@ -295,11 +291,6 @@ class UVSEAM_OT_clear_seams(bpy.types.Operator):
             original_mode = obj.mode
             if obj.mode != 'OBJECT':
                 _ensure_object_mode()
-
-            if obj.data.users > 1:
-                if not settings.make_single_user_mesh:
-                    raise ValueError('Mesh data is shared. Enable Make Mesh Single User before clearing seams.')
-                obj.data = obj.data.copy()
 
             for edge in obj.data.edges:
                 edge.use_seam = False

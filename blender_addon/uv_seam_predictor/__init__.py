@@ -1,6 +1,6 @@
 bl_info = {
-    'name': 'Auto Seams',
-    'author': 'Auto Seams',
+    'name': 'ML Seams',
+    'author': 'ML Seams',
     'version': (0, 1, 0),
     'blender': (4, 0, 0),
     'location': 'View3D > Sidebar > Auto Seams',

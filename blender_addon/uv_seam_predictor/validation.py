@@ -50,10 +50,6 @@ def validate_configured_paths(prefs, settings):
             raise ValueError(f'{label} does not exist: {path}')
 
 
-def require_single_user_or_copy_allowed(obj, make_single_user_mesh):
-    if obj.data.users > 1 and not make_single_user_mesh:
-        raise ValueError('Mesh data is shared. Enable Make Mesh Single User before prediction.')
-
 
 def require_unchanged_topology(obj, expected_counts):
     current_counts = (len(obj.data.vertices), len(obj.data.edges))

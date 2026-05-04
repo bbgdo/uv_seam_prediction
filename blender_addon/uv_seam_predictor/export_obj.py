@@ -2,7 +2,6 @@ import bmesh
 
 
 def export_object_to_obj_with_hidden_triangulation(obj, output_path):
-    """Export a triangulated in-memory copy while preserving original vertex IDs."""
     mesh = obj.data
 
     bm = bmesh.new()

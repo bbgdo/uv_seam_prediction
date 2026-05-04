@@ -50,7 +50,6 @@ class UVSEAM_PT_panel(bpy.types.Panel):
         inference_box.prop(settings, 'threshold')
         inference_box.prop(settings, 'use_post_processing')
         inference_box.prop(settings, 'clear_existing_seams')
-        inference_box.prop(settings, 'make_single_user_mesh')
 
         post_box = layout.box()
         post_box.label(text='Post-processing')

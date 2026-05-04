@@ -106,10 +106,6 @@ class UVSEAM_Settings(bpy.types.PropertyGroup):
         name='Clear Existing Seams',
         default=True,
     )
-    make_single_user_mesh: bpy.props.BoolProperty(
-        name='Make Mesh Single User',
-        default=True,
-    )
     last_run_summary: bpy.props.StringProperty(
         name='Last Run Summary',
         default='',
