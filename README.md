@@ -88,4 +88,4 @@ Notes:
 - Canonical feature names are `paper14`, `custom`, and `control14`.
 - SparseMeshCNN is the public model name. `models/meshcnn_full/` is the internal module path only.
 
-See [preprocessing/README.md](preprocessing/README.md), [models/README.md](models/README.md), and [evaluation/README.md](evaluation/README.md) for the maintained command surface.
+See [preprocessing/README.md](preprocessing/README.md) and [models/README.md](models/README.md) for the maintained command surface.
