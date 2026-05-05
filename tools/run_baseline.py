@@ -42,11 +42,9 @@ def _fill_model_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'val_ratio': 0.15,
         'test_ratio': 0.10,
         'seed': None,
-        'group_mode': 'family',
         'split_json_in': None,
         'split_json_out': None,
         'resolution_tag': 'all',
-        'strict_paper_protocol': False,
         'feature_group': None,
         'enable_ao': False,
         'enable_dihedral': False,
@@ -81,11 +79,9 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed for training and generated splits (default: 42 or split JSON seed)')
-    parser.add_argument('--group-mode', choices=['family'], default='family',
-                        help='dataset split grouping protocol (family only)')
     parser.add_argument('--split-json-in', default=None, help='load train/val/test group ids from this JSON file')
     parser.add_argument('--split-json-out', default=None, help='save train/val/test group ids to this JSON file')
-    parser.add_argument('--in-dim', type=int, default=None, help='dual node feature dim (default: 18)')
+    parser.add_argument('--in-dim', type=int, default=None, help='dual node feature dim')
     parser.add_argument('--aggr', choices=['mean', 'lstm'], default=None,
                         help='GraphSAGE aggregation (default: mean)')
     parser.add_argument('--skip-connections', choices=['hidden', 'all', 'none'], default=None,
@@ -96,8 +92,6 @@ def build_parser(default_model: str = 'graphsage') -> argparse.ArgumentParser:
                         help='override pos_weight (default: auto-computed from dataset)')
     parser.add_argument('--focal-gamma', type=float, default=None,
                         help='focal loss gamma (0=plain BCE, 2=standard focal)')
-    parser.add_argument('--strict-paper-protocol', action='store_true',
-                        help='fail unless dataset and options match the paper-faithful GraphSeam protocol')
     parser.add_argument('--feature-group', choices=['paper14', 'custom'], default=None,
                         help='feature bundle to train on (default: paper14)')
     parser.add_argument('--enable-ao', action='store_true',

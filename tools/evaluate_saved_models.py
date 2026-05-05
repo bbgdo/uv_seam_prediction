@@ -49,7 +49,6 @@ class SavedRun:
     split_path: Path
     dataset_path: Path
     experiment: str | None
-    dataset_role: str
     seed: int
     config: dict[str, Any]
     summary: dict[str, Any]
@@ -393,48 +392,22 @@ def _experiment_summary(run_dir: Path, experiment: str | None) -> dict[str, Any]
     return payload if isinstance(payload, dict) else {}
 
 
-def _infer_dataset_role(
-    *,
-    experiment: str | None,
-    config: dict[str, Any],
-    summary: dict[str, Any],
-    experiment_summary: dict[str, Any],
-) -> str:
-    for source in (experiment_summary, config, summary):
-        role = source.get('dataset_role')
-        if role in {'paper', 'custom'}:
-            return str(role)
-    if experiment in EXPERIMENT_SPECS:
-        return EXPERIMENT_SPECS[experiment].dataset_role
-    feature_group = config.get('feature_group')
-    if feature_group == 'paper14':
-        return 'paper'
-    if feature_group == 'custom':
-        return 'custom'
-    raise ValueError('missing dataset_role metadata and feature_group is not enough to infer it')
-
-
 def _select_dataset_path(
     *,
-    dataset_role: str,
     config: dict[str, Any],
     experiment_summary: dict[str, Any],
-    paper_dataset: str | None,
     custom_dataset: str | None,
 ) -> Path:
-    if dataset_role == 'paper' and paper_dataset:
-        return Path(paper_dataset)
-    if dataset_role == 'custom' and custom_dataset:
+    if custom_dataset:
         return Path(custom_dataset)
-
     dataset = config.get('dataset') or experiment_summary.get('dataset')
     if not dataset:
-        raise ValueError('missing dataset path metadata; provide --paper-dataset or --custom-dataset')
+        raise ValueError('missing dataset path metadata; provide --custom-dataset')
     return Path(dataset)
 
 
 def _require_config(config: dict[str, Any], run_dir: Path) -> None:
-    required = ['model_name', 'in_dim', 'hidden_dim', 'num_layers', 'dropout', 'dataset', 'seed', 'group_mode']
+    required = ['model_name', 'in_dim', 'hidden_dim', 'num_layers', 'dropout', 'dataset', 'seed']
     missing = [key for key in required if config.get(key) is None]
     if missing:
         raise ValueError(f'{run_dir / "config.json"} missing required field(s): {", ".join(missing)}')
@@ -477,20 +450,12 @@ def discover_saved_runs(args: argparse.Namespace) -> list[SavedRun]:
             continue
 
         experiment_summary = _experiment_summary(run_dir, experiment)
-        dataset_role = _infer_dataset_role(
-            experiment=experiment,
-            config=config,
-            summary=summary,
-            experiment_summary=experiment_summary,
-        )
         split_path = split_path_for_seed(splits_dir, seed)
         if not split_path.exists():
             raise ValueError(f'missing frozen split JSON for seed {seed}: {split_path}')
         dataset_path = _select_dataset_path(
-            dataset_role=dataset_role,
             config=config,
             experiment_summary=experiment_summary,
-            paper_dataset=args.paper_dataset,
             custom_dataset=args.custom_dataset,
         )
 
@@ -502,7 +467,6 @@ def discover_saved_runs(args: argparse.Namespace) -> list[SavedRun]:
             split_path=split_path,
             dataset_path=dataset_path,
             experiment=experiment,
-            dataset_role=dataset_role,
             seed=seed,
             config=config,
             summary=summary,
@@ -583,7 +547,6 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
     _, val, test, split_info = split_dataset(
         dataset,
         seed=target.seed,
-        group_mode=config.get('group_mode') or split_payload.get('group_mode', 'family'),
         split_json_in=target.split_path,
         dataset_path=split_dataset_path,
         resolution_tag=resolution_tag,
@@ -633,7 +596,6 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
             'experiment': target.experiment,
             'seed': target.seed,
             'run_dir': str(target.run_dir),
-            'dataset_role': target.dataset_role,
         },
         'checkpoint_path': str(target.checkpoint_path),
         'split_path': str(target.split_path),
@@ -885,7 +847,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Offline reevaluate saved best_model.pth checkpoints.')
     parser.add_argument('--runs-root', required=True, help='root directory containing experiment outputs')
     parser.add_argument('--splits-dir', required=True, help='directory containing frozen seed split JSON files')
-    parser.add_argument('--paper-dataset', default=None, help='locked paper dual dataset override')
     parser.add_argument('--custom-dataset', default=None, help='custom/superset dual dataset override')
     parser.add_argument('--experiments', nargs='+', default=None, help='experiment names to reevaluate')
     parser.add_argument('--seeds', type=int, nargs='+', default=None, help='seed numbers to reevaluate')
@@ -906,7 +867,7 @@ def main(argv: list[str] | None = None) -> None:
             for target in targets:
                 print(
                     f"would evaluate: experiment={target.experiment or '-'} seed={target.seed} "
-                    f"run_dir={target.run_dir} dataset_role={target.dataset_role}"
+                    f"run_dir={target.run_dir}"
                 )
             return
 

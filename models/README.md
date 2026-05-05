@@ -11,7 +11,7 @@ Maintained training entrypoints:
 Train GraphSAGE or GATv2 through `tools/run_baseline.py`.
 
 ```bash
-python tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --preset paper --run-dir runs/models/graphsage_paper14
+python tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --run-dir runs/models/graphsage_paper14
 python tools/run_baseline.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
 ```
 

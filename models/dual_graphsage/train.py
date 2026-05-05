@@ -8,7 +8,6 @@ from models.common.baseline_train import (  # noqa: F401
     dataset_metadata_summary,
     set_random_seeds,
     train_baseline,
-    validate_strict_paper_protocol,
 )
 from tools.run_baseline import _fill_model_defaults, main as run_baseline_main
 

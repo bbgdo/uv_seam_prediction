@@ -12,7 +12,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -173,19 +172,6 @@ def _validate_dataset_tensors_cpu(dataset: list[MeshCNNSample]) -> None:
                     f'got {tensor.device}. Dataset loading must normalize samples to CPU.'
                 )
 
-
-def _loss_fn(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    pos_weight: torch.Tensor,
-    loss_name: str,
-    focal_gamma: float,
-) -> torch.Tensor:
-    if loss_name == 'weighted-bce':
-        return F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight)
-    if loss_name == 'focal':
-        return focal_bce_with_logits(logits, labels, pos_weight, gamma=focal_gamma)
-    raise ValueError(f'unknown loss: {loss_name}')
 
 
 def _safe_div(num: float, den: float, eps: float = 1e-8) -> float:
@@ -358,7 +344,6 @@ def _run_epoch(
     samples: list[MeshCNNSample],
     device: torch.device,
     pos_weight: torch.Tensor,
-    loss_name: str,
     focal_gamma: float,
     optimizer: torch.optim.Optimizer | None = None,
     grad_accum_steps: int = 1,
@@ -383,7 +368,7 @@ def _run_epoch(
             logits = model(sample)
             pool_debug_list = _collect_pool_debug(model)
             _append_debug_metrics(epoch_debug, pool_debug_list, model, logits, labels)
-            loss = _loss_fn(logits, labels, pos_weight, loss_name, focal_gamma)
+            loss = focal_bce_with_logits(logits, labels, pos_weight, gamma=focal_gamma)
 
             if training:
                 (loss / max(grad_accum_steps, 1)).backward()
@@ -459,7 +444,7 @@ def _write_json(path: Path, payload: Any) -> None:
 def main(argv: list[str] | None = None) -> None:
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     parser = argparse.ArgumentParser(description='Train SparseMeshCNN edge segmentation.')
-    parser.add_argument('--dataset', default='dataset_sparsemeshcnn_paper14.pt')
+    parser.add_argument('--dataset')
     parser.add_argument('--run-dir', default=f'runs/sparsemeshcnn_{timestamp}')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
@@ -469,7 +454,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--pool-ratios', default='0.85,0.75')
     parser.add_argument('--min-edges', type=int, default=32)
     parser.add_argument('--max-pool-collapses', type=int, default=2048)
-    parser.add_argument('--loss', choices=('focal', 'weighted-bce'), default='focal')
     parser.add_argument('--focal-gamma', type=float, default=2.0)
     parser.add_argument('--pos-weight', type=float, default=None)
     parser.add_argument('--grad-accum-steps', type=int, default=1)
@@ -477,7 +461,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--seed', type=int, default=None)
-    parser.add_argument('--group-mode', choices=('family',), default='family')
     parser.add_argument('--split-json-in', default=None)
     parser.add_argument('--split-json-out', default=None)
     parser.add_argument('--resolution-tag', default=None)
@@ -516,7 +499,6 @@ def main(argv: list[str] | None = None) -> None:
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         seed=seed,
-        group_mode=args.group_mode,
         split_json_in=args.split_json_in,
         split_json_out=args.split_json_out,
         dataset_path=dataset_path,
@@ -555,12 +537,10 @@ def main(argv: list[str] | None = None) -> None:
         'dataset': str(dataset_path),
         'model_config': model_config,
         'feature_metadata': feature_metadata,
-        'loss': args.loss,
         'focal_gamma': args.focal_gamma,
         'pos_weight': float(pos_weight.item()),
         'grad_accum_steps': args.grad_accum_steps,
         'seed': seed,
-        'group_mode': args.group_mode,
         'val_ratio': args.val_ratio,
         'test_ratio': args.test_ratio,
         'split_json_in': str(args.split_json_in) if args.split_json_in else None,
@@ -577,7 +557,6 @@ def main(argv: list[str] | None = None) -> None:
         print('[info] tensorboard is unavailable; debug metrics will be shown in console only')
 
     print(f'device: {device}')
-    print(f'group_mode: {args.group_mode}')
     print(f'split: train {len(train)}, val {len(val)}, test {len(test)}')
     print(f'  train meshes: {split_info["train"]}')
     print(f'  val meshes:   {split_info["val"]}')
@@ -600,7 +579,6 @@ def main(argv: list[str] | None = None) -> None:
             train,
             device,
             pos_weight,
-            args.loss,
             args.focal_gamma,
             optimizer=optimizer,
             grad_accum_steps=args.grad_accum_steps,
@@ -611,7 +589,6 @@ def main(argv: list[str] | None = None) -> None:
             val,
             device,
             pos_weight,
-            args.loss,
             args.focal_gamma,
         )
         scheduler.step(val_metrics['f1'])
@@ -673,7 +650,6 @@ def main(argv: list[str] | None = None) -> None:
         test,
         device,
         pos_weight,
-        args.loss,
         args.focal_gamma,
     )
     val_logits, val_labels = _predict_logits_labels(model, val, device)

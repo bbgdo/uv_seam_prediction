@@ -11,7 +11,6 @@ from torch_geometric.data import Data
 
 from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
-from models.dual_graphsage.train import validate_strict_paper_protocol
 from models.common.baseline_train import _model_kwargs, apply_runtime_feature_selection, build_runtime_config
 from models.baselines.registry import get_baseline
 from tools.run_baseline import parse_args as parse_baseline_args
@@ -246,66 +245,6 @@ class GraphSeamBaselineTests(unittest.TestCase):
         out = model(x, edge_index)
 
         self.assertEqual(out.shape, (5,))
-
-    def test_strict_paper_protocol_accepts_valid_mocked_dataset(self):
-        data = Data(x=torch.zeros(3, 14))
-        data.label_source = 'exact_obj'
-        data.feature_preset = 'paper14'
-        args = Namespace(
-            preset='paper',
-            resolution_tag='all',
-            in_dim=14,
-            aggr='lstm',
-            skip_connections='all',
-        )
-
-        validate_strict_paper_protocol(args, [data])
-
-    def test_strict_paper_protocol_rejects_inconsistent_metadata(self):
-        data = Data(x=torch.zeros(3, 14))
-        data.label_source = 'wrong_source'
-        data.feature_preset = 'wrong_preset'
-        args = Namespace(
-            preset='paper',
-            resolution_tag='all',
-            in_dim=14,
-            aggr='lstm',
-            skip_connections='all',
-        )
-
-        with self.assertRaisesRegex(ValueError, 'strict paper protocol failed'):
-            validate_strict_paper_protocol(args, [data])
-
-    def test_strict_paper_protocol_requires_resolution_selector(self):
-        data = Data(x=torch.zeros(3, 14))
-        data.label_source = 'exact_obj'
-        data.feature_preset = 'paper14'
-        args = Namespace(
-            preset='paper',
-            resolution_tag=None,
-            in_dim=14,
-            aggr='lstm',
-            skip_connections='all',
-        )
-
-        with self.assertRaisesRegex(ValueError, 'resolution_tag must be set'):
-            validate_strict_paper_protocol(args, [data])
-
-    def test_strict_paper_protocol_is_graphsage_specific(self):
-        data = Data(x=torch.zeros(3, 14))
-        data.label_source = 'exact_obj'
-        data.feature_preset = 'paper14'
-        args = Namespace(
-            model='gatv2',
-            preset='paper',
-            resolution_tag='all',
-            in_dim=14,
-            aggr='lstm',
-            skip_connections='all',
-        )
-
-        with self.assertRaisesRegex(ValueError, 'only supported for GraphSAGE'):
-            validate_strict_paper_protocol(args, [data])
 
     def test_summary_export_contains_threshold_metrics(self):
         metrics_05 = {

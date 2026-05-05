@@ -64,7 +64,7 @@ def _normalize_dataset_path(path: str | Path | None) -> str | None:
     return str(Path(path).expanduser().resolve(strict=False))
 
 
-def _group_name(d: Data, group_mode: str, filename_config: FilenameParseConfig | None = None) -> str:
+def _group_name(d: Data, filename_config: FilenameParseConfig | None = None) -> str:
     path_or_name = getattr(d, 'file_path', '')
     if not path_or_name:
         return str(id(d))
@@ -73,15 +73,11 @@ def _group_name(d: Data, group_mode: str, filename_config: FilenameParseConfig |
 
 def _group_dataset(
     dataset: list[Data],
-    group_mode: str,
     filename_config: FilenameParseConfig | None = None,
 ) -> dict[str, list[Data]]:
-    if group_mode != 'family':
-        raise ValueError(f"group_mode must be 'family', got: {group_mode}")
-
     groups: dict[str, list[Data]] = {}
     for d in dataset:
-        groups.setdefault(_group_name(d, group_mode, filename_config), []).append(d)
+        groups.setdefault(_group_name(d, filename_config), []).append(d)
     return groups
 
 
@@ -99,7 +95,6 @@ def _split_info(
     val_keys: list[str],
     test_keys: list[str],
     seed: int,
-    group_mode: str,
     dataset_path: str | Path | None,
     resolution_tag: str | None,
 ) -> dict:
@@ -108,7 +103,6 @@ def _split_info(
         'val': sorted(val_keys),
         'test': sorted(test_keys),
         'seed': seed,
-        'group_mode': group_mode,
         'dataset_path': _normalize_dataset_path(dataset_path),
         'resolution_tag': resolution_tag,
     }
@@ -120,7 +114,6 @@ def _split_json_payload(split_info: dict) -> dict:
         'val_group_ids': split_info['val'],
         'test_group_ids': split_info['test'],
         'seed': split_info.get('seed'),
-        'group_mode': split_info.get('group_mode'),
         'dataset_path': split_info.get('dataset_path'),
         'resolution_tag': split_info.get('resolution_tag'),
     }
@@ -237,7 +230,6 @@ def _weighted_split_group_keys(
 def _validate_no_split_leakage(
     split_keys: dict[str, list[str]],
     groups: dict[str, list[Data]],
-    group_mode: str,
     filename_config: FilenameParseConfig | None = None,
 ) -> None:
     assigned = split_keys['train'] + split_keys['val'] + split_keys['test']
@@ -285,19 +277,13 @@ def save_split_json(path: str | Path, split_info: dict) -> None:
 def _validate_split_payload(
     payload: dict,
     groups: dict[str, list[Data]],
-    group_mode: str,
     dataset_path: str | Path | None,
     resolution_tag: str | None,
 ) -> dict:
     missing_keys = [key for key in SPLIT_GROUP_KEYS.values() if key not in payload]
-    missing_keys.extend(key for key in ('seed', 'group_mode', 'dataset_path', 'resolution_tag') if key not in payload)
+    missing_keys.extend(key for key in ('seed', 'dataset_path', 'resolution_tag') if key not in payload)
     if missing_keys:
         raise ValueError(f"split JSON missing required field(s): {', '.join(sorted(missing_keys))}")
-
-    if payload['group_mode'] != group_mode:
-        raise ValueError(
-            f"split JSON group_mode={payload['group_mode']!r} does not match requested group_mode={group_mode!r}"
-        )
 
     expected_dataset_path = _normalize_dataset_path(dataset_path)
     payload_dataset_path = _normalize_dataset_path(payload.get('dataset_path')) if payload.get('dataset_path') else None
@@ -339,7 +325,6 @@ def _validate_split_payload(
         split_keys['val'],
         split_keys['test'],
         int(payload['seed']),
-        payload['group_mode'],
         payload.get('dataset_path'),
         payload.get('resolution_tag'),
     )
@@ -350,7 +335,6 @@ def split_dataset(
     val_ratio: float = 0.15,
     test_ratio: float = 0.10,
     seed: int = 42,
-    group_mode: str = 'family',
     filename_config: FilenameParseConfig | None = None,
     split_json_in: str | Path | None = None,
     split_json_out: str | Path | None = None,
@@ -358,11 +342,11 @@ def split_dataset(
     resolution_tag: str | None = None,
 ) -> tuple[list[Data], list[Data], list[Data], dict]:
     """Grouped by mesh family to prevent augmentation and resolution leakage."""
-    groups = _group_dataset(dataset, group_mode, filename_config)
+    groups = _group_dataset(dataset, filename_config)
 
     if split_json_in:
         payload = load_split_json_metadata(split_json_in)
-        split_info = _validate_split_payload(payload, groups, group_mode, dataset_path, resolution_tag)
+        split_info = _validate_split_payload(payload, groups, dataset_path, resolution_tag)
         train_keys = split_info['train']
         val_keys = split_info['val']
         test_keys = split_info['test']
@@ -374,7 +358,6 @@ def split_dataset(
             val_keys,
             test_keys,
             seed,
-            group_mode,
             dataset_path,
             resolution_tag,
         )
@@ -382,7 +365,6 @@ def split_dataset(
     _validate_no_split_leakage(
         {'train': train_keys, 'val': val_keys, 'test': test_keys},
         groups,
-        group_mode,
         filename_config,
     )
 

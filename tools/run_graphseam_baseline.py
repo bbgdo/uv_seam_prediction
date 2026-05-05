@@ -22,8 +22,6 @@ def build_train_command(
     split_json: Path,
     seed: int,
     resolution_tag: str,
-    group_mode: str,
-    preset: str,
     epochs: int,
 ) -> list[str]:
     return [
@@ -36,18 +34,15 @@ def build_train_command(
         '--run-dir',
         str(run_dir),
         '--preset',
-        preset,
+        'paper',
         '--resolution-tag',
         resolution_tag,
-        '--group-mode',
-        group_mode,
         '--seed',
         str(seed),
         '--split-json-out',
         str(split_json),
         '--epochs',
         str(epochs),
-        '--strict-paper-protocol',
     ]
 
 
@@ -132,8 +127,6 @@ def build_summary_payload(args: argparse.Namespace, records: list[dict[str, Any]
         'dataset': args.dataset,
         'resolution_tag': args.resolution_tag,
         'resolution_selector': args.resolution_tag,
-        'group_mode': args.group_mode,
-        'preset': args.preset,
         'epochs': args.epochs,
         'seeds': args.seeds,
         'runs': records,
@@ -261,8 +254,6 @@ def run_batch(args: argparse.Namespace, runner=subprocess.run) -> list[dict[str,
             split_json=split_json,
             seed=seed,
             resolution_tag=args.resolution_tag,
-            group_mode=args.group_mode,
-            preset=args.preset,
             epochs=args.epochs,
         )
 
@@ -292,14 +283,12 @@ def run_batch(args: argparse.Namespace, runner=subprocess.run) -> list[dict[str,
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Run multi-seed GraphSeam paper-protocol batches via tools/run_baseline.py.'
+        description='Run multi-seed GraphSeam baseline batches via tools/run_baseline.py.'
     )
     parser.add_argument('--dataset', required=True)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
     parser.add_argument('--resolution-tag', default='all')
-    parser.add_argument('--group-mode', choices=['family'], default='family')
-    parser.add_argument('--preset', choices=['paper'], default='paper')
     parser.add_argument('--epochs', type=int, required=True)
     parser.add_argument(
         '--keep-going',
