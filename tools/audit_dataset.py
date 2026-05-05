@@ -201,14 +201,11 @@ def _split_rows(
     val_ratio: float,
     test_ratio: float,
     seed: int,
-    group_mode: str,
 ) -> dict[str, list[int]]:
     import random
 
     grouped: dict[str, list[int]] = defaultdict(list)
     for idx, row in enumerate(rows):
-        if group_mode != 'family':
-            raise ValueError(f"group_mode must be 'family', got: {group_mode}")
         key = row['family_id']
         grouped[key].append(idx)
 
@@ -334,7 +331,7 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     else:
         raise ValueError(f'expected an OBJ directory or .pt dataset: {source}')
 
-    splits = _split_rows(rows, args.val_ratio, args.test_ratio, args.seed, args.split_group_mode)
+    splits = _split_rows(rows, args.val_ratio, args.test_ratio, args.seed)
     leakage = _leakage_report(rows, splits)
     summary = _summary(rows, leakage, source)
     report = {
@@ -343,7 +340,6 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
             'seed': args.seed,
             'val_ratio': args.val_ratio,
             'test_ratio': args.test_ratio,
-            'group_mode': args.split_group_mode,
             'sizes': {name: len(indices) for name, indices in splits.items()},
         },
         'filename_parse_config': asdict(config),
@@ -367,7 +363,6 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=42, help='Split seed used for leakage simulation')
     parser.add_argument('--val-ratio', type=float, default=0.15, help='Validation split ratio')
     parser.add_argument('--test-ratio', type=float, default=0.10, help='Test split ratio')
-    parser.add_argument('--split-group-mode', choices=['family'], default='family')
     parser.add_argument('--augmentation-pattern', default=r'_aug\d+$')
     parser.add_argument(
         '--resolution-pattern',

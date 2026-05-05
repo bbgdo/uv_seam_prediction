@@ -280,7 +280,6 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             targets = discover_saved_runs(Namespace(
                 runs_root=str(root),
                 splits_dir=str(splits_dir),
-                paper_dataset='paper_override.pt',
                 custom_dataset='custom_override.pt',
                 experiments=['control14'],
                 seeds=[7],

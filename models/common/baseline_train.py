@@ -167,37 +167,6 @@ def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeat
     return dataset
 
 
-def validate_strict_paper_protocol(args: argparse.Namespace, dataset: list[Data]) -> None:
-    failures = []
-    if getattr(args, 'model', 'graphsage') != 'graphsage':
-        failures.append('strict paper protocol is only supported for GraphSAGE')
-    if args.preset != 'paper':
-        failures.append("preset must be 'paper'")
-    if not getattr(args, 'resolution_tag', None):
-        failures.append('resolution_tag must be set')
-    if args.in_dim != 14:
-        failures.append('in_dim must be 14')
-    feature_group = getattr(args, 'feature_group', None)
-    if feature_group not in (None, 'paper14'):
-        failures.append("feature_group must be 'paper14'")
-    if args.aggr != 'lstm':
-        failures.append("aggr must be 'lstm'")
-    if args.skip_connections != 'all':
-        failures.append("skip_connections must be 'all'")
-
-    for key, expected in (('label_source', 'exact_obj'), ('feature_preset', 'paper14')):
-        values = [_metadata_value(data, key) for data in dataset]
-        observed = sorted({str(value) for value in values if value not in (None, '')})
-        missing = sum(1 for value in values if value in (None, ''))
-        if missing or observed != [expected]:
-            detail = f"observed={observed or 'none'}"
-            if missing:
-                detail += f", missing={missing}"
-            failures.append(f"dataset {key} must be {expected!r} ({detail})")
-
-    if failures:
-        raise ValueError('strict paper protocol failed: ' + '; '.join(failures))
-
 
 def apply_paper_preset(args: argparse.Namespace) -> None:
     if args.model != 'graphsage' or args.preset != 'paper':
@@ -326,7 +295,6 @@ def _logger_config(
     metadata_summary: dict,
     filtered_graph_count: int,
     seed: int | None,
-    group_mode: str,
     split_sizes: tuple[int, int, int],
 ) -> dict:
     train_count, val_count, test_count = split_sizes
@@ -354,7 +322,6 @@ def _logger_config(
         'resolution_selector': args.resolution_tag,
         'filtered_graph_count': filtered_graph_count,
         'seed': seed,
-        'group_mode': group_mode,
         'split_json_in': str(args.split_json_in) if args.split_json_in else None,
         'split_json_out': str(args.split_json_out) if args.split_json_out else None,
         'train_graphs': train_count,
@@ -400,7 +367,6 @@ def train_baseline(args: argparse.Namespace) -> None:
         seed_value = 42
     seed = int(seed_value) if seed_value is not None else None
     split_seed = seed if seed is not None else 42
-    effective_group_mode = args.group_mode or split_metadata.get('group_mode', 'family')
 
     if seed is not None:
         set_random_seeds(seed)
@@ -417,9 +383,6 @@ def train_baseline(args: argparse.Namespace) -> None:
     filtered_graph_count = len(dataset)
     print(f"resolution selector: {args.resolution_tag} ({filtered_graph_count} graph(s))")
 
-    if args.strict_paper_protocol:
-        validate_strict_paper_protocol(args, dataset)
-
     dataset = apply_runtime_feature_selection(dataset, feature_selection)
     metadata_summary = dataset_metadata_summary(dataset)
     train, val, test, split_info = split_dataset(
@@ -427,7 +390,6 @@ def train_baseline(args: argparse.Namespace) -> None:
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         seed=split_seed,
-        group_mode=effective_group_mode,
         split_json_in=args.split_json_in,
         split_json_out=args.split_json_out,
         dataset_path=args.dataset,
@@ -465,7 +427,6 @@ def train_baseline(args: argparse.Namespace) -> None:
             metadata_summary,
             filtered_graph_count,
             seed,
-            effective_group_mode,
             (len(train), len(val), len(test)),
         ),
     )
@@ -567,7 +528,6 @@ def train_baseline(args: argparse.Namespace) -> None:
             'num_layers': config.num_layers,
             'dropout': config.dropout,
             'lr': config.lr,
-            'group_mode': effective_group_mode,
             'split_json_in': str(args.split_json_in) if args.split_json_in else None,
             'split_json_out': str(args.split_json_out) if args.split_json_out else None,
             'best_validation_threshold': best_t,

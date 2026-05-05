@@ -276,13 +276,11 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 model='sparsemeshcnn',
                 meshcnn_dataset='meshcnn.pt',
                 custom_dataset=None,
-                paper_dataset=None,
                 experiments=['control14'],
                 output_root=str(root),
                 splits_dir=str(root / 'splits'),
                 seeds=[3],
                 resolution_tag='all',
-                group_mode='family',
                 epochs=1,
                 generate_splits=True,
                 only_generate_splits=True,
@@ -312,7 +310,6 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 source_dataset=dataset,
                 splits_dir=splits_dir,
                 seeds=[11, 12],
-                group_mode='family',
                 resolution_tag='all',
                 val_ratio=0.2,
                 test_ratio=0.2,
@@ -320,7 +317,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
             payload = json.loads(split_path_for_seed(splits_dir, 11).read_text())
             self.assertIsNone(payload['dataset_path'])
-            args = Namespace(seeds=[11, 12], splits_dir=str(splits_dir), group_mode='family', resolution_tag='all')
+            args = Namespace(seeds=[11, 12], splits_dir=str(splits_dir), resolution_tag='all')
             validate_split_files(args, {'custom': dataset})
 
     def test_split_validation_rejects_dataset_tied_split_files(self):
@@ -336,7 +333,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 'dataset_path': '/tmp/custom.pt',
                 'resolution_tag': 'all',
             }))
-            args = Namespace(seeds=[3], splits_dir=str(split_path.parent), group_mode='family', resolution_tag='all')
+            args = Namespace(seeds=[3], splits_dir=str(split_path.parent), resolution_tag='all')
 
             with self.assertRaisesRegex(ValueError, 'dataset-agnostic'):
                 validate_split_files(args, {})
@@ -411,48 +408,40 @@ class FeatureAblationRunnerTests(unittest.TestCase):
     def test_subprocess_command_construction(self):
         custom_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_dihedral_symmetry'],
-            paper_dataset='paper.pt',
             custom_dataset='custom.pt',
             run_dir=Path('runs') / 'full',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
             resolution_tag='all',
-            group_mode='family',
             epochs=3,
         )
         gatv2_command = build_train_command(
             spec=EXPERIMENT_SPECS['control14'],
-            paper_dataset='paper.pt',
             custom_dataset='custom.pt',
             run_dir=Path('runs') / 'gatv2',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
             resolution_tag='all',
-            group_mode='family',
             epochs=3,
             model='gatv2',
         )
         sdf_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_density_sdf'],
-            paper_dataset='paper.pt',
             custom_dataset='custom.pt',
             run_dir=Path('runs') / 'sdf',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
             resolution_tag='all',
-            group_mode='family',
             epochs=3,
             model='gatv2',
         )
         all_five_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_dihedral_symmetry_density_sdf'],
-            paper_dataset='paper.pt',
             custom_dataset='custom.pt',
             run_dir=Path('runs') / 'all5',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
             resolution_tag='all',
-            group_mode='family',
             epochs=3,
         )
 
@@ -460,14 +449,12 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertIn(str(Path('tools') / 'run_baseline.py'), custom_command)
         self.assertIn('--split-json-in', custom_command)
         self.assertNotIn('--split-json-out', custom_command)
-        self.assertNotIn('--strict-paper-protocol', custom_command)
         self.assertIn('--enable-ao', custom_command)
         self.assertIn('--enable-dihedral', custom_command)
         self.assertIn('--enable-symmetry', custom_command)
 
         self.assertEqual(gatv2_command[gatv2_command.index('--model') + 1], 'gatv2')
         self.assertEqual(gatv2_command[gatv2_command.index('--preset') + 1], 'extended')
-        self.assertNotIn('--strict-paper-protocol', gatv2_command)
 
         self.assertEqual(sdf_command[sdf_command.index('--model') + 1], 'gatv2')
         self.assertIn('--enable-ao', sdf_command)
@@ -483,14 +470,12 @@ class FeatureAblationRunnerTests(unittest.TestCase):
     def test_meshcnn_subprocess_command_construction(self):
         command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_density_sdf'],
-            paper_dataset=None,
             custom_dataset=None,
             meshcnn_dataset='meshcnn_superset.pt',
             run_dir=Path('out') / 'sparsemeshcnn' / 'experiments' / 'ao_density_sdf' / 'seed_7',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
             resolution_tag='all',
-            group_mode='family',
             epochs=3,
             model='sparsemeshcnn',
         )
@@ -498,8 +483,9 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(command[0], sys.executable)
         self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), command)
         self.assertNotIn(str(Path('tools') / 'run_baseline.py'), command)
-        for flag in ('--dataset', '--run-dir', '--epochs', '--seed', '--group-mode', '--split-json-in'):
+        for flag in ('--dataset', '--run-dir', '--epochs', '--seed', '--split-json-in'):
             self.assertIn(flag, command)
+        self.assertNotIn('--group-mode', command)
         self.assertEqual(command[command.index('--dataset') + 1], 'meshcnn_superset.pt')
         self.assertEqual(command[command.index('--feature-group') + 1], 'custom')
         self.assertIn('--enable-ao', command)
@@ -507,7 +493,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertIn('--enable-thickness-sdf', command)
         self.assertNotIn('--enable-dihedral', command)
         self.assertNotIn('--enable-symmetry', command)
-        for forbidden in ('--model', '--preset', '--strict-paper-protocol', '--paper-dataset'):
+        for forbidden in ('--model', '--preset'):
             self.assertNotIn(forbidden, command)
 
     def test_run_experiment_reuses_existing_split_jsons(self):
@@ -528,14 +514,12 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 (run_dir / 'summary.json').write_text(json.dumps(_summary(seed, 0.1, 0.5, 0.2, 0.4)))
 
             args = Namespace(
-                paper_dataset='paper.pt',
                 custom_dataset='custom.pt',
                 meshcnn_dataset=None,
                 output_root=str(root),
                 splits_dir=str(splits_dir),
                 seeds=[1, 2],
                 resolution_tag='all',
-                group_mode='family',
                 epochs=1,
                 keep_going=False,
                 model='gatv2',
@@ -558,13 +542,11 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             args = Namespace(
-                paper_dataset='paper.pt',
                 custom_dataset='custom.pt',
                 output_root=str(root),
                 splits_dir=str(root / 'splits'),
                 seeds=[1, 2],
                 resolution_tag='all',
-                group_mode='family',
                 epochs=1,
                 keep_going=False,
                 model='graphsage',
@@ -595,14 +577,12 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 (run_dir / 'summary.json').write_text(json.dumps(_summary(1, 0.1, 0.5, 0.2, 0.4)))
 
             args = Namespace(
-                paper_dataset=None,
                 custom_dataset=None,
                 meshcnn_dataset='meshcnn.pt',
                 output_root=str(root),
                 splits_dir=str(splits_dir),
                 seeds=[1],
                 resolution_tag='all',
-                group_mode='family',
                 epochs=1,
                 keep_going=False,
                 model='sparsemeshcnn',
@@ -620,11 +600,9 @@ class FeatureAblationRunnerTests(unittest.TestCase):
     def test_sparsemeshcnn_payload_reports_public_model_name(self):
         args = Namespace(
             model='sparsemeshcnn',
-            paper_dataset=None,
             custom_dataset=None,
             meshcnn_dataset='meshcnn.pt',
             resolution_tag='all',
-            group_mode='family',
             epochs=1,
             seeds=[1],
             splits_dir='splits',

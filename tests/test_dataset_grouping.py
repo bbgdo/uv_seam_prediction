@@ -41,7 +41,6 @@ class DatasetGroupingTests(unittest.TestCase):
             val_ratio=0.34,
             test_ratio=0.34,
             seed=1,
-            group_mode='family',
         )
         keys = set(split_info['train'] + split_info['val'] + split_info['test'])
 
@@ -65,7 +64,6 @@ class DatasetGroupingTests(unittest.TestCase):
             val_ratio=0.3,
             test_ratio=0.3,
             seed=4,
-            group_mode='family',
         )
         keys = set(split_info['train'] + split_info['val'] + split_info['test'])
 
@@ -126,7 +124,6 @@ class DatasetGroupingTests(unittest.TestCase):
                 val_ratio=0.2,
                 test_ratio=0.2,
                 seed=123,
-                group_mode='family',
                 split_json_out=split_path,
                 dataset_path=dataset_path,
                 resolution_tag='10000f',
@@ -136,7 +133,6 @@ class DatasetGroupingTests(unittest.TestCase):
                 val_ratio=0.2,
                 test_ratio=0.2,
                 seed=999,
-                group_mode='family',
                 split_json_in=split_path,
                 dataset_path=dataset_path,
                 resolution_tag='10000f',
@@ -146,11 +142,11 @@ class DatasetGroupingTests(unittest.TestCase):
         self.assertEqual(saved_info['val'], loaded_info['val'])
         self.assertEqual(saved_info['test'], loaded_info['test'])
 
-    def test_split_dataset_rejects_removed_group_mode(self):
+    def test_split_dataset_rejects_group_mode_kwarg(self):
         dataset = [_data('mesh_10000f.obj'), _data('other.obj')]
 
-        with self.assertRaisesRegex(ValueError, "group_mode must be 'family'"):
-            split_dataset(dataset, group_mode='legacy')
+        with self.assertRaises(TypeError):
+            split_dataset(dataset, group_mode='family')
 
     def test_saved_split_json_schema_keys_are_stable(self):
         dataset = [_data(f'mesh_{idx}_10000f.obj') for idx in range(5)]
@@ -162,7 +158,6 @@ class DatasetGroupingTests(unittest.TestCase):
                 val_ratio=0.2,
                 test_ratio=0.2,
                 seed=123,
-                group_mode='family',
                 split_json_out=split_path,
                 dataset_path=Path(tmp) / 'dataset_dual.pt',
                 resolution_tag='10000f',
@@ -176,7 +171,6 @@ class DatasetGroupingTests(unittest.TestCase):
             'val_group_ids',
             'test_group_ids',
             'seed',
-            'group_mode',
             'dataset_path',
             'resolution_tag',
         })
@@ -207,7 +201,6 @@ class DatasetGroupingTests(unittest.TestCase):
                     val_ratio=0.2,
                     test_ratio=0.2,
                     seed=99,
-                    group_mode='family',
                     split_json_in=split_path,
                 )
 
@@ -227,7 +220,6 @@ class DatasetGroupingTests(unittest.TestCase):
             val_ratio=0.25,
             test_ratio=0.25,
             seed=11,
-            group_mode='family',
         )
 
         split_families = [
@@ -252,7 +244,6 @@ class DatasetGroupingTests(unittest.TestCase):
             val_ratio=0.34,
             test_ratio=0.34,
             seed=5,
-            group_mode='family',
         )
 
         self.assertIn('large', split_info['train'])
@@ -267,14 +258,12 @@ class DatasetGroupingTests(unittest.TestCase):
             val_ratio=0.25,
             test_ratio=0.25,
             seed=7,
-            group_mode='family',
         )
         _, _, _, second = split_dataset(
             dataset,
             val_ratio=0.25,
             test_ratio=0.25,
             seed=7,
-            group_mode='family',
         )
 
         self.assertEqual(first['train'], second['train'])

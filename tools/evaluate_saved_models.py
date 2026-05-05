@@ -419,22 +419,19 @@ def _select_dataset_path(
     dataset_role: str,
     config: dict[str, Any],
     experiment_summary: dict[str, Any],
-    paper_dataset: str | None,
     custom_dataset: str | None,
 ) -> Path:
-    if dataset_role == 'paper' and paper_dataset:
-        return Path(paper_dataset)
     if dataset_role == 'custom' and custom_dataset:
         return Path(custom_dataset)
 
     dataset = config.get('dataset') or experiment_summary.get('dataset')
     if not dataset:
-        raise ValueError('missing dataset path metadata; provide --paper-dataset or --custom-dataset')
+        raise ValueError('missing dataset path metadata; provide --custom-dataset')
     return Path(dataset)
 
 
 def _require_config(config: dict[str, Any], run_dir: Path) -> None:
-    required = ['model_name', 'in_dim', 'hidden_dim', 'num_layers', 'dropout', 'dataset', 'seed', 'group_mode']
+    required = ['model_name', 'in_dim', 'hidden_dim', 'num_layers', 'dropout', 'dataset', 'seed']
     missing = [key for key in required if config.get(key) is None]
     if missing:
         raise ValueError(f'{run_dir / "config.json"} missing required field(s): {", ".join(missing)}')
@@ -490,7 +487,6 @@ def discover_saved_runs(args: argparse.Namespace) -> list[SavedRun]:
             dataset_role=dataset_role,
             config=config,
             experiment_summary=experiment_summary,
-            paper_dataset=args.paper_dataset,
             custom_dataset=args.custom_dataset,
         )
 
@@ -583,7 +579,6 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
     _, val, test, split_info = split_dataset(
         dataset,
         seed=target.seed,
-        group_mode=config.get('group_mode') or split_payload.get('group_mode', 'family'),
         split_json_in=target.split_path,
         dataset_path=split_dataset_path,
         resolution_tag=resolution_tag,
@@ -885,7 +880,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Offline reevaluate saved best_model.pth checkpoints.')
     parser.add_argument('--runs-root', required=True, help='root directory containing experiment outputs')
     parser.add_argument('--splits-dir', required=True, help='directory containing frozen seed split JSON files')
-    parser.add_argument('--paper-dataset', default=None, help='locked paper dual dataset override')
     parser.add_argument('--custom-dataset', default=None, help='custom/superset dual dataset override')
     parser.add_argument('--experiments', nargs='+', default=None, help='experiment names to reevaluate')
     parser.add_argument('--seeds', type=int, nargs='+', default=None, help='seed numbers to reevaluate')
