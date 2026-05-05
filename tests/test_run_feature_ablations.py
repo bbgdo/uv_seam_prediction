@@ -30,7 +30,6 @@ from tools.run_feature_ablations import (
     validate_experiment_selection,
     validate_custom_dataset_metadata,
     validate_meshcnn_dataset_metadata,
-    validate_paper_dataset_metadata,
     validate_split_files,
 )
 
@@ -151,9 +150,8 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         for key, spec in EXPERIMENT_SPECS.items():
             self.assertEqual(key, spec.name, f"key {key!r} != spec.name {spec.name!r}")
 
-    def test_all_experiments_use_custom_dataset_role_and_group(self):
+    def test_all_experiments_use_custom_feature_group(self):
         for name, spec in EXPERIMENT_SPECS.items():
-            self.assertEqual(spec.dataset_role, 'custom', f"{name}: wrong dataset_role")
             self.assertEqual(spec.feature_group, 'custom', f"{name}: wrong feature_group")
 
     def test_experiment_order(self):
@@ -187,18 +185,12 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertTrue(all_five.feature_flags.thickness_sdf)
 
     def test_endpoint_order_safety_checks(self):
-        validate_paper_dataset_metadata([_paper_data()])
         validate_custom_dataset_metadata([_custom_data()], ['ao_dihedral_symmetry_density_sdf'])
 
-        with self.assertRaisesRegex(ValueError, "endpoint_order must be 'random'"):
-            validate_paper_dataset_metadata([_paper_data(endpoint_order='fixed')])
         with self.assertRaisesRegex(ValueError, "endpoint_order must be 'random'"):
             validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
 
     def test_failure_on_missing_features_or_wrong_dataset_metadata(self):
-        with self.assertRaisesRegex(ValueError, "feature_group must be 'paper14'"):
-            validate_paper_dataset_metadata([_paper_data(feature_group='custom')])
-
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
             validate_custom_dataset_metadata(
                 [_custom_data(list(PAPER14_FEATURE_NAMES))],
@@ -408,7 +400,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
     def test_subprocess_command_construction(self):
         custom_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_dihedral_symmetry'],
-            custom_dataset='custom.pt',
+            dataset='custom.pt',
             run_dir=Path('runs') / 'full',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
@@ -417,7 +409,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         )
         gatv2_command = build_train_command(
             spec=EXPERIMENT_SPECS['control14'],
-            custom_dataset='custom.pt',
+            dataset='custom.pt',
             run_dir=Path('runs') / 'gatv2',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
@@ -427,7 +419,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         )
         sdf_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_density_sdf'],
-            custom_dataset='custom.pt',
+            dataset='custom.pt',
             run_dir=Path('runs') / 'sdf',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
@@ -437,7 +429,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         )
         all_five_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_dihedral_symmetry_density_sdf'],
-            custom_dataset='custom.pt',
+            dataset='custom.pt',
             run_dir=Path('runs') / 'all5',
             split_json=Path('splits') / 'seed_7.json',
             seed=7,
@@ -452,9 +444,10 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertIn('--enable-ao', custom_command)
         self.assertIn('--enable-dihedral', custom_command)
         self.assertIn('--enable-symmetry', custom_command)
+        self.assertEqual(custom_command[custom_command.index('--preset') + 1], 'paper')
 
         self.assertEqual(gatv2_command[gatv2_command.index('--model') + 1], 'gatv2')
-        self.assertEqual(gatv2_command[gatv2_command.index('--preset') + 1], 'extended')
+        self.assertNotIn('--preset', gatv2_command)
 
         self.assertEqual(sdf_command[sdf_command.index('--model') + 1], 'gatv2')
         self.assertIn('--enable-ao', sdf_command)
@@ -470,7 +463,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
     def test_meshcnn_subprocess_command_construction(self):
         command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_density_sdf'],
-            custom_dataset=None,
+            dataset=None,
             meshcnn_dataset='meshcnn_superset.pt',
             run_dir=Path('out') / 'sparsemeshcnn' / 'experiments' / 'ao_density_sdf' / 'seed_7',
             split_json=Path('splits') / 'seed_7.json',
@@ -616,7 +609,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
         self.assertEqual(payload['model'], 'sparsemeshcnn')
         self.assertEqual(payload['dataset'], 'meshcnn.pt')
-        self.assertIsNone(payload['preset'])
+        self.assertNotIn('preset', payload)
 
 
 if __name__ == '__main__':

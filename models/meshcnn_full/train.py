@@ -537,7 +537,6 @@ def main(argv: list[str] | None = None) -> None:
         'dataset': str(dataset_path),
         'model_config': model_config,
         'feature_metadata': feature_metadata,
-        'loss': 'focal',
         'focal_gamma': args.focal_gamma,
         'pos_weight': float(pos_weight.item()),
         'grad_accum_steps': args.grad_accum_steps,

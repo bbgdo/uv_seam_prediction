@@ -56,7 +56,6 @@ def _reeval(
             'experiment': experiment,
             'seed': seed,
             'run_dir': f'runs/{experiment}/seed_{seed}',
-            'dataset_role': 'custom',
         },
         'split_path': str(split_path) if split_path is not None else f'splits/seed_{seed}.json',
         'metrics': {
@@ -251,7 +250,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertEqual(grid[-2:], [0.995, 0.999])
         self.assertEqual(len(grid), 12)
 
-    def test_discover_saved_run_selects_dataset_role_from_experiment(self):
+    def test_discover_saved_run_uses_custom_dataset_override(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = root / 'experiments' / 'control14' / 'seed_7'
@@ -286,7 +285,6 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             ))
 
         self.assertEqual(len(targets), 1)
-        self.assertEqual(targets[0].dataset_role, 'custom')
         self.assertEqual(targets[0].dataset_path, Path('custom_override.pt'))
         self.assertEqual(targets[0].experiment, 'control14')
 

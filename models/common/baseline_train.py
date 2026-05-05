@@ -333,7 +333,6 @@ def _logger_config(
     }
     if config.model_name == 'graphsage':
         payload.update({
-            'preset': args.preset,
             'aggr': config.aggr,
             'skip_connections': config.skip_connections,
         })
@@ -538,7 +537,6 @@ def train_baseline(args: argparse.Namespace) -> None:
             'resolution_tag': args.resolution_tag,
             'resolution_selector': args.resolution_tag,
             'filtered_graph_count': filtered_graph_count,
-            'preset': args.preset if config.model_name == 'graphsage' else None,
             'dataset_metadata_summary': metadata_summary,
         },
     )

@@ -22,7 +22,6 @@ def build_train_command(
     split_json: Path,
     seed: int,
     resolution_tag: str,
-    preset: str,
     epochs: int,
 ) -> list[str]:
     return [
@@ -35,7 +34,7 @@ def build_train_command(
         '--run-dir',
         str(run_dir),
         '--preset',
-        preset,
+        'paper',
         '--resolution-tag',
         resolution_tag,
         '--seed',
@@ -128,7 +127,6 @@ def build_summary_payload(args: argparse.Namespace, records: list[dict[str, Any]
         'dataset': args.dataset,
         'resolution_tag': args.resolution_tag,
         'resolution_selector': args.resolution_tag,
-        'preset': args.preset,
         'epochs': args.epochs,
         'seeds': args.seeds,
         'runs': records,
@@ -256,7 +254,6 @@ def run_batch(args: argparse.Namespace, runner=subprocess.run) -> list[dict[str,
             split_json=split_json,
             seed=seed,
             resolution_tag=args.resolution_tag,
-            preset=args.preset,
             epochs=args.epochs,
         )
 
@@ -292,7 +289,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--seeds', type=int, nargs='+', required=True)
     parser.add_argument('--resolution-tag', default='all')
-    parser.add_argument('--preset', choices=['paper'], default='paper')
     parser.add_argument('--epochs', type=int, required=True)
     parser.add_argument(
         '--keep-going',

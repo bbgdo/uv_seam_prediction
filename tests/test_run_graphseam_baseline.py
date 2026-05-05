@@ -53,7 +53,6 @@ def _args(tmp: Path, seeds: list[int], keep_going: bool = False) -> Namespace:
         output_root=str(tmp),
         seeds=seeds,
         resolution_tag='all',
-        preset='paper',
         epochs=3,
         keep_going=keep_going,
     )
@@ -138,7 +137,6 @@ class GraphSeamBaselineRunnerTests(unittest.TestCase):
             split_json=Path('runs') / 'splits' / 'seed_7.json',
             seed=7,
             resolution_tag='10000f',
-            preset='paper',
             epochs=5,
         )
 
@@ -146,6 +144,7 @@ class GraphSeamBaselineRunnerTests(unittest.TestCase):
         self.assertIn(str(Path('tools') / 'run_baseline.py'), command)
         self.assertEqual(command[command.index('--model') + 1], 'graphsage')
         self.assertNotIn('--strict-paper-protocol', command)
+        self.assertEqual(command[command.index('--preset') + 1], 'paper')
         self.assertEqual(command[command.index('--resolution-tag') + 1], '10000f')
         self.assertEqual(command[command.index('--seed') + 1], '7')
         self.assertEqual(command[command.index('--split-json-out') + 1], str(Path('runs') / 'splits' / 'seed_7.json'))

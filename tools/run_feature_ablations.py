@@ -18,7 +18,7 @@ from models.utils.dataset import (  # noqa: E402
     split_dataset,
 )
 from models.meshcnn_full.mesh import load_meshcnn_dataset  # noqa: E402
-from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection  # noqa: E402
+from preprocessing.feature_registry import resolve_feature_selection  # noqa: E402
 
 
 METRIC_KEYS = ('f1', 'precision', 'recall', 'fpr', 'tpr', 'accuracy')
@@ -34,7 +34,6 @@ ABLATION_MODELS = (*GNN_MODELS, SPARSE_MESHCNN_MODEL)
 @dataclass(frozen=True)
 class ExperimentSpec:
     name: str
-    dataset_role: str
     feature_group: str
     enable_ao: bool = False
     enable_dihedral: bool = False
@@ -49,14 +48,13 @@ _FLAG_KEYS = ('enable_ao', 'enable_dihedral', 'enable_symmetry', 'enable_density
 
 def _build_experiment_specs() -> dict[str, ExperimentSpec]:
     specs: dict[str, ExperimentSpec] = {
-        'control14': ExperimentSpec(name='control14', dataset_role='custom', feature_group='custom'),
+        'control14': ExperimentSpec(name='control14', feature_group='custom'),
     }
     for size in range(1, len(_FEATURE_TOKENS) + 1):
         for combo in itertools.combinations(range(len(_FEATURE_TOKENS)), size):
             name = '_'.join(_FEATURE_TOKENS[i] for i in combo)
             specs[name] = ExperimentSpec(
                 name=name,
-                dataset_role='custom',
                 feature_group='custom',
                 **{_FLAG_KEYS[i]: True for i in combo},
             )
@@ -172,26 +170,6 @@ def _coerce_feature_names(value) -> list[str] | None:
     return None
 
 
-def validate_paper_dataset_metadata(dataset: list) -> None:
-    if not dataset:
-        raise ValueError('paper dataset is empty after resolution filtering')
-    _require_uniform_metadata(dataset, role='paper', key='feature_group', expected='paper14')
-    _require_uniform_metadata(dataset, role='paper', key='endpoint_order', expected='random')
-
-    for graph_idx, data in enumerate(dataset):
-        x = getattr(data, 'x', None)
-        if x is not None and int(x.shape[1]) != len(PAPER14_FEATURE_NAMES):
-            raise ValueError(
-                f"paper dataset graph {graph_idx} has x feature dim {int(x.shape[1])}; "
-                f"expected {len(PAPER14_FEATURE_NAMES)}"
-            )
-        names = _coerce_feature_names(_metadata_value(data, 'feature_names'))
-        if names is not None and names != list(PAPER14_FEATURE_NAMES):
-            raise ValueError(
-                f"paper dataset graph {graph_idx} feature_names do not match paper14 metadata"
-            )
-
-
 def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str]) -> None:
     if not dataset:
         raise ValueError('custom dataset is empty after resolution filtering')
@@ -200,9 +178,6 @@ def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str])
 
     requested_features: list[str] = []
     for name in experiment_names:
-        spec = get_experiment_spec(name)
-        if spec.dataset_role != 'custom':
-            continue
         for feature_name in experiment_feature_selection(name).feature_names:
             if feature_name not in requested_features:
                 requested_features.append(feature_name)
@@ -359,7 +334,7 @@ def validate_split_files(args: argparse.Namespace, datasets: dict[str, list]) ->
 def build_train_command(
     *,
     spec: ExperimentSpec,
-    custom_dataset: str | None,
+    dataset: str | None,
     meshcnn_dataset: str | None = None,
     run_dir: Path,
     split_json: Path,
@@ -404,11 +379,9 @@ def build_train_command(
             command.append('--enable-thickness-sdf')
         return command
 
-    dataset = custom_dataset
     if not dataset:
-        raise ValueError(f"{spec.name} requires a {spec.dataset_role} dataset")
+        raise ValueError(f'{spec.name} requires a dataset')
 
-    preset = 'paper' if model == 'graphsage' else 'extended'
     command = [
         sys.executable,
         str(Path('tools') / 'run_baseline.py'),
@@ -418,8 +391,6 @@ def build_train_command(
         dataset,
         '--run-dir',
         str(run_dir),
-        '--preset',
-        preset,
         '--resolution-tag',
         resolution_tag,
         '--seed',
@@ -431,6 +402,8 @@ def build_train_command(
         '--feature-group',
         spec.feature_group,
     ]
+    if model == 'graphsage':
+        command += ['--preset', 'paper']
     if spec.enable_ao:
         command.append('--enable-ao')
     if spec.enable_dihedral:
@@ -572,9 +545,7 @@ def build_experiment_payload(
     return {
         'experiment': spec.name,
         'model': model,
-        'dataset_role': spec.dataset_role,
         'dataset': dataset,
-        'preset': None if is_meshcnn_model(model) else ('paper' if model == 'graphsage' else 'extended'),
         'feature_group': spec.feature_group,
         'feature_flags': selection.feature_flags.as_dict(),
         'feature_names': list(selection.feature_names),
@@ -661,7 +632,7 @@ def run_experiment(
         run_dir.mkdir(parents=True, exist_ok=True)
         command = build_train_command(
             spec=spec,
-            custom_dataset=args.custom_dataset,
+            dataset=args.custom_dataset,
             meshcnn_dataset=getattr(args, 'meshcnn_dataset', None),
             run_dir=run_dir,
             split_json=split_json,
@@ -693,7 +664,7 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
     splits_dir = Path(args.splits_dir)
 
     if args.generate_splits:
-        source_dataset = datasets.get('custom') or datasets.get('meshcnn') or datasets.get('paper')
+        source_dataset = datasets.get('custom') or datasets.get('meshcnn')
         if source_dataset is None:
             raise ValueError('no dataset available for split generation')
         generate_split_files(
