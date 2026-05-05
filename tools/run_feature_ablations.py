@@ -721,7 +721,7 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
 
 def parser_epilog() -> str:
     return """Examples:
-  python preprocessing/obj_to_dataset_graph.py <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
+  python preprocessing/build_gnn_dataset.py <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
   python tools/run_feature_ablations.py --model graphsage --custom-dataset <custom_dataset.pt> --experiments control14 ao_density ao_dihedral_symmetry ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits

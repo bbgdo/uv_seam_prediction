@@ -17,7 +17,7 @@ from tools.run_baseline import parse_args as parse_baseline_args
 from models.utils.experiment_log import ExperimentLogger
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.feature_registry import get_feature_group, resolve_feature_selection
-from preprocessing.obj_to_dataset_graph import build_dual_data
+from preprocessing.build_gnn_dataset import build_dual_data
 
 
 def _tiny_mesh() -> trimesh.Trimesh:

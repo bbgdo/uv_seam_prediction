@@ -26,8 +26,8 @@ python tools/validate_seam_truth.py --mesh-dir data/objs
 Build the maintained PyG datasets:
 
 ```bash
-python preprocessing/obj_to_dataset_graph.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
-python preprocessing/obj_to_dataset_graph.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
+python preprocessing/build_gnn_dataset.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
+python preprocessing/build_gnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
 ```
 
 Build one SparseMeshCNN custom superset dataset for all SparseMeshCNN ablations:

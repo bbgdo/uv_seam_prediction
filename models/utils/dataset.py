@@ -379,7 +379,7 @@ def split_dataset(
 
 
 def load_dual_dataset(path: str | Path) -> list[Data]:
-    from preprocessing.obj_to_dataset_graph import build_dual_data
+    from preprocessing.build_gnn_dataset import build_dual_data
     original = load_dataset(path)
     return [build_dual_data(d) for d in original]
 

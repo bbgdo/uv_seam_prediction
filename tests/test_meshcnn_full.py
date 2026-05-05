@@ -13,7 +13,12 @@ from models.meshcnn_full.model import MeshCNNSegmenter
 from models.meshcnn_full.pool import MeshPool
 from models.meshcnn_full.train import slice_meshcnn_dataset_features
 from models.meshcnn_full.unpool import MeshUnpool
-from preprocessing.build_meshcnn_dataset import DEFAULT_OUTPUT, build_dataset_manifest, build_meshcnn_sample
+from preprocessing.build_meshcnn_dataset import (
+    DEFAULT_OUTPUT,
+    build_dataset_manifest,
+    build_meshcnn_sample,
+    validate_saved_meshcnn_feature_metadata,
+)
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 
 
@@ -319,6 +324,13 @@ class MeshCNNFullTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'edge_features dim'):
             slice_meshcnn_dataset_features([source], resolve_feature_selection('custom'))
+
+    def test_saved_meshcnn_feature_metadata_validation_rejects_dim_mismatch(self):
+        sample = _sample_with_features()
+        sample.feature_names = [*sample.feature_names, 'extra_uncomputed_feature']
+
+        with self.assertRaisesRegex(ValueError, 'does not match edge_features dim'):
+            validate_saved_meshcnn_feature_metadata([sample])
 
     def test_runtime_slicing_accepts_official_builder_metadata(self):
         source_selection = _full_custom_selection()

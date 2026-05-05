@@ -9,13 +9,15 @@ import torch
 
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.obj_parser import parse_obj
-from preprocessing.obj_to_dataset_graph import (
+from preprocessing.build_gnn_dataset import (
     _build_feature_mesh_from_topology,
     build_dual_data,
     main as build_dataset_main,
     manifest_path_for_dataset,
     process_mesh,
+    validate_saved_gnn_feature_metadata,
 )
+from preprocessing.feature_registry import PAPER14_FEATURE_NAMES
 from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import WeldConfig, build_topology
 
@@ -159,6 +161,8 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             dataset = torch.load(output_path, weights_only=False)
             self.assertEqual(len(dataset), 1)
             self.assertEqual(dataset[0].label_source, 'exact_obj')
+            self.assertEqual(dataset[0].graph_format, 'dual_edge_graph')
+            self.assertEqual(dataset[0].x.shape[1], len(dataset[0].feature_names))
 
     def test_exact_obj_manifest_has_required_fields(self):
         required_top_level = {
@@ -205,13 +209,47 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertEqual(manifest['feature_preset'], 'paper14')
             self.assertEqual(manifest['endpoint_order'], 'fixed')
             self.assertEqual(manifest['weld_mode'], 'exact')
+            self.assertEqual(manifest['graph_format'], 'dual_edge_graph')
             self.assertEqual(manifest['mesh_count'], 1)
             self.assertEqual(manifest['total_unique_edges'], 5)
-            self.assertEqual(manifest['total_directed_edges'], 10)
+            self.assertEqual(manifest['total_directed_edges'], 16)
             self.assertEqual(manifest['total_seam_edges'], 4)
             self.assertEqual(manifest['total_boundary_edges'], 4)
             self.assertAlmostEqual(manifest['aggregate_seam_ratio'], 4 / 5)
             self.assertAlmostEqual(manifest['aggregate_pos_weight'], 1 / 4)
+
+    def test_custom_without_optional_flags_saves_only_base_dual_features(self):
+        with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
+            output_path = mesh_dir.parent / 'custom_base.pt'
+            build_dataset_main([
+                str(mesh_dir),
+                '--max-meshes', '1',
+                '--feature-group', 'custom',
+                '--endpoint-order', 'fixed',
+                '--save',
+                '--output', str(output_path),
+            ])
+
+            dataset = torch.load(output_path, weights_only=False)
+            data = dataset[0]
+
+            self.assertEqual(data.graph_format, 'dual_edge_graph')
+            self.assertEqual(data.feature_group, 'custom')
+            self.assertEqual(data.feature_names, list(PAPER14_FEATURE_NAMES))
+            self.assertEqual(data.x.shape[1], 14)
+            self.assertEqual(len(data.feature_names), data.x.shape[1])
+
+    def test_saved_gnn_feature_metadata_validation_rejects_x_mismatch(self):
+        with _obj_file(NON_SEAM_SHARED_EDGE) as path:
+            data = build_dual_data(process_mesh(
+                path,
+                feature_group='custom',
+                endpoint_order='fixed',
+            ))
+        data.feature_names = [*data.feature_names, 'extra_uncomputed_feature']
+
+        with self.assertRaisesRegex(ValueError, 'does not match x feature dim'):
+            validate_saved_gnn_feature_metadata([data])
 
     def test_dual_graph_preserves_exact_obj_metadata(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:

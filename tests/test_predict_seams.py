@@ -18,7 +18,7 @@ predict_seams = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = predict_seams
 spec.loader.exec_module(predict_seams)
 
-from preprocessing.obj_to_dataset_graph import build_dual_edge_index_from_unique_edges
+from preprocessing.build_gnn_dataset import build_dual_edge_index_from_unique_edges
 from preprocessing.obj_parser import parse_obj_text
 from preprocessing.topology import WeldConfig, build_topology
 

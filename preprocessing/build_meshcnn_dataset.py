@@ -59,6 +59,41 @@ def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, f
     raise ValueError(f'exact edge order mismatch for {file_path.name}{detail}')
 
 
+def _feature_names_for_edge_features(
+    feature_selection: ResolvedFeatureSet,
+    edge_features: np.ndarray,
+    file_path: Path,
+) -> list[str]:
+    if edge_features.ndim != 2:
+        raise ValueError(f'{file_path.name}: edge_features must be rank-2, got shape {edge_features.shape}')
+
+    feature_names = list(feature_selection.feature_names)
+    feature_dim = int(edge_features.shape[1])
+    if len(feature_names) != feature_dim:
+        raise ValueError(
+            f'{file_path.name}: resolved feature_names length {len(feature_names)} does not match '
+            f'computed edge feature dim {feature_dim}; feature_names={feature_names}'
+        )
+    return feature_names
+
+
+def validate_saved_meshcnn_feature_metadata(samples: list[MeshCNNSample]) -> None:
+    for sample_idx, sample in enumerate(samples):
+        feature_names = list(getattr(sample, 'feature_names', []))
+        edge_features = getattr(sample, 'edge_features', None)
+        if edge_features is None or getattr(edge_features, 'ndim', 0) != 2:
+            raise ValueError(f'MeshCNN sample {sample_idx} is missing rank-2 edge_features tensor')
+
+        feature_dim = int(edge_features.shape[1])
+        if len(feature_names) != feature_dim:
+            raise ValueError(
+                f'MeshCNN sample {sample_idx} feature_names length {len(feature_names)} '
+                f'does not match edge_features dim {feature_dim}; '
+                f'file_path={getattr(sample, "file_path", "<unknown>")}, '
+                f'feature_names={feature_names}'
+            )
+
+
 def build_meshcnn_sample(
     obj_path: str | Path,
     feature_selection: ResolvedFeatureSet,
@@ -84,6 +119,7 @@ def build_meshcnn_sample(
         endpoint_order=endpoint_order,
         rng_seed=endpoint_seed,
     )
+    feature_names = _feature_names_for_edge_features(feature_selection, edge_features, file_path)
     _assert_exact_edge_order(unique_edges, topology.canonical_edges, file_path)
 
     faces = np.asarray(feature_mesh.faces, dtype=np.int64)
@@ -109,7 +145,7 @@ def build_meshcnn_sample(
         file_path=str(file_path),
         feature_group=feature_selection.feature_group,
         feature_preset=feature_selection.feature_preset,
-        feature_names=list(feature_selection.feature_names),
+        feature_names=feature_names,
         feature_flags=feature_selection.feature_flags.as_dict(),
         density_config=dict(feature_selection.density_config) if feature_selection.density_config else None,
         endpoint_order=endpoint_order,
@@ -176,6 +212,7 @@ def write_dataset(samples: list[MeshCNNSample], output_path: Path, overwrite: bo
         raise FileExistsError(f'manifest exists, pass --overwrite to replace: {manifest_path}')
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    validate_saved_meshcnn_feature_metadata(samples)
     torch.save(samples, output_path)
     manifest = build_dataset_manifest(samples, output_path)
     with manifest_path.open('w', encoding='utf-8') as handle:

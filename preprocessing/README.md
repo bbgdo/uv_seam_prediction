@@ -10,8 +10,8 @@ Maintained dataset builders:
 Use `preprocessing/obj_to_dataset_graph.py` for `paper14` and `custom` PyG datasets.
 
 ```bash
-python preprocessing/obj_to_dataset_graph.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
-python preprocessing/obj_to_dataset_graph.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
+python preprocessing/build_gnn_dataset.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
+python preprocessing/build_gnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
 ```
 
 ## SparseMeshCNN Builder

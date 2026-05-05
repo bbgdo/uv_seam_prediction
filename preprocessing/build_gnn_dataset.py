@@ -10,7 +10,7 @@ from torch_geometric.data import Data
 warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
-# support running both as `python preprocessing/obj_to_dataset_graph.py` and as a module
+# support running both as `python preprocessing/build_gnn_dataset.py` and as a module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
@@ -127,6 +127,7 @@ def _build_graph_data(
     endpoint_order: str,
     label_source: str,
 ) -> Data:
+    feature_names = _feature_names_for_edge_features(feature_selection, edge_features, file_path)
     vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
     x = torch.from_numpy(np.concatenate([vertices, vert_nrms], axis=1))
 
@@ -151,12 +152,13 @@ def _build_graph_data(
     data.label_source = label_source
     data.feature_preset = feature_selection.feature_preset
     data.feature_group = feature_selection.feature_group
-    data.feature_names = list(feature_selection.feature_names)
+    data.feature_names = feature_names
     data.feature_flags = feature_selection.feature_flags.as_dict()
     if feature_selection.density_config is not None:
         data.density_config = dict(feature_selection.density_config)
     data.endpoint_order = endpoint_order
     data.unique_edges = torch.from_numpy(unique_edges.astype(np.int64))
+    data.graph_format = 'primal_mesh_graph'
     return data
 
 
@@ -189,8 +191,60 @@ def _mesh_summary(data: Data) -> dict:
         'unique_edges': unique_edges,
         'seam_edges': seam_edges,
         'boundary_edges': boundary_edges,
-        'feature_dim': int(data.edge_attr.shape[1]),
+        'feature_dim': _saved_graph_feature_dim(data),
     }
+
+
+def _feature_names_for_edge_features(
+    feature_selection: ResolvedFeatureSet,
+    edge_features: np.ndarray,
+    file_path: Path,
+) -> list[str]:
+    if edge_features.ndim != 2:
+        raise ValueError(f'{file_path.name}: edge_features must be rank-2, got shape {edge_features.shape}')
+
+    feature_names = list(feature_selection.feature_names)
+    feature_dim = int(edge_features.shape[1])
+    if len(feature_names) != feature_dim:
+        raise ValueError(
+            f'{file_path.name}: resolved feature_names length {len(feature_names)} does not match '
+            f'computed edge feature dim {feature_dim}; feature_names={feature_names}'
+        )
+    return feature_names
+
+
+def _saved_graph_feature_dim(data: Data) -> int:
+    x = getattr(data, 'x', None)
+    feature_names = list(getattr(data, 'feature_names', []))
+    if x is not None and getattr(x, 'ndim', 0) == 2 and len(feature_names) == int(x.shape[1]):
+        return int(x.shape[1])
+
+    edge_attr = getattr(data, 'edge_attr', None)
+    if edge_attr is not None and getattr(edge_attr, 'ndim', 0) == 2:
+        return int(edge_attr.shape[1])
+
+    if x is not None and getattr(x, 'ndim', 0) == 2:
+        return int(x.shape[1])
+
+    raise ValueError(f'{getattr(data, "file_path", "<unknown>")}: missing rank-2 feature tensor')
+
+
+def validate_saved_gnn_feature_metadata(dataset: list[Data]) -> None:
+    """Ensure saved PyG graphs expose edge features as data.x with matching names."""
+    for graph_idx, data in enumerate(dataset):
+        feature_names = list(getattr(data, 'feature_names', []))
+        x = getattr(data, 'x', None)
+        if x is None or getattr(x, 'ndim', 0) != 2:
+            raise ValueError(f'dataset graph {graph_idx} is missing rank-2 x feature tensor')
+
+        feature_dim = int(x.shape[1])
+        if len(feature_names) != feature_dim:
+            raise ValueError(
+                f'dataset graph {graph_idx} feature_names length {len(feature_names)} '
+                f'does not match x feature dim {feature_dim}; '
+                f'file_path={getattr(data, "file_path", "<unknown>")}, '
+                f'feature_names={feature_names}'
+            )
 
 
 def _extract_unique_edges(data: Data) -> np.ndarray:
@@ -256,6 +310,8 @@ def build_dual_data(original_data: Data) -> Data:
     dual.weld_mode = getattr(original_data, 'weld_mode', '')
     dual.seam_edge_count = getattr(original_data, 'seam_edge_count', int(dual_y.sum().item()))
     dual.boundary_edge_count = getattr(original_data, 'boundary_edge_count', 0)
+    dual.unique_edges = torch.from_numpy(unique_edges.astype(np.int64))
+    dual.graph_format = 'dual_edge_graph'
     return dual
 
 
@@ -271,6 +327,7 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
     density_config = getattr(dataset[0], 'density_config', None)
     endpoint_order = getattr(dataset[0], 'endpoint_order', '')
     weld_mode = getattr(dataset[0], 'weld_mode', '')
+    graph_format = getattr(dataset[0], 'graph_format', '')
 
     summaries = [_mesh_summary(data) for data in dataset]
     total_nodes = sum(item['nodes'] for item in summaries)
@@ -289,6 +346,7 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
         'feature_names': feature_names,
         'endpoint_order': endpoint_order,
         'weld_mode': weld_mode,
+        'graph_format': graph_format,
         'mesh_count': len(dataset),
         'total_nodes': total_nodes,
         'total_unique_edges': total_unique_edges,
@@ -558,9 +616,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"[error] manifest exists, pass --overwrite to replace: {manifest_path}")
             sys.exit(1)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(dataset, out_path)
-        print(f"dataset saved -> {out_path.resolve()}  ({len(dataset)} graphs)")
-        manifest_path = write_dataset_manifest(dataset, out_path)
+        dataset_to_save = [build_dual_data(data) for data in dataset]
+        validate_saved_gnn_feature_metadata(dataset_to_save)
+        torch.save(dataset_to_save, out_path)
+        print(f"dataset saved -> {out_path.resolve()}  ({len(dataset_to_save)} dual graphs)")
+        manifest_path = write_dataset_manifest(dataset_to_save, out_path)
         print(f"manifest saved -> {manifest_path.resolve()}")
         print(
             "sanity check: "

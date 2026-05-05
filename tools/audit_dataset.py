@@ -19,7 +19,7 @@ from models.utils.filename_parsing import (
     parse_mesh_name,
 )
 from preprocessing.compute_features import build_edge_topology, detect_symmetry_axis
-from preprocessing.obj_to_dataset_graph import _detect_seam_edges
+from preprocessing.build_gnn_dataset import _detect_seam_edges
 
 try:
     import trimesh
