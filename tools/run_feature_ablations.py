@@ -35,6 +35,7 @@ ABLATION_MODELS = (*GNN_MODELS, SPARSE_MESHCNN_MODEL)
 class ExperimentSpec:
     name: str
     feature_group: str
+    phase: str
     enable_ao: bool = False
     enable_dihedral: bool = False
     enable_symmetry: bool = False
@@ -42,27 +43,68 @@ class ExperimentSpec:
     enable_thickness_sdf: bool = False
 
 
-_FEATURE_TOKENS = ('ao', 'dihedral', 'symmetry', 'density', 'sdf')
-_FLAG_KEYS = ('enable_ao', 'enable_dihedral', 'enable_symmetry', 'enable_density', 'enable_thickness_sdf')
+BASELINE_EXPERIMENT = 'control14'
+PHASE_BASELINE = 'base_baseline'
+PHASE_ADD_ONE = 'add_one_in'
+PHASE_PAIRWISE = 'pairwise_combinations'
+FEATURE_TOKENS = ('ao', 'sdf', 'dihedral', 'symmetry', 'density')
+DEFAULT_COMBINATORIAL_COUNTS = (1, 2)
+VALID_COMBINATORIAL_COUNTS = tuple(range(1, len(FEATURE_TOKENS) + 1))
+FLAG_BY_TOKEN = {
+    'ao': 'enable_ao',
+    'sdf': 'enable_thickness_sdf',
+    'dihedral': 'enable_dihedral',
+    'symmetry': 'enable_symmetry',
+    'density': 'enable_density',
+}
+PAIRWISE_SEARCH_EXPERIMENTS_PER_ARCHITECTURE = 16
+DEFAULT_SEED = 33
+DEFAULT_EPOCHS = 60
+DEFAULT_PATIENCE = 15
 
 
-def _build_experiment_specs() -> dict[str, ExperimentSpec]:
+def _phase_for_custom_feature_count(count: int) -> str:
+    if count == 1:
+        return PHASE_ADD_ONE
+    if count == 2:
+        return PHASE_PAIRWISE
+    return f'combinatorial_{count}'
+
+
+def _build_experiment_specs(custom_feature_counts: tuple[int, ...]) -> dict[str, ExperimentSpec]:
     specs: dict[str, ExperimentSpec] = {
-        'control14': ExperimentSpec(name='control14', feature_group='custom'),
+        BASELINE_EXPERIMENT: ExperimentSpec(
+            name=BASELINE_EXPERIMENT,
+            feature_group='paper14',
+            phase=PHASE_BASELINE,
+        ),
     }
-    for size in range(1, len(_FEATURE_TOKENS) + 1):
-        for combo in itertools.combinations(range(len(_FEATURE_TOKENS)), size):
-            name = '_'.join(_FEATURE_TOKENS[i] for i in combo)
+    for size in sorted(set(custom_feature_counts)):
+        for combo in itertools.combinations(FEATURE_TOKENS, size):
+            name = '_'.join(combo)
             specs[name] = ExperimentSpec(
                 name=name,
                 feature_group='custom',
-                **{_FLAG_KEYS[i]: True for i in combo},
+                phase=_phase_for_custom_feature_count(size),
+                **{FLAG_BY_TOKEN[token]: True for token in combo},
             )
     return specs
 
 
-EXPERIMENT_SPECS: dict[str, ExperimentSpec] = _build_experiment_specs()
+EXPERIMENT_SPECS: dict[str, ExperimentSpec] = _build_experiment_specs(DEFAULT_COMBINATORIAL_COUNTS)
+ALL_EXPERIMENT_SPECS: dict[str, ExperimentSpec] = _build_experiment_specs(VALID_COMBINATORIAL_COUNTS)
 FULL_ABLATION_SUITE = tuple(EXPERIMENT_SPECS)
+ALL_COMBINATORIAL_SUITE = tuple(ALL_EXPERIMENT_SPECS)
+if len(FULL_ABLATION_SUITE) != PAIRWISE_SEARCH_EXPERIMENTS_PER_ARCHITECTURE:
+    raise RuntimeError('Pairwise Feature Search must define 16 experiments per architecture')
+
+
+def combinatorial_suite(feature_counts: list[int] | tuple[int, ...]) -> list[str]:
+    invalid = sorted(set(feature_counts) - set(VALID_COMBINATORIAL_COUNTS))
+    if invalid:
+        choices = ', '.join(str(value) for value in VALID_COMBINATORIAL_COUNTS)
+        raise ValueError(f"invalid custom feature count(s) {invalid}; choose from: {choices}")
+    return list(_build_experiment_specs(tuple(feature_counts)))
 
 
 def experiment_feature_selection(name: str):
@@ -79,14 +121,18 @@ def experiment_feature_selection(name: str):
 
 def get_experiment_spec(name: str) -> ExperimentSpec:
     try:
-        return EXPERIMENT_SPECS[name]
+        return ALL_EXPERIMENT_SPECS[name]
     except KeyError as exc:
-        choices = ', '.join(EXPERIMENT_SPECS)
+        choices = ', '.join(ALL_EXPERIMENT_SPECS)
         raise ValueError(f"unknown experiment {name!r}; choose one of: {choices}") from exc
 
 
 def is_meshcnn_model(model: str) -> bool:
     return model == SPARSE_MESHCNN_MODEL
+
+
+def get_gnn_dataset_arg(args: argparse.Namespace) -> str | None:
+    return getattr(args, 'gnn_dataset', None)
 
 
 def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
@@ -262,9 +308,10 @@ def validate_dataset_roles(args: argparse.Namespace, experiment_names: list[str]
         validate_meshcnn_dataset_metadata(datasets['meshcnn'], experiment_names)
         return datasets
 
-    if not args.custom_dataset:
-        raise ValueError('--custom-dataset is required')
-    datasets['custom'] = load_filtered_dataset(args.custom_dataset, args.resolution_tag)
+    gnn_dataset = get_gnn_dataset_arg(args)
+    if not gnn_dataset:
+        raise ValueError('--gnn-dataset is required for GNN models')
+    datasets['custom'] = load_filtered_dataset(gnn_dataset, args.resolution_tag)
     validate_custom_dataset_metadata(datasets['custom'], experiment_names)
     return datasets
 
@@ -341,6 +388,7 @@ def build_train_command(
     seed: int,
     resolution_tag: str,
     epochs: int,
+    patience: int = DEFAULT_PATIENCE,
     model: str = 'graphsage',
 ) -> list[str]:
     if model not in ABLATION_MODELS:
@@ -358,6 +406,8 @@ def build_train_command(
             str(run_dir),
             '--epochs',
             str(epochs),
+            '--patience',
+            str(patience),
             '--seed',
             str(seed),
             '--split-json-in',
@@ -399,6 +449,8 @@ def build_train_command(
         str(split_json),
         '--epochs',
         str(epochs),
+        '--patience',
+        str(patience),
         '--feature-group',
         spec.feature_group,
     ]
@@ -541,9 +593,10 @@ def build_experiment_payload(
 ) -> dict[str, Any]:
     selection = experiment_feature_selection(spec.name)
     model = getattr(args, 'model', 'graphsage')
-    dataset = args.meshcnn_dataset if is_meshcnn_model(model) else args.custom_dataset
+    dataset = args.meshcnn_dataset if is_meshcnn_model(model) else get_gnn_dataset_arg(args)
     return {
         'experiment': spec.name,
+        'phase': spec.phase,
         'model': model,
         'dataset': dataset,
         'feature_group': spec.feature_group,
@@ -551,6 +604,7 @@ def build_experiment_payload(
         'feature_names': list(selection.feature_names),
         'resolution_tag': args.resolution_tag,
         'epochs': args.epochs,
+        'patience': getattr(args, 'patience', DEFAULT_PATIENCE),
         'seeds': args.seeds,
         'splits_dir': str(args.splits_dir),
         'runs': records,
@@ -617,6 +671,18 @@ def print_experiment_result(name: str, records: list[dict[str, Any]]) -> None:
     )
 
 
+def resolve_baseline_run_dir(path: str | None, seed: int) -> Path | None:
+    if not path:
+        return None
+    root = Path(path)
+    if (root / 'summary.json').exists():
+        return root
+    seeded = root / f'seed_{seed}'
+    if (seeded / 'summary.json').exists():
+        return seeded
+    raise ValueError(f'baseline run dir for seed {seed} must contain summary.json: {root}')
+
+
 def run_experiment(
     *,
     args: argparse.Namespace,
@@ -626,38 +692,47 @@ def run_experiment(
     records: list[dict[str, Any]] = []
     model = getattr(args, 'model', 'graphsage')
     experiment_dir = Path(args.output_root) / model / 'experiments' / spec.name
-    for seed in args.seeds:
-        split_json = split_path_for_seed(Path(args.splits_dir), seed)
-        run_dir = experiment_dir / f'seed_{seed}'
-        run_dir.mkdir(parents=True, exist_ok=True)
-        command = build_train_command(
-            spec=spec,
-            dataset=args.custom_dataset,
-            meshcnn_dataset=getattr(args, 'meshcnn_dataset', None),
-            run_dir=run_dir,
-            split_json=split_json,
-            seed=seed,
-            resolution_tag=args.resolution_tag,
-            epochs=args.epochs,
-            model=model,
-        )
+    seed = DEFAULT_SEED
+    split_json = split_path_for_seed(Path(args.splits_dir), seed)
+    external_baseline = (
+        resolve_baseline_run_dir(getattr(args, 'baseline_run_dir', None), seed)
+        if spec.name == BASELINE_EXPERIMENT
+        else None
+    )
+    if external_baseline is not None:
+        print(f"{spec.name} seed {seed}: using baseline run {external_baseline}")
+        records.append(collect_success_record(seed, external_baseline, split_json))
+        return records
 
-        print(f"{spec.name} seed {seed}: running")
-        try:
-            runner(command, check=True)
-            records.append(collect_success_record(seed, run_dir, split_json))
-        except subprocess.CalledProcessError as exc:
-            records.append(failure_record(seed, run_dir, split_json, f'train runner exited with {exc.returncode}'))
-            if not args.keep_going:
-                return records
-        except Exception as exc:
-            records.append(failure_record(seed, run_dir, split_json, str(exc)))
-            if not args.keep_going:
-                return records
+    run_dir = experiment_dir / f'seed_{seed}'
+    run_dir.mkdir(parents=True, exist_ok=True)
+    command = build_train_command(
+        spec=spec,
+        dataset=get_gnn_dataset_arg(args),
+        meshcnn_dataset=getattr(args, 'meshcnn_dataset', None),
+        run_dir=run_dir,
+        split_json=split_json,
+        seed=seed,
+        resolution_tag=args.resolution_tag,
+        epochs=args.epochs,
+        patience=getattr(args, 'patience', DEFAULT_PATIENCE),
+        model=model,
+    )
+
+    print(f"{spec.name} seed {seed}: running")
+    try:
+        runner(command, check=True)
+        records.append(collect_success_record(seed, run_dir, split_json))
+    except subprocess.CalledProcessError as exc:
+        records.append(failure_record(seed, run_dir, split_json, f'train runner exited with {exc.returncode}'))
+    except Exception as exc:
+        records.append(failure_record(seed, run_dir, split_json, str(exc)))
     return records
 
 
 def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict[str, Any]]:
+    args.seed = DEFAULT_SEED
+    args.seeds = [DEFAULT_SEED]
     experiment_names = list(args.experiments)
     validate_experiment_selection(experiment_names, args.model)
     datasets = validate_dataset_roles(args, experiment_names)
@@ -684,22 +759,55 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
     output_root = Path(args.output_root) / args.model
     output_root.mkdir(parents=True, exist_ok=True)
     payloads: dict[str, dict[str, Any]] = {}
-    for name in experiment_names:
-        spec = get_experiment_spec(name)
-        records = run_experiment(args=args, spec=spec, runner=runner)
-        payload = build_experiment_payload(args=args, spec=spec, records=records)
-        payloads[name] = payload
-        write_experiment_reports(output_root / 'experiments' / name, payload)
-        print_experiment_result(name, records)
-        if any(record['status'] == 'failed' for record in records) and not args.keep_going:
-            break
+    print(f"{args.model}: feature ablation suite has {len(experiment_names)} experiments per architecture")
+    phases = (PHASE_BASELINE, PHASE_ADD_ONE, PHASE_PAIRWISE)
+    for phase in phases:
+        phase_names = [name for name in experiment_names if get_experiment_spec(name).phase == phase]
+        if not phase_names:
+            continue
+        print(f"{args.model}: phase {phase} ({len(phase_names)} experiments)")
+        for name in phase_names:
+            spec = get_experiment_spec(name)
+            records = run_experiment(args=args, spec=spec, runner=runner)
+            payload = build_experiment_payload(args=args, spec=spec, records=records)
+            payloads[name] = payload
+            write_experiment_reports(output_root / 'experiments' / name, payload)
+            print_experiment_result(name, records)
+            if any(record['status'] == 'failed' for record in records) and not args.keep_going:
+                write_suite_reports(output_root, payloads)
+                return payloads
+
+    extra_names = [
+        name
+        for name in experiment_names
+        if get_experiment_spec(name).phase not in phases
+    ]
+    if extra_names:
+        print(f"{args.model}: phase combinatorial ({len(extra_names)} experiments)")
+        for name in extra_names:
+            spec = get_experiment_spec(name)
+            records = run_experiment(args=args, spec=spec, runner=runner)
+            payload = build_experiment_payload(args=args, spec=spec, records=records)
+            payloads[name] = payload
+            write_experiment_reports(output_root / 'experiments' / name, payload)
+            print_experiment_result(name, records)
+            if any(record['status'] == 'failed' for record in records) and not args.keep_going:
+                write_suite_reports(output_root, payloads)
+                return payloads
 
     write_suite_reports(output_root, payloads)
     return payloads
 
 
 def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) -> None:
-    _write_json(output_root / 'suite_summary.json', {'experiments': payloads})
+    _write_json(
+        output_root / 'suite_summary.json',
+        {
+            'strategy': 'pairwise_feature_search',
+            'experiments_per_architecture': len(payloads),
+            'experiments': payloads,
+        },
+    )
 
     if 'control14' in payloads:
         control_records = payloads['control14']['runs']
@@ -722,30 +830,33 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
 def parser_epilog() -> str:
     return """Examples:
   python preprocessing/build_gnn_dataset.py <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
-  python tools/run_feature_ablations.py --model graphsage --custom-dataset <custom_dataset.pt> --experiments control14 ao_density ao_dihedral_symmetry ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model gatv2 --custom-dataset <custom_dataset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --seeds 7 11 19 --epochs 100 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --full-suite --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset <custom_dataset.pt> --baseline-run-dir <paper14_run_dir> --full-suite --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --combinatorial-suite 1 2 3 4 5 --output-root <out_dir> --generate-splits
 """
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Run fixed-split baseline feature ablations with endpoint-order safety checks.',
+        description='Run fixed-split Pairwise Feature Search ablations with endpoint-order safety checks.',
         epilog=parser_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--model', choices=ABLATION_MODELS, default='graphsage')
-    parser.add_argument('--custom-dataset', default=None, help='custom superset dual dataset')
+    parser.add_argument('--gnn-dataset', default=None, help='GNN custom superset dual dataset')
     parser.add_argument('--meshcnn-dataset', default=None, help='MeshCNN custom superset dataset')
+    parser.add_argument('--baseline-run-dir', default=None, help='existing paper14 run dir to reuse for control14')
     parser.add_argument(
         '--experiments',
         nargs='+',
-        choices=tuple(EXPERIMENT_SPECS),
-        default=['control14'],
+        choices=tuple(ALL_EXPERIMENT_SPECS),
+        default=list(FULL_ABLATION_SUITE),
     )
-    parser.add_argument('--seeds', type=int, nargs='+', required=True)
+    parser.add_argument('--seeds', type=int, nargs='*', default=None, help='deprecated; always uses seed 33')
     parser.add_argument('--resolution-tag', default='all')
-    parser.add_argument('--epochs', type=int, required=True)
+    parser.add_argument('--epochs', type=int, default=DEFAULT_EPOCHS)
+    parser.add_argument('--patience', type=int, default=DEFAULT_PATIENCE)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--splits-dir', default=None)
     parser.add_argument('--generate-splits', action='store_true', help='create missing seed split JSONs before runs')
@@ -756,11 +867,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--full-suite',
         action='store_true',
-        help='run control14 and all feature-combination ablations',
+        help='run the default 16-experiment Pairwise Feature Search suite',
+    )
+    parser.add_argument(
+        '--combinatorial-suite',
+        type=int,
+        nargs='+',
+        choices=VALID_COMBINATORIAL_COUNTS,
+        metavar='N',
+        default=None,
+        help='run baseline plus all custom-feature combinations for each requested feature count',
     )
     args = parser.parse_args(argv)
-    if args.full_suite:
+    if args.combinatorial_suite is not None:
+        args.experiments = combinatorial_suite(args.combinatorial_suite)
+    elif args.full_suite:
         args.experiments = list(FULL_ABLATION_SUITE)
+    args.seed = DEFAULT_SEED
+    args.seeds = [DEFAULT_SEED]
     if args.splits_dir is None:
         args.splits_dir = str(Path(args.output_root) / 'splits')
     return args
