@@ -217,6 +217,15 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(args.seeds, [33])
         self.assertEqual(args.epochs, 60)
         self.assertEqual(args.patience, 15)
+        self.assertIsNone(args.split_json_in)
+
+        split_args = parse_args([
+            '--model', 'graphsage',
+            '--gnn-dataset', 'custom.pt',
+            '--split-json-in', 'splits/fixed.json',
+            '--output-root', 'out',
+        ])
+        self.assertEqual(split_args.split_json_in, 'splits/fixed.json')
 
         full_args = parse_args([
             '--model', 'graphsage',
@@ -322,6 +331,33 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             payload = json.loads(split_path_for_seed(splits_dir, 11).read_text())
             self.assertIsNone(payload['dataset_path'])
             args = Namespace(seeds=[11, 12], splits_dir=str(splits_dir), resolution_tag='all')
+            validate_split_files(args, {'custom': dataset})
+
+    def test_split_json_in_overrides_splits_dir_for_validation(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            generated_dir = root / 'generated'
+            dataset = [_custom_data() for _ in range(6)]
+            for idx, data in enumerate(dataset):
+                data.file_path = f'mesh_{idx}.obj'
+
+            generate_split_files(
+                source_dataset=dataset,
+                splits_dir=generated_dir,
+                seeds=[33],
+                resolution_tag='all',
+                val_ratio=0.2,
+                test_ratio=0.2,
+            )
+
+            explicit_split = root / 'fixed_split.json'
+            explicit_split.write_text(split_path_for_seed(generated_dir, 33).read_text())
+            args = Namespace(
+                seeds=[33],
+                splits_dir=str(root / 'unused_splits_dir'),
+                split_json_in=str(explicit_split),
+                resolution_tag='all',
+            )
             validate_split_files(args, {'custom': dataset})
 
     def test_split_validation_rejects_dataset_tied_split_files(self):
@@ -526,6 +562,37 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(commands[0][commands[0].index('--split-json-in') + 1], str(splits_dir / 'seed_33.json'))
         self.assertEqual(commands[0][commands[0].index('--model') + 1], 'gatv2')
         self.assertNotIn('--split-json-out', commands[0])
+
+    def test_run_experiment_uses_explicit_split_json_in(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            explicit_split = root / 'fixed_split.json'
+            explicit_split.write_text('{}')
+            commands = []
+
+            def fake_runner(command, check):
+                commands.append(command)
+                run_dir = Path(command[command.index('--run-dir') + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / 'summary.json').write_text(json.dumps(_summary(33, 0.1, 0.5, 0.2, 0.4)))
+
+            args = Namespace(
+                gnn_dataset='custom.pt',
+                meshcnn_dataset=None,
+                output_root=str(root),
+                splits_dir=str(root / 'unused_splits_dir'),
+                split_json_in=str(explicit_split),
+                seeds=[33],
+                resolution_tag='all',
+                epochs=1,
+                keep_going=False,
+                model='gatv2',
+            )
+
+            records = run_experiment(args=args, spec=EXPERIMENT_SPECS['control14'], runner=fake_runner)
+
+        self.assertEqual(records[0]['split_json'], str(explicit_split))
+        self.assertEqual(commands[0][commands[0].index('--split-json-in') + 1], str(explicit_split))
 
     def test_run_experiment_records_subprocess_failure(self):
         with TemporaryDirectory() as tmp:

@@ -147,6 +147,13 @@ def split_path_for_seed(splits_dir: Path, seed: int) -> Path:
     return splits_dir / f'seed_{seed}.json'
 
 
+def split_json_for_seed(args: argparse.Namespace, seed: int) -> Path:
+    split_json_in = getattr(args, 'split_json_in', None)
+    if split_json_in:
+        return Path(split_json_in)
+    return split_path_for_seed(Path(args.splits_dir), seed)
+
+
 def _metric_columns(prefix: str) -> list[str]:
     return [f'{prefix}_{metric}' for metric in METRIC_KEYS]
 
@@ -364,7 +371,7 @@ def generate_split_files(
 
 def validate_split_files(args: argparse.Namespace, datasets: dict[str, list]) -> None:
     for seed in args.seeds:
-        split_json = split_path_for_seed(Path(args.splits_dir), seed)
+        split_json = split_json_for_seed(args, seed)
         if not split_json.exists():
             raise ValueError(f"missing split JSON for seed {seed}: {split_json}")
         payload = load_split_json_metadata(split_json)
@@ -607,6 +614,7 @@ def build_experiment_payload(
         'patience': getattr(args, 'patience', DEFAULT_PATIENCE),
         'seeds': args.seeds,
         'splits_dir': str(args.splits_dir),
+        'split_json_in': str(args.split_json_in) if getattr(args, 'split_json_in', None) else None,
         'runs': records,
         'aggregates': aggregate_records(records),
     }
@@ -693,7 +701,7 @@ def run_experiment(
     model = getattr(args, 'model', 'graphsage')
     experiment_dir = Path(args.output_root) / model / 'experiments' / spec.name
     seed = DEFAULT_SEED
-    split_json = split_path_for_seed(Path(args.splits_dir), seed)
+    split_json = split_json_for_seed(args, seed)
     external_baseline = (
         resolve_baseline_run_dir(getattr(args, 'baseline_run_dir', None), seed)
         if spec.name == BASELINE_EXPERIMENT
@@ -737,6 +745,9 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
     validate_experiment_selection(experiment_names, args.model)
     datasets = validate_dataset_roles(args, experiment_names)
     splits_dir = Path(args.splits_dir)
+
+    if getattr(args, 'split_json_in', None) and (args.generate_splits or args.only_generate_splits):
+        raise ValueError('--split-json-in cannot be combined with split generation flags')
 
     if args.generate_splits:
         source_dataset = datasets.get('custom') or datasets.get('meshcnn')
@@ -829,7 +840,6 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
 
 def parser_epilog() -> str:
     return """Examples:
-  python preprocessing/build_gnn_dataset.py <mesh_dir> --feature-group custom --endpoint-order random --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --save --overwrite --output <custom_dataset.pt>
   python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --full-suite --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model gatv2 --gnn-dataset <custom_dataset.pt> --baseline-run-dir <paper14_run_dir> --full-suite --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --output-root <out_dir> --generate-splits
@@ -859,6 +869,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--patience', type=int, default=DEFAULT_PATIENCE)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--splits-dir', default=None)
+    parser.add_argument('--split-json-in', default=None, help='load fixed train/val/test group ids from this JSON file')
     parser.add_argument('--generate-splits', action='store_true', help='create missing seed split JSONs before runs')
     parser.add_argument('--only-generate-splits', action='store_true', help='prepare splits and exit without training')
     parser.add_argument('--val-ratio', type=float, default=0.15)
