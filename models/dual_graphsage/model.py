@@ -17,7 +17,7 @@ class DualGraphSAGE(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 3,
         dropout: float = 0.3,
-        aggr: str = 'mean',
+        aggr: str = 'lstm',
         skip_connections: str = 'hidden',
     ):
         super().__init__()

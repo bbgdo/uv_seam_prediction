@@ -135,6 +135,10 @@ def get_gnn_dataset_arg(args: argparse.Namespace) -> str | None:
     return getattr(args, 'gnn_dataset', None)
 
 
+def get_control14_run_dir_arg(args: argparse.Namespace) -> str | None:
+    return getattr(args, 'control14_run_dir', None) or getattr(args, 'baseline_run_dir', None)
+
+
 def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
     if model not in ABLATION_MODELS:
         choices = ', '.join(ABLATION_MODELS)
@@ -687,16 +691,22 @@ def print_experiment_result(name: str, records: list[dict[str, Any]]) -> None:
     )
 
 
-def resolve_baseline_run_dir(path: str | None, seed: int) -> Path | None:
+def resolve_control14_run_dir(path: str | None, model: str, seed: int, *, allow_direct_run: bool) -> Path | None:
     if not path:
         return None
     root = Path(path)
-    if (root / 'summary.json').exists():
+    if allow_direct_run and (root / 'summary.json').exists():
         return root
-    seeded = root / f'seed_{seed}'
-    if (seeded / 'summary.json').exists():
-        return seeded
-    raise ValueError(f'baseline run dir for seed {seed} must contain summary.json: {root}')
+    candidates = (
+        root / f'seed_{seed}',
+        root / model / 'experiments' / BASELINE_EXPERIMENT / f'seed_{seed}',
+        root / 'experiments' / BASELINE_EXPERIMENT / f'seed_{seed}',
+        root / BASELINE_EXPERIMENT / f'seed_{seed}',
+    )
+    for candidate in candidates:
+        if (candidate / 'summary.json').exists():
+            return candidate
+    raise ValueError(f'control14 run dir for seed {seed} must contain summary.json: {root}')
 
 
 def experiment_feature_label(spec: ExperimentSpec) -> str:
@@ -728,7 +738,12 @@ def run_experiment(
     for seed in args.seeds:
         split_json = split_json_for_seed(args, seed)
         external_baseline = (
-            resolve_baseline_run_dir(getattr(args, 'baseline_run_dir', None), seed)
+            resolve_control14_run_dir(
+                get_control14_run_dir_arg(args),
+                model,
+                seed,
+                allow_direct_run=len(args.seeds) == 1,
+            )
             if spec.name == BASELINE_EXPERIMENT
             else None
         )
@@ -773,6 +788,24 @@ def run_experiment(
     return records
 
 
+def load_existing_suite_payloads(output_root: Path) -> dict[str, dict[str, Any]]:
+    payloads: dict[str, dict[str, Any]] = {}
+    suite_path = output_root / 'suite_summary.json'
+    if suite_path.exists():
+        suite_payload = _read_json(suite_path)
+        existing = suite_payload.get('experiments', {})
+        if isinstance(existing, dict):
+            payloads.update(existing)
+
+    experiments_dir = output_root / 'experiments'
+    if experiments_dir.exists():
+        for summary_path in experiments_dir.glob('*/summary.json'):
+            payload = _read_json(summary_path)
+            name = payload.get('experiment') or summary_path.parent.name
+            payloads[str(name)] = payload
+    return payloads
+
+
 def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict[str, Any]]:
     experiment_names = list(args.experiments)
     validate_experiment_selection(experiment_names, args.model)
@@ -804,7 +837,7 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
 
     output_root = Path(args.output_root) / args.model
     output_root.mkdir(parents=True, exist_ok=True)
-    payloads: dict[str, dict[str, Any]] = {}
+    payloads = load_existing_suite_payloads(output_root)
     print(f"{args.model}: feature ablation suite has {len(experiment_names)} experiments per architecture")
     phases = (PHASE_BASELINE, PHASE_ADD_ONE, PHASE_PAIRWISE)
     for phase in phases:
@@ -876,9 +909,10 @@ def write_suite_reports(output_root: Path, payloads: dict[str, dict[str, Any]]) 
 def parser_epilog() -> str:
     return """Examples:
   python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --full-suite --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset <custom_dataset.pt> --baseline-run-dir <paper14_run_dir> --full-suite --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset <custom_dataset.pt> --control14-run-dir <control14_dir> --full-suite --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --combinatorial-suite 1 2 3 4 5 --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset datasets/600_dual_gnn.pt --control14-run-dir runs/control14 --combinatorial-suite 2 --output-root runs/003_ablations_gatv2 --generate-splits --seeds 11 22 33 --exclude_case ao_dihedral ao_density
 """
 
 
@@ -891,7 +925,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--model', choices=ABLATION_MODELS, default='graphsage')
     parser.add_argument('--gnn-dataset', default=None, help='GNN custom superset dual dataset')
     parser.add_argument('--meshcnn-dataset', default=None, help='MeshCNN custom superset dataset')
-    parser.add_argument('--baseline-run-dir', default=None, help='existing paper14 run dir to reuse for control14')
+    parser.add_argument('--control14-run-dir', default=None, help='existing control14 experiment/run dir to reuse')
+    parser.add_argument('--baseline-run-dir', default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         '--experiments',
         nargs='+',
@@ -911,6 +946,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--keep-going', action='store_true', help='continue after failed seed runs')
     parser.add_argument(
+        '--exclude-case',
+        '--exclude_case',
+        dest='exclude_cases',
+        nargs='+',
+        choices=tuple(ALL_EXPERIMENT_SPECS),
+        default=[],
+        help='skip named experiment cases while preserving existing reports',
+    )
+    parser.add_argument(
         '--full-suite',
         action='store_true',
         help='run the default 16-experiment Pairwise Feature Search suite',
@@ -929,6 +973,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.experiments = combinatorial_suite(args.combinatorial_suite)
     elif args.full_suite:
         args.experiments = list(FULL_ABLATION_SUITE)
+    if args.exclude_cases:
+        excluded = set(args.exclude_cases)
+        args.experiments = [name for name in args.experiments if name not in excluded]
     args.seed = args.seeds[0]
     if args.splits_dir is None:
         args.splits_dir = str(Path(args.output_root) / 'splits')

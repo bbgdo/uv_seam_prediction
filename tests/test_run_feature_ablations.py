@@ -23,6 +23,7 @@ from tools.run_feature_ablations import (
     build_train_command,
     experiment_feature_selection,
     generate_split_files,
+    load_existing_suite_payloads,
     paired_delta_summary,
     parse_args,
     run_experiment,
@@ -254,6 +255,20 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         ])
         self.assertEqual(pairwise_args.experiments, list(FULL_ABLATION_SUITE))
 
+        excluded_args = parse_args([
+            '--model', 'gatv2',
+            '--gnn-dataset', 'custom.pt',
+            '--combinatorial-suite', '2',
+            '--exclude_case', 'ao_dihedral', 'ao_density',
+            '--control14-run-dir', 'runs/control14',
+            '--output-root', 'out',
+        ])
+        self.assertIn('control14', excluded_args.experiments)
+        self.assertNotIn('ao_dihedral', excluded_args.experiments)
+        self.assertNotIn('ao_density', excluded_args.experiments)
+        self.assertIn('sdf_dihedral', excluded_args.experiments)
+        self.assertEqual(excluded_args.control14_run_dir, 'runs/control14')
+
         with self.assertRaises(SystemExit):
             parse_args([
                 '--model', 'graphsage',
@@ -455,6 +470,24 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(delta['val_best']['win_count_f1'], 1)
         self.assertIn('threshold_0_5_diagnostics', delta)
 
+    def test_existing_suite_payloads_are_loaded_from_experiment_summaries(self):
+        with TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            existing_payload = {
+                'experiment': 'ao_dihedral',
+                'model': 'gatv2',
+                'runs': [],
+                'aggregates': {},
+            }
+            experiment_dir = output_root / 'experiments' / 'ao_dihedral'
+            experiment_dir.mkdir(parents=True)
+            (experiment_dir / 'summary.json').write_text(json.dumps(existing_payload))
+
+            payloads = load_existing_suite_payloads(output_root)
+
+        self.assertIn('ao_dihedral', payloads)
+        self.assertEqual(payloads['ao_dihedral']['model'], 'gatv2')
+
     def test_subprocess_command_construction(self):
         custom_command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_dihedral'],
@@ -607,6 +640,40 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
         self.assertEqual(records[0]['split_json'], str(explicit_split))
         self.assertEqual(commands[0][commands[0].index('--split-json-in') + 1], str(explicit_split))
+
+    def test_run_experiment_reuses_control14_seed_dirs(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control_dir = root / 'control14'
+            splits_dir = root / 'splits'
+            splits_dir.mkdir()
+            for seed in [11, 22]:
+                run_dir = control_dir / f'seed_{seed}'
+                run_dir.mkdir(parents=True)
+                (run_dir / 'summary.json').write_text(json.dumps(_summary(seed, 0.1, 0.5, 0.2, 0.4)))
+                split_path_for_seed(splits_dir, seed).write_text('{}')
+
+            def fake_runner(command, check):
+                raise AssertionError('control14 should be reused, not trained')
+
+            args = Namespace(
+                gnn_dataset='custom.pt',
+                meshcnn_dataset=None,
+                output_root=str(root / 'out'),
+                splits_dir=str(splits_dir),
+                control14_run_dir=str(control_dir),
+                seeds=[11, 22],
+                resolution_tag='all',
+                epochs=1,
+                keep_going=False,
+                model='gatv2',
+            )
+
+            records = run_experiment(args=args, spec=EXPERIMENT_SPECS['control14'], runner=fake_runner)
+
+        self.assertEqual([record['status'] for record in records], ['completed', 'completed'])
+        self.assertEqual(records[0]['run_dir'], str(control_dir / 'seed_11'))
+        self.assertEqual(records[1]['run_dir'], str(control_dir / 'seed_22'))
 
     def test_run_experiment_records_subprocess_failure(self):
         with TemporaryDirectory() as tmp:
