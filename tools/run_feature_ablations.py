@@ -217,6 +217,16 @@ def _require_uniform_metadata(dataset: list, *, role: str, key: str, expected: s
         raise ValueError(f"{role} dataset {key} must be {expected!r} ({detail})")
 
 
+def _require_uniform_metadata_choice(dataset: list, *, role: str, key: str, expected: tuple[str, ...]) -> None:
+    observed, missing = _unique_string_values(dataset, key)
+    if missing or len(observed) != 1 or observed[0] not in expected:
+        detail = f"observed={observed or 'none'}"
+        if missing:
+            detail += f", missing={missing}"
+        choices = ', '.join(repr(value) for value in expected)
+        raise ValueError(f"{role} dataset {key} must be one of: {choices} ({detail})")
+
+
 def _coerce_feature_names(value) -> list[str] | None:
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
@@ -227,7 +237,7 @@ def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str])
     if not dataset:
         raise ValueError('custom dataset is empty after resolution filtering')
     _require_uniform_metadata(dataset, role='custom', key='feature_group', expected='custom')
-    _require_uniform_metadata(dataset, role='custom', key='endpoint_order', expected='random')
+    _require_uniform_metadata_choice(dataset, role='custom', key='endpoint_order', expected=('fixed', 'random'))
 
     requested_features: list[str] = []
     for name in experiment_names:
@@ -259,7 +269,7 @@ def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str])
 def validate_meshcnn_dataset_metadata(dataset: list, experiment_names: list[str]) -> None:
     if not dataset:
         raise ValueError('MeshCNN dataset is empty after resolution filtering')
-    _require_uniform_metadata(dataset, role='MeshCNN', key='endpoint_order', expected='random')
+    _require_uniform_metadata_choice(dataset, role='MeshCNN', key='endpoint_order', expected=('fixed', 'random'))
 
     label_sources, missing_label_source = _unique_string_values(dataset, 'label_source')
     if label_sources and label_sources != ['exact_obj']:

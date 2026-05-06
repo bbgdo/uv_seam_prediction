@@ -177,9 +177,11 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
     def test_endpoint_order_safety_checks(self):
         validate_custom_dataset_metadata([_custom_data()], ['ao_dihedral'])
+        validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
+        validate_meshcnn_dataset_metadata([_meshcnn_sample(endpoint_order='fixed')], ['control14'])
 
-        with self.assertRaisesRegex(ValueError, "endpoint_order must be 'random'"):
-            validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
+        with self.assertRaisesRegex(ValueError, "endpoint_order must be one of"):
+            validate_custom_dataset_metadata([_custom_data(endpoint_order='invalid')], ['control14'])
 
     def test_failure_on_missing_features_or_wrong_dataset_metadata(self):
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
