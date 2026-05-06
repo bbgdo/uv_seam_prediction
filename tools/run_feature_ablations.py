@@ -725,58 +725,62 @@ def run_experiment(
     records: list[dict[str, Any]] = []
     model = getattr(args, 'model', 'graphsage')
     experiment_dir = Path(args.output_root) / model / 'experiments' / spec.name
-    seed = DEFAULT_SEED
-    split_json = split_json_for_seed(args, seed)
-    external_baseline = (
-        resolve_baseline_run_dir(getattr(args, 'baseline_run_dir', None), seed)
-        if spec.name == BASELINE_EXPERIMENT
-        else None
-    )
-    if external_baseline is not None:
+    for seed in args.seeds:
+        split_json = split_json_for_seed(args, seed)
+        external_baseline = (
+            resolve_baseline_run_dir(getattr(args, 'baseline_run_dir', None), seed)
+            if spec.name == BASELINE_EXPERIMENT
+            else None
+        )
+        if external_baseline is not None:
+            print(
+                f"{model}: {spec.phase}/{spec.name} seed {seed} "
+                f"features={experiment_feature_label(spec)} using baseline run {external_baseline}"
+            )
+            records.append(collect_success_record(seed, external_baseline, split_json))
+            continue
+
+        run_dir = experiment_dir / f'seed_{seed}'
+        run_dir.mkdir(parents=True, exist_ok=True)
+        command = build_train_command(
+            spec=spec,
+            dataset=get_gnn_dataset_arg(args),
+            meshcnn_dataset=getattr(args, 'meshcnn_dataset', None),
+            run_dir=run_dir,
+            split_json=split_json,
+            seed=seed,
+            resolution_tag=args.resolution_tag,
+            epochs=args.epochs,
+            patience=getattr(args, 'patience', DEFAULT_PATIENCE),
+            model=model,
+        )
+
         print(
             f"{model}: {spec.phase}/{spec.name} seed {seed} "
-            f"features={experiment_feature_label(spec)} using baseline run {external_baseline}"
+            f"features={experiment_feature_label(spec)} run_dir={run_dir}"
         )
-        records.append(collect_success_record(seed, external_baseline, split_json))
-        return records
-
-    run_dir = experiment_dir / f'seed_{seed}'
-    run_dir.mkdir(parents=True, exist_ok=True)
-    command = build_train_command(
-        spec=spec,
-        dataset=get_gnn_dataset_arg(args),
-        meshcnn_dataset=getattr(args, 'meshcnn_dataset', None),
-        run_dir=run_dir,
-        split_json=split_json,
-        seed=seed,
-        resolution_tag=args.resolution_tag,
-        epochs=args.epochs,
-        patience=getattr(args, 'patience', DEFAULT_PATIENCE),
-        model=model,
-    )
-
-    print(
-        f"{model}: {spec.phase}/{spec.name} seed {seed} "
-        f"features={experiment_feature_label(spec)} run_dir={run_dir}"
-    )
-    try:
-        runner(command, check=True)
-        records.append(collect_success_record(seed, run_dir, split_json))
-    except subprocess.CalledProcessError as exc:
-        records.append(failure_record(seed, run_dir, split_json, f'train runner exited with {exc.returncode}'))
-    except Exception as exc:
-        records.append(failure_record(seed, run_dir, split_json, str(exc)))
+        try:
+            runner(command, check=True)
+            records.append(collect_success_record(seed, run_dir, split_json))
+        except subprocess.CalledProcessError as exc:
+            records.append(failure_record(seed, run_dir, split_json, f'train runner exited with {exc.returncode}'))
+            if not args.keep_going:
+                return records
+        except Exception as exc:
+            records.append(failure_record(seed, run_dir, split_json, str(exc)))
+            if not args.keep_going:
+                return records
     return records
 
 
 def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict[str, Any]]:
-    args.seed = DEFAULT_SEED
-    args.seeds = [DEFAULT_SEED]
     experiment_names = list(args.experiments)
     validate_experiment_selection(experiment_names, args.model)
     datasets = validate_dataset_roles(args, experiment_names)
     splits_dir = Path(args.splits_dir)
 
+    if getattr(args, 'split_json_in', None) and len(args.seeds) != 1:
+        raise ValueError('--split-json-in can only be used with exactly one seed')
     if getattr(args, 'split_json_in', None) and (args.generate_splits or args.only_generate_splits):
         raise ValueError('--split-json-in cannot be combined with split generation flags')
 
@@ -894,7 +898,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=tuple(ALL_EXPERIMENT_SPECS),
         default=list(FULL_ABLATION_SUITE),
     )
-    parser.add_argument('--seeds', type=int, nargs='*', default=None, help='deprecated; always uses seed 33')
+    parser.add_argument('--seeds', type=int, nargs='+', default=[DEFAULT_SEED], help='training/split seeds')
     parser.add_argument('--resolution-tag', default='all')
     parser.add_argument('--epochs', type=int, default=DEFAULT_EPOCHS)
     parser.add_argument('--patience', type=int, default=DEFAULT_PATIENCE)
@@ -925,8 +929,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.experiments = combinatorial_suite(args.combinatorial_suite)
     elif args.full_suite:
         args.experiments = list(FULL_ABLATION_SUITE)
-    args.seed = DEFAULT_SEED
-    args.seeds = [DEFAULT_SEED]
+    args.seed = args.seeds[0]
     if args.splits_dir is None:
         args.splits_dir = str(Path(args.output_root) / 'splits')
     return args

@@ -221,6 +221,14 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(args.patience, 15)
         self.assertIsNone(args.split_json_in)
 
+        seeded_args = parse_args([
+            '--model', 'graphsage',
+            '--gnn-dataset', 'custom.pt',
+            '--seeds', '11', '22', '33',
+            '--output-root', 'out',
+        ])
+        self.assertEqual(seeded_args.seeds, [11, 22, 33])
+
         split_args = parse_args([
             '--model', 'graphsage',
             '--gnn-dataset', 'custom.pt',
@@ -311,7 +319,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 payloads = run_suite(args)
 
             self.assertEqual(payloads, {})
-            self.assertTrue(split_path_for_seed(Path(args.splits_dir), 33).exists())
+            self.assertTrue(split_path_for_seed(Path(args.splits_dir), 3).exists())
 
     def test_split_generation_and_validation_reuse_dataset_agnostic_files(self):
         with TemporaryDirectory() as tmp:
@@ -532,7 +540,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             root = Path(tmp)
             splits_dir = root / 'splits'
             splits_dir.mkdir()
-            for seed in [33]:
+            for seed in [1, 2]:
                 split_path_for_seed(splits_dir, seed).write_text('{}')
 
             commands = []
@@ -559,13 +567,14 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             spec = EXPERIMENT_SPECS['control14']
             records = run_experiment(args=args, spec=spec, runner=fake_runner)
 
-        self.assertEqual([record['status'] for record in records], ['completed'])
+        self.assertEqual([record['status'] for record in records], ['completed', 'completed'])
         self.assertEqual(
             records[0]['run_dir'],
-            str(root / 'gatv2' / 'experiments' / 'control14' / 'seed_33'),
+            str(root / 'gatv2' / 'experiments' / 'control14' / 'seed_1'),
         )
-        self.assertEqual(commands[0][commands[0].index('--split-json-in') + 1], str(splits_dir / 'seed_33.json'))
+        self.assertEqual(commands[0][commands[0].index('--split-json-in') + 1], str(splits_dir / 'seed_1.json'))
         self.assertEqual(commands[0][commands[0].index('--model') + 1], 'gatv2')
+        self.assertEqual(commands[1][commands[1].index('--split-json-in') + 1], str(splits_dir / 'seed_2.json'))
         self.assertNotIn('--split-json-out', commands[0])
 
     def test_run_experiment_uses_explicit_split_json_in(self):
@@ -653,7 +662,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(records[0]['status'], 'completed')
         self.assertEqual(
             records[0]['run_dir'],
-            str(root / 'sparsemeshcnn' / 'experiments' / 'control14' / 'seed_33'),
+            str(root / 'sparsemeshcnn' / 'experiments' / 'control14' / 'seed_1'),
         )
         self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), commands[0])
 
