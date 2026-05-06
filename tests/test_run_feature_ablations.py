@@ -485,15 +485,18 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertIn('--enable-ao', custom_command)
         self.assertIn('--enable-dihedral', custom_command)
         self.assertNotIn('--enable-symmetry', custom_command)
-        self.assertEqual(custom_command[custom_command.index('--preset') + 1], 'paper')
+        self.assertNotIn('--preset', custom_command)
+        self.assertNotIn('--pos-weight', custom_command)
 
         self.assertEqual(gatv2_command[gatv2_command.index('--model') + 1], 'gatv2')
         self.assertNotIn('--preset', gatv2_command)
+        self.assertNotIn('--pos-weight', gatv2_command)
 
         self.assertEqual(sdf_command[sdf_command.index('--model') + 1], 'gatv2')
         self.assertIn('--enable-density', sdf_command)
         self.assertIn('--enable-thickness-sdf', sdf_command)
         self.assertNotIn('--enable-ao', sdf_command)
+        self.assertNotIn('--pos-weight', sdf_command)
 
     def test_meshcnn_subprocess_command_construction(self):
         command = build_train_command(
@@ -521,7 +524,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertNotIn('--enable-dihedral', command)
         self.assertNotIn('--enable-symmetry', command)
         self.assertNotIn('--enable-density', command)
-        for forbidden in ('--model', '--preset'):
+        for forbidden in ('--model', '--preset', '--pos-weight'):
             self.assertNotIn(forbidden, command)
 
     def test_run_experiment_reuses_existing_split_jsons(self):

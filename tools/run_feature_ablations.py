@@ -471,8 +471,6 @@ def build_train_command(
         '--feature-group',
         spec.feature_group,
     ]
-    if model == 'graphsage':
-        command += ['--preset', 'paper']
     if spec.enable_ao:
         command.append('--enable-ao')
     if spec.enable_dihedral:
@@ -701,6 +699,23 @@ def resolve_baseline_run_dir(path: str | None, seed: int) -> Path | None:
     raise ValueError(f'baseline run dir for seed {seed} must contain summary.json: {root}')
 
 
+def experiment_feature_label(spec: ExperimentSpec) -> str:
+    if spec.name == BASELINE_EXPERIMENT:
+        return 'paper14'
+    enabled = []
+    if spec.enable_ao:
+        enabled.append('ao')
+    if spec.enable_thickness_sdf:
+        enabled.append('sdf')
+    if spec.enable_dihedral:
+        enabled.append('dihedral')
+    if spec.enable_symmetry:
+        enabled.append('symmetry')
+    if spec.enable_density:
+        enabled.append('density')
+    return 'paper14+' + '+'.join(enabled)
+
+
 def run_experiment(
     *,
     args: argparse.Namespace,
@@ -718,7 +733,10 @@ def run_experiment(
         else None
     )
     if external_baseline is not None:
-        print(f"{spec.name} seed {seed}: using baseline run {external_baseline}")
+        print(
+            f"{model}: {spec.phase}/{spec.name} seed {seed} "
+            f"features={experiment_feature_label(spec)} using baseline run {external_baseline}"
+        )
         records.append(collect_success_record(seed, external_baseline, split_json))
         return records
 
@@ -737,7 +755,10 @@ def run_experiment(
         model=model,
     )
 
-    print(f"{spec.name} seed {seed}: running")
+    print(
+        f"{model}: {spec.phase}/{spec.name} seed {seed} "
+        f"features={experiment_feature_label(spec)} run_dir={run_dir}"
+    )
     try:
         runner(command, check=True)
         records.append(collect_success_record(seed, run_dir, split_json))
