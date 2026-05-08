@@ -24,7 +24,7 @@ class BaselineConfig:
     scheduler_factor: float = 0.5
     scheduler_patience: int = 5
     heads: int = 8
-    aggr: str = 'mean'
+    aggr: str = 'lstm'
     skip_connections: str = 'hidden'
 
 
