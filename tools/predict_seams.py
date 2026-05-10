@@ -251,9 +251,9 @@ def _normalize_model_name(value: Any) -> str | None:
     if normalized == 'graphsage' or 'graphsage' in normalized:
         return 'graphsage'
     if normalized in ('meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn'):
-        return 'meshcnn_full'
+        return 'sparsemeshcnn'
     if 'meshcnn_full' in normalized or ('meshcnn' in normalized and 'sparse' in normalized):
-        return 'meshcnn_full'
+        return 'sparsemeshcnn'
     return None
 
 
@@ -414,7 +414,7 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, Any]:
-    if model_name == 'meshcnn_full':
+    if model_name == 'sparsemeshcnn':
         model_config = _coerce_dict(config.get('model_config')) or {}
         feature_metadata = _coerce_dict(config.get('feature_metadata')) or {}
         sources = (model_config, config, feature_metadata)
@@ -732,14 +732,8 @@ def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch
     return extract_state_dict(load_weights_payload(weights_path, device))
 
 
-def _public_model_type(model_type: str) -> str:
-    if model_type == 'meshcnn_full':
-        return 'sparsemeshcnn'
-    return model_type
-
-
 def build_prediction_model(model_type: str, model_kwargs: dict[str, Any]) -> torch.nn.Module:
-    if model_type == 'meshcnn_full':
+    if model_type == 'sparsemeshcnn':
         return MeshCNNSegmenter(**model_kwargs)
     definition = get_baseline(model_type)
     return definition.model_class(**model_kwargs)
@@ -877,8 +871,7 @@ def build_output_payload(
         'mesh_path': str(mesh_path.resolve()),
         'output_json': str(output_json.resolve()),
         'model': {
-            'model_type': _public_model_type(model_type),
-            **({'internal_model_type': model_type} if model_type != _public_model_type(model_type) else {}),
+            'model_type': model_type,
             'weights_path': str(weights_path.resolve()),
             'config_path': str(config_path.resolve()),
             'summary_path': str(summary_path.resolve()),
@@ -1029,7 +1022,7 @@ def run_prediction(args: argparse.Namespace) -> dict[str, Any]:
     model.eval()
 
     with torch.no_grad():
-        if model_type == 'meshcnn_full':
+        if model_type == 'sparsemeshcnn':
             sample = build_meshcnn_inference_sample(
                 mesh_path=mesh_path,
                 feature_mesh=feature_mesh,

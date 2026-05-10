@@ -88,6 +88,6 @@ Notes:
 - Canonical feature groups are `paper14` and `custom`.
 - `paper14` is the base bundle. `custom` means `paper14` plus at least one optional feature toggle.
 - `control14` is an ablation experiment name, not a third feature group.
-- SparseMeshCNN is the public model name. `models/meshcnn_full/` is the internal module path only.
+- SparseMeshCNN is the maintained model name in CLIs, configs, and outputs. `models/meshcnn_full/` is only the module path.
 
 See [preprocessing/README.md](preprocessing/README.md) and [models/README.md](models/README.md) for the maintained command surface.

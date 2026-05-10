@@ -79,8 +79,8 @@ class PredictSeamsTests(unittest.TestCase):
             self.assertEqual(predict_seams.resolve_model_type('graphsage', {'model': 'gatv2'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {'model_name': 'DualGraphSAGE'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {}, weights), 'gatv2')
-            self.assertEqual(predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, weights), 'meshcnn_full')
-            self.assertEqual(predict_seams.resolve_model_type('sparsemeshcnn', {}, weights), 'meshcnn_full')
+            self.assertEqual(predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, weights), 'sparsemeshcnn')
+            self.assertEqual(predict_seams.resolve_model_type('sparsemeshcnn', {}, weights), 'sparsemeshcnn')
 
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
@@ -402,10 +402,10 @@ class OutputPayloadModelTypeTests(unittest.TestCase):
             write_all_edges=False,
         )
 
-    def test_sparsemeshcnn_internal_type_maps_to_public_name_in_output(self):
-        payload = self._base_payload('meshcnn_full')
+    def test_sparsemeshcnn_model_type_stays_public_in_output(self):
+        payload = self._base_payload('sparsemeshcnn')
         self.assertEqual(payload['model']['model_type'], 'sparsemeshcnn')
-        self.assertEqual(payload['model']['internal_model_type'], 'meshcnn_full')
+        self.assertNotIn('internal_model_type', payload['model'])
 
     def test_gatv2_model_type_unchanged_in_output(self):
         payload = self._base_payload('gatv2')

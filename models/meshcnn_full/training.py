@@ -116,7 +116,6 @@ def build_training_config_payload(
 ) -> dict[str, Any]:
     return {
         'model': 'sparsemeshcnn',
-        'internal_model_type': 'meshcnn_full',
         'dataset': str(dataset_path),
         'model_config': model_config,
         'feature_metadata': feature_metadata,

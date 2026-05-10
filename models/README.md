@@ -25,7 +25,7 @@ Run SparseMeshCNN ablations through `tools/run_feature_ablations.py`.
 python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
 ```
 
-The public model name in the ablation runner is `sparsemeshcnn`. `models/meshcnn_full/` is the internal path.
+The maintained model name is `sparsemeshcnn`. `models/meshcnn_full/` is only the internal module path.
 
 ## Ablation Protocol
 

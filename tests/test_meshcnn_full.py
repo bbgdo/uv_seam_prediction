@@ -327,7 +327,7 @@ class TrainConfigMetadataTests(unittest.TestCase):
 
             config = json.loads((run_dir / 'config.json').read_text(encoding='utf-8'))
             self.assertEqual(config['model'], 'sparsemeshcnn')
-            self.assertEqual(config['internal_model_type'], 'meshcnn_full')
+            self.assertNotIn('internal_model_type', config)
 
 
 class BuilderDefaultOutputTests(unittest.TestCase):
