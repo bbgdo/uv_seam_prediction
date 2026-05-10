@@ -5,8 +5,7 @@ import torch
 from models.meshcnn_full.sparse_model import SparseMeshUNetSegmenter
 
 
-class MeshCNNSegmenter(SparseMeshUNetSegmenter):
-    pass
+MeshCNNSegmenter = SparseMeshUNetSegmenter
 
 
 def build_model_from_checkpoint_payload(payload: dict, device: torch.device | str) -> MeshCNNSegmenter:

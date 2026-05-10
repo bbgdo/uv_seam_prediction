@@ -10,7 +10,7 @@ import torch
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.obj_parser import parse_obj
 from preprocessing.build_gnn_dataset import (
-    _build_feature_mesh_from_topology,
+    build_feature_mesh_from_topology,
     build_dual_data,
     main as build_dataset_main,
     manifest_path_for_dataset,
@@ -130,7 +130,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
     def test_feature_mesh_from_canonical_topology_preserves_edge_order(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             topology, _ = _topology_and_truth(path)
-            feature_mesh = _build_feature_mesh_from_topology(topology)
+            feature_mesh = build_feature_mesh_from_topology(topology)
 
             _, unique_edges, _ = compute_edge_features(
                 feature_mesh,

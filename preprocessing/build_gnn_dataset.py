@@ -374,9 +374,6 @@ def build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
-_build_feature_mesh_from_topology = build_feature_mesh_from_topology
-
-
 def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:
     expected_edges = np.asarray(canonical_edges, dtype=np.int64).reshape((-1, 2))
     if np.array_equal(unique_edges, expected_edges):

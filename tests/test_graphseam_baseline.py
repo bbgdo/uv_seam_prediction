@@ -1,6 +1,5 @@
 import json
 import unittest
-from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 

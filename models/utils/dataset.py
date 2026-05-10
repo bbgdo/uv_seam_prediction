@@ -377,12 +377,6 @@ def split_dataset(
     return train, val, test, split_info
 
 
-def load_dual_dataset(path: str | Path) -> list[Data]:
-    from preprocessing.build_gnn_dataset import build_dual_data
-    original = load_dataset(path)
-    return [build_dual_data(d) for d in original]
-
-
 def compute_pos_weight(dataset: list[Data], max_weight: float = 100.0) -> torch.Tensor:
     total_seam = sum(d.y.sum().item() for d in dataset)
     total_nonseam = sum((d.y == 0).sum().item() for d in dataset)

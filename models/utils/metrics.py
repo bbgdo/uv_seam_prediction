@@ -6,12 +6,6 @@ from models.common.config import DEFAULT_THRESHOLD_VALUES
 RECALL_TPR_LABEL = 'rec(tpr)'
 
 
-def metric_display_label(metric: str) -> str:
-    if metric == 'recall':
-        return RECALL_TPR_LABEL
-    return metric
-
-
 @torch.no_grad()
 def threshold_sweep(
     logits: torch.Tensor,

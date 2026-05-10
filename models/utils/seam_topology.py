@@ -746,20 +746,6 @@ def _validated_positive_int(name: str, value: int) -> int:
     return int(value)
 
 
-def _validate_extra_anchor_vertices(view: SeamGraphView, extra_anchor_vertices: frozenset[int] | None) -> None:
-    if extra_anchor_vertices is None:
-        return
-    for vertex in extra_anchor_vertices:
-        if isinstance(vertex, bool) or not isinstance(vertex, (int, np.integer)):
-            raise ValueError('extra_anchor_vertices must contain integer vertex indices')
-        vertex_index = int(vertex)
-        if vertex_index < 0 or vertex_index >= view.vertex_count:
-            raise ValueError(
-                f'extra_anchor_vertices contains out-of-range vertex index {vertex_index} '
-                f'for vertex_count={view.vertex_count}'
-            )
-
-
 def _sorted_components(graph: nx.Graph) -> list[frozenset[int]]:
     components = [
         frozenset(int(vertex) for vertex in component)
@@ -1560,42 +1546,6 @@ def compute_endpoint_bridging(
         component_reports=component_reports,
         **counters,
     )
-
-
-def diagnose_bridging_application(
-    view: SeamGraphView,
-    skel_result: SkeletonResult,
-    *,
-    r_bridge: int = 6,
-    max_bridge_edges: int | None = None,
-    max_bridge_euclidean_ratio: float = 0.03,
-    max_endpoint_candidates: int = 4,
-    require_mutual_pairing: bool = True,
-    min_loop_size_to_allow: int = 8,
-    tangent_alignment_weight: float = 0.25,
-    max_debug_candidates: int = 64,
-    anchor_boundary: bool = True,
-    extra_anchor_vertices: frozenset[int] | None = None,
-    topology: Any = None,
-    diagnostics_threshold: float = 0.5,
-) -> tuple[BridgingResult, SeamMaskDiagnostics, SeamMaskDiagnostics]:
-    before_probs = np.where(skel_result.skeleton_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
-    before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
-    del anchor_boundary, extra_anchor_vertices, topology
-    bridging = compute_endpoint_bridging(
-        view,
-        skel_result,
-        max_bridge_edges=r_bridge if max_bridge_edges is None else max_bridge_edges,
-        max_bridge_euclidean_ratio=max_bridge_euclidean_ratio,
-        max_endpoint_candidates=max_endpoint_candidates,
-        require_mutual_pairing=require_mutual_pairing,
-        min_loop_size_to_allow=min_loop_size_to_allow,
-        tangent_alignment_weight=tangent_alignment_weight,
-        max_debug_candidates=max_debug_candidates,
-    )
-    after_probs = np.where(bridging.bridged_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
-    after = compute_seam_mask_diagnostics(view, after_probs, threshold=diagnostics_threshold)
-    return bridging, before, after
 
 
 def compute_spur_pruning(

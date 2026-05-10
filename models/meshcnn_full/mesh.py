@@ -386,28 +386,6 @@ class MutableMeshTopology:
         )
 
 
-def make_collapse_history(
-    records: list[EdgeCollapseRecord],
-    old_edges: np.ndarray,
-    new_edges: np.ndarray,
-    device: torch.device | str,
-) -> CollapseHistory:
-    if records:
-        old_to_new = records[-1].old_to_new
-        collapsed = [record.edge_key for record in records]
-    else:
-        old_to_new = np.arange(len(old_edges), dtype=np.int64)
-        collapsed = []
-    return CollapseHistory(
-        old_edges=torch.as_tensor(old_edges, dtype=torch.long, device=device),
-        new_edges=torch.as_tensor(new_edges, dtype=torch.long, device=device),
-        old_to_new=torch.as_tensor(old_to_new, dtype=torch.long, device=device),
-        collapsed_edges=collapsed,
-        old_edge_count=int(len(old_edges)),
-        new_edge_count=int(len(new_edges)),
-    )
-
-
 def load_meshcnn_dataset(path: str | Path) -> list[MeshCNNSample]:
     dataset = torch.load(Path(path), map_location='cpu', weights_only=False)
     if not isinstance(dataset, list) or not dataset:
