@@ -5,8 +5,12 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+try:
+    from tools._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from preprocessing.obj_parser import ObjCorner, ObjMesh, parse_obj
 from preprocessing.seam_labels import SeamTruth, extract_seam_truth

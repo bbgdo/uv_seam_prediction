@@ -1,9 +1,12 @@
 import argparse
-import sys
 from datetime import datetime
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from tools._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from models.baselines.registry import SUPPORTED_BASELINES, get_baseline
 from models.common.baseline_train import train_baseline

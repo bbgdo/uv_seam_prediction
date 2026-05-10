@@ -11,7 +11,12 @@ from typing import Any
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from tools._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from models.baselines.registry import get_baseline  # noqa: E402
 from models.common.baseline_train import (  # noqa: E402

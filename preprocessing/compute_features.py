@@ -13,23 +13,20 @@ warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
 try:
-    from preprocessing.topology import canonical_edge_key
-    from preprocessing.feature_registry import (
-        ALL_ATOMIC_FEATURE_NAMES,
-        DENSITY_CONFIG,
-        PAPER14_FEATURE_NAMES,
-        ResolvedFeatureSet,
-        resolve_feature_selection,
-    )
-except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/compute_features.py`
-    from topology import canonical_edge_key
-    from feature_registry import (
-        ALL_ATOMIC_FEATURE_NAMES,
-        DENSITY_CONFIG,
-        PAPER14_FEATURE_NAMES,
-        ResolvedFeatureSet,
-        resolve_feature_selection,
-    )
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
+from preprocessing.topology import canonical_edge_key
+from preprocessing.feature_registry import (
+    ALL_ATOMIC_FEATURE_NAMES,
+    DENSITY_CONFIG,
+    PAPER14_FEATURE_NAMES,
+    ResolvedFeatureSet,
+    resolve_feature_selection,
+)
 
 ENDPOINT_ORDERS = ('fixed', 'random')
 

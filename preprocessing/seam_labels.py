@@ -5,23 +5,20 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from preprocessing.obj_parser import ObjCorner, parse_obj
-    from preprocessing.topology import (
-        CanonicalTopology,
-        EdgeKey,
-        FaceEdgeOccurrence,
-        WeldConfig,
-        build_topology,
-    )
-except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/seam_labels.py`
-    from obj_parser import ObjCorner, parse_obj
-    from topology import (
-        CanonicalTopology,
-        EdgeKey,
-        FaceEdgeOccurrence,
-        WeldConfig,
-        build_topology,
-    )
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
+from preprocessing.obj_parser import ObjCorner, parse_obj
+from preprocessing.topology import (
+    CanonicalTopology,
+    EdgeKey,
+    FaceEdgeOccurrence,
+    WeldConfig,
+    build_topology,
+)
 
 
 class SeamLabelError(ValueError):

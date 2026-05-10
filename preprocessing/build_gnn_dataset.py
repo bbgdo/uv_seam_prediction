@@ -10,21 +10,19 @@ from torch_geometric.data import Data
 warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
-    from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
-    from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-    from preprocessing.obj_parser import parse_obj
-    from preprocessing.seam_labels import extract_seam_truth
-    from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
-except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
-    from canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
-    from compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
-    from feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-    from obj_parser import parse_obj
-    from seam_labels import extract_seam_truth
-    from topology import WeldConfig, build_topology, canonical_edge_key
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
+from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
+from preprocessing.obj_parser import parse_obj
+from preprocessing.seam_labels import extract_seam_truth
+from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
 
 EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
 

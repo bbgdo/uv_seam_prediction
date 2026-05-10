@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,12 @@ import torch
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
 from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order

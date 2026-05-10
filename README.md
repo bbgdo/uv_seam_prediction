@@ -53,8 +53,8 @@ python tools/run_training.py --model sparsemeshcnn --dataset datasets/sparsemesh
 Run GraphSAGE and GATv2 feature ablations on the custom superset dataset:
 
 ```bash
-python tools/run_feature_ablations.py --model graphsage --custom-dataset datasets/gnn_custom.pt --experiments control14 ao density ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root runs/ablations/graphsage --generate-splits
-python tools/run_feature_ablations.py --model gatv2 --custom-dataset datasets/gnn_custom.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/gatv2 --generate-splits
+python tools/run_feature_ablations.py --model graphsage --gnn-dataset datasets/gnn_custom.pt --experiments control14 ao density ao_dihedral_symmetry_density_sdf --seeds 7 11 19 --epochs 100 --output-root runs/ablations/graphsage --generate-splits
+python tools/run_feature_ablations.py --model gatv2 --gnn-dataset datasets/gnn_custom.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/gatv2 --generate-splits
 ```
 
 Run SparseMeshCNN ablations on the single custom superset dataset:
