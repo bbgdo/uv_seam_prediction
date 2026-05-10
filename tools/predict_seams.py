@@ -85,7 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         '--postprocess-r-bridge', type=int, default=6,
-        help=argparse.SUPPRESS
+        help='Default mesh-edge bridge radius for endpoint bridging (Stage B).'
     )
     parser.add_argument(
         '--postprocess-max-bridge-edges', type=int, default=None,

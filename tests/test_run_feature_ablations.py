@@ -266,6 +266,14 @@ class FeatureAblationRunnerTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             parse_args([
+                '--model', 'graphsage',
+                '--gnn-dataset', 'custom.pt',
+                '--baseline-run-dir', 'runs/control14',
+                '--output-root', 'out',
+            ])
+
+        with self.assertRaises(SystemExit):
+            parse_args([
                 '--model', 'meshcnn_full',
                 '--meshcnn-dataset', 'meshcnn.pt',
                 '--output-root', 'out',

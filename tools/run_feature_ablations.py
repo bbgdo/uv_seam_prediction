@@ -135,10 +135,6 @@ def get_gnn_dataset_arg(args: argparse.Namespace) -> str | None:
     return getattr(args, 'gnn_dataset', None)
 
 
-def get_control14_run_dir_arg(args: argparse.Namespace) -> str | None:
-    return getattr(args, 'control14_run_dir', None) or getattr(args, 'baseline_run_dir', None)
-
-
 def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
     if model not in ABLATION_MODELS:
         choices = ', '.join(ABLATION_MODELS)
@@ -741,7 +737,7 @@ def run_experiment(
         split_json = split_json_for_seed(args, seed)
         external_baseline = (
             resolve_control14_run_dir(
-                get_control14_run_dir_arg(args),
+                getattr(args, 'control14_run_dir', None),
                 model,
                 seed,
                 allow_direct_run=len(args.seeds) == 1,
@@ -928,7 +924,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--gnn-dataset', default=None, help='GNN custom superset dual dataset')
     parser.add_argument('--meshcnn-dataset', default=None, help='MeshCNN custom superset dataset')
     parser.add_argument('--control14-run-dir', default=None, help='existing control14 experiment/run dir to reuse')
-    parser.add_argument('--baseline-run-dir', default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         '--experiments',
         nargs='+',
