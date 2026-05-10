@@ -714,7 +714,6 @@ def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch
 
 
 def _public_model_type(model_type: str) -> str:
-    """Map internal dispatch type to the public model name for output metadata."""
     if model_type == 'meshcnn_full':
         return 'sparsemeshcnn'
     return model_type

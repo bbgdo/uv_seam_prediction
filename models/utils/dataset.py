@@ -341,7 +341,6 @@ def split_dataset(
     dataset_path: str | Path | None = None,
     resolution_tag: str | None = None,
 ) -> tuple[list[Data], list[Data], list[Data], dict]:
-    """Grouped by mesh family to prevent augmentation and resolution leakage."""
     groups = _group_dataset(dataset, filename_config)
 
     if split_json_in:

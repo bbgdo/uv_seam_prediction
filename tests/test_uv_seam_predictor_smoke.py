@@ -1873,8 +1873,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertNotIn('--feature-bundle', args)
 
     def test_cli_emits_new_topology_flags_only(self):
-        """Regression guard: the addon must emit only the new
-        topology-pipeline flags, never the deleted v1 flags."""
         inference = load_module(
             'uvsp_inference_topology_smoke',
             ADDON_DIR / 'inference.py',
@@ -1894,7 +1892,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
             postprocess_anchor_boundary=True,
         )
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
-        # New flags present:
         for flag in (
             '--postprocess-tau-low',
             '--postprocess-d-max',
@@ -1905,7 +1902,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         self.assertIn('--postprocess-anchor-boundary', args)
         for suffix in ('tau-high', 'epsilon'):
             self.assertNotIn('--postprocess-' + suffix, args)
-        # Deleted v1 flags absent:
         for suffix in (
             'seam_threshold',
             'alpha_cost',
@@ -1924,12 +1920,9 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         ):
             flag = '--postprocess-' + suffix.replace('_', '-')
             self.assertNotIn(flag, args, f'deleted v1 flag {flag} reappeared')
-        # Removed routing flag absent:
         self.assertNotIn('--postprocess-version', args)
 
     def test_cli_emits_no_form_when_anchor_boundary_disabled(self):
-        """BooleanOptionalAction handling: must emit
-        --no-postprocess-anchor-boundary when the toggle is False."""
         inference = load_module(
             'uvsp_inference_anchor_off_smoke',
             ADDON_DIR / 'inference.py',
@@ -1951,8 +1944,6 @@ class UVSeamPredictorSmokeTests(unittest.TestCase):
         args = inference.build_cli_args(prefs, settings, 'mesh.obj', 'out.json')
         self.assertIn('--no-postprocess-anchor-boundary', args)
         self.assertNotIn('--postprocess-anchor-boundary', args)
-        # The True/False string must NEVER appear as a positional
-        # argument to argparse:
         self.assertNotIn('True', args)
         self.assertNotIn('False', args)
 

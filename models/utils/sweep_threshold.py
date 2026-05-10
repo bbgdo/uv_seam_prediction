@@ -1,11 +1,3 @@
-"""Sweep sigmoid threshold on a trained model to find optimal F1.
-
-Usage:
-    python models/utils/sweep_threshold.py \
-        --dataset dataset_dual.pt \
-        --weights runs/dual_graphsage_.../best_model.pth \
-        --model-type graphsage
-"""
 import argparse
 import sys
 from pathlib import Path

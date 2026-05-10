@@ -18,7 +18,6 @@ def threshold_sweep(
     labels: torch.Tensor,
     thresholds: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
 ) -> dict:
-    """Evaluate F1 across thresholds, return best threshold and full results."""
     results = []
     for t in thresholds:
         m = edge_f1(logits, labels, threshold=t)
@@ -48,7 +47,7 @@ def binary_metrics_from_probs(probs: torch.Tensor, labels: torch.Tensor, thresho
     f1 = 2 * precision * recall / max(precision + recall, 1e-8)
     accuracy = (tp + tn) / max(len(gt), 1)
     fpr = fp / max(fp + tn, 1)
-    tpr = recall  # same as recall
+    tpr = recall
 
     return {
         'f1': f1, 'precision': precision, 'recall': recall, 'accuracy': accuracy,

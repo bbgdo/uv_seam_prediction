@@ -54,12 +54,6 @@ def aligned_uv_signature(
     occurrence: FaceEdgeOccurrence,
     topology: CanonicalTopology,
 ) -> UVSignature:
-    """Return UV ids aligned to the canonical geometric edge endpoint order.
-
-    OBJ UV indices are the seam truth because UV splits are represented by
-    different face-corner `vt` ids. Missing UVs use a deterministic sentinel so
-    no tolerance or coordinate comparison is hidden in this path.
-    """
     gid_a = topology.original_vertex_to_canonical_gid[occurrence.corner_a.vertex_index]
     gid_b = topology.original_vertex_to_canonical_gid[occurrence.corner_b.vertex_index]
     local_key = (gid_a, gid_b)

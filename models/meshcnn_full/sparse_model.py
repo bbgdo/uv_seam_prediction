@@ -18,7 +18,6 @@ def _channel_schedule(hidden_channels: int, levels: int) -> list[int]:
 
 
 class SparseMeshUNetSegmenter(nn.Module):
-    """Sparse static-topology U-Net for original-edge binary logits."""
 
     def __init__(
         self,

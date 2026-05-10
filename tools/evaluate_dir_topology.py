@@ -15,7 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Import the module so tests can patch attributes on it cleanly.
 import tools.predict_seams as predict_seams  # noqa: E402
 
 
@@ -113,12 +112,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_base_args(script_args: argparse.Namespace) -> argparse.Namespace:
-    """
-    Construct a base argparse Namespace suitable for predict_seams.run_prediction.
-
-    The returned Namespace has placeholder mesh_path and output_json that
-    MUST be overridden per mesh.
-    """
     argv = [
         '--mesh-path',
         '/__placeholder__.obj',

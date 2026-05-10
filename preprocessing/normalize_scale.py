@@ -73,7 +73,6 @@ def normalize_objects():
     if diagonal == 0:
         return False
 
-    # center + scale to unit diagonal
     for obj in selected_objects:
         obj.location -= center
 
@@ -81,7 +80,6 @@ def normalize_objects():
     for obj in selected_objects:
         obj.scale *= scale_factor
 
-    # bake transforms so .obj has raw coords in [-0.5, 0.5]
     bpy.context.view_layer.objects.active = selected_objects[0]
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 

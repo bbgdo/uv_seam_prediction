@@ -713,9 +713,6 @@ def build_skeleton_subgraph(
     view: SeamGraphView,
     skeleton_edge_mask: np.ndarray,
 ) -> nx.Graph:
-    """
-    Return the graph induced by skeleton edges, preserving canonical edge metadata.
-    """
     if skeleton_edge_mask.shape != (view.edge_count,):
         raise ValueError(
             f'skeleton_edge_mask must have shape ({view.edge_count},), got {skeleton_edge_mask.shape}'
@@ -1154,9 +1151,6 @@ def compute_endpoint_bridging(
     tangent_alignment_weight: float = 0.25,
     max_debug_candidates: int = 64,
 ) -> BridgingResult:
-    """
-    Deterministically bridge degree-1 skeleton endpoints over the original mesh graph.
-    """
     max_bridge_edges_value = _validated_nonnegative_int('max_bridge_edges', max_bridge_edges)
     max_endpoint_candidates_value = _validated_positive_int('max_endpoint_candidates', max_endpoint_candidates)
     min_loop_size_value = _validated_positive_int('min_loop_size_to_allow', min_loop_size_to_allow)
@@ -1585,9 +1579,6 @@ def diagnose_bridging_application(
     topology: Any = None,
     diagnostics_threshold: float = 0.5,
 ) -> tuple[BridgingResult, SeamMaskDiagnostics, SeamMaskDiagnostics]:
-    """
-    Run Stage B and compare the before/after masks topologically.
-    """
     before_probs = np.where(skel_result.skeleton_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
     del anchor_boundary, extra_anchor_vertices, topology
@@ -1772,9 +1763,6 @@ def diagnose_pruning_application(
     topology: Any = None,
     diagnostics_threshold: float = 0.5,
 ) -> tuple[PruningResult, SeamMaskDiagnostics, SeamMaskDiagnostics]:
-    """
-    Run Stage C and compare the before/after masks topologically.
-    """
     before_probs = np.where(bridging_result.bridged_edge_mask, 1.0, 0.0).astype(np.float64, copy=False)
     before = compute_seam_mask_diagnostics(view, before_probs, threshold=diagnostics_threshold)
     pruning = compute_spur_pruning(
@@ -1809,13 +1797,6 @@ def apply_topology_pipeline(
     extra_anchor_vertices: frozenset[int] | None = None,
     topology: Any = None,
 ) -> TopologyPipelineResult:
-    """
-    Run the full Stage A -> Stage B -> Stage C topology pipeline and
-    return the final mask + per-stage telemetry.
-
-    Parameters mirror the per-stage functions exactly; the same anchor
-    configuration is forwarded to each stage.
-    """
     if anchor_boundary and topology is None:
         raise ValueError('anchor_boundary=True requires a non-None topology argument')
 
@@ -1870,9 +1851,6 @@ def apply_topology_pipeline(
 def topology_pipeline_result_to_json_dict(
     result: TopologyPipelineResult,
 ) -> dict:
-    """
-    Convert a TopologyPipelineResult to a JSON-serializable dict.
-    """
     skeleton = result.skeleton_result
     bridging = result.bridging_result
     pruning = result.pruning_result

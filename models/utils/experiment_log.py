@@ -6,7 +6,6 @@ import torch
 from torch_geometric.data import Data
 
 
-# plot style constants
 COLOR_TRAIN = '#2196F3'
 COLOR_VAL = '#FF5722'
 COLOR_TEST = '#4CAF50'

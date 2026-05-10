@@ -312,7 +312,6 @@ class MutableMeshTopology:
         keep, remove = (a, b) if a < b else (b, a)
         removed_face_set = set(incident)
 
-        # Guard collapse validation to the finite local star affected by the merge.
         affected_faces = set(self.vertex_to_faces.get(keep, ()))
         affected_faces.update(self.vertex_to_faces.get(remove, ()))
         if len(affected_faces) > len(self.faces) or not removed_face_set.issubset(affected_faces):

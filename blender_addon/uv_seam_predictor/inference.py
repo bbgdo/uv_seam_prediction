@@ -55,7 +55,6 @@ def build_cli_args(prefs, settings, obj_path, json_path):
         '--postprocess-l-min',
         str(settings.postprocess_l_min),
     ])
-    # BooleanOptionalAction: emit a single token, no separate value.
     if settings.postprocess_anchor_boundary:
         args.append('--postprocess-anchor-boundary')
     else:

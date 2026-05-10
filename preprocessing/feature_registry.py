@@ -144,7 +144,6 @@ def resolve_feature_selection(
     enable_density: bool = False,
     enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
-    """Resolve a named bundle plus explicit extras into ordered feature names."""
     group_name = _normalize_group_name(feature_group)
     signed_dihedral = enable_dihedral if enable_signed_dihedral is None else enable_signed_dihedral
     requested_flags = FeatureFlags(

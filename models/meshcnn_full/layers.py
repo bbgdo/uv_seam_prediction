@@ -6,7 +6,6 @@ import torch.nn.functional as F
 
 
 class MeshConv(nn.Module):
-    """MeshCNN-style 4-neighbor edge convolution with symmetric face handling."""
 
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()

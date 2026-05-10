@@ -41,12 +41,6 @@ def _safe_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 
 
 def build_edge_topology(mesh: trimesh.Trimesh) -> tuple[np.ndarray, dict]:
-    """Build sorted unique edges and edge-to-faces mapping.
-
-    Returns:
-        unique_edges: [E, 2] int64, sorted with vi < vj
-        edge_to_faces: dict mapping (vi, vj) -> [face_idx, ...]
-    """
     faces = np.asarray(mesh.faces, dtype=np.int64)
     edge_to_faces: dict[tuple, list] = {}
 
@@ -67,8 +61,6 @@ def compute_signed_dihedral(
     unique_edges: np.ndarray,
     edge_to_faces: dict,
 ) -> np.ndarray:
-    """Feature 1: signed dihedral angle, normalized to [-1, 1].
-    Positive = convex, negative = concave. Boundary edges = 0."""
     face_normals = mesh.face_normals
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     angles = np.zeros(len(unique_edges), dtype=np.float32)
@@ -94,23 +86,16 @@ def compute_signed_dihedral(
         else:
             angles[idx] = float(unsigned_angle)
 
-    # normalize to [-1, 1]
     return (angles / np.pi).astype(np.float32)
 
 
 
 
 def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
-    """Discrete Gaussian curvature via angle defect method (vectorized).
-
-    K_v = 2pi - sum(incident face angles at v) for interior vertices
-    K_v = pi - sum(incident face angles at v) for boundary vertices
-    """
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(vertices)
 
-    # vectorized angle computation: one entry per (face, corner)
     v0, v1, v2 = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
 
     def _corner_angles(ea: np.ndarray, eb: np.ndarray) -> np.ndarray:
@@ -119,9 +104,9 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
         cos_a = np.einsum('ij,ij->i', ea, eb) / (na * nb + 1e-12)
         return np.arccos(np.clip(cos_a, -1.0, 1.0))
 
-    angles_v0 = _corner_angles(v1 - v0, v2 - v0)  # [F]
-    angles_v1 = _corner_angles(v0 - v1, v2 - v1)  # [F]
-    angles_v2 = _corner_angles(v0 - v2, v1 - v2)  # [F]
+    angles_v0 = _corner_angles(v1 - v0, v2 - v0)
+    angles_v1 = _corner_angles(v0 - v1, v2 - v1)
+    angles_v2 = _corner_angles(v0 - v2, v1 - v2)
 
     angle_sum = (
         np.bincount(faces[:, 0], weights=angles_v0, minlength=n_verts)
@@ -129,12 +114,11 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
         + np.bincount(faces[:, 2], weights=angles_v2, minlength=n_verts)
     )
 
-    # detect boundary vertices via edge face count
     edges_all = np.concatenate([
         faces[:, [0, 1]],
         faces[:, [1, 2]],
         faces[:, [2, 0]],
-    ], axis=0)  # [3F, 2]
+    ], axis=0)
     edges_sorted = np.sort(edges_all, axis=1)
     encoded = edges_sorted[:, 0] * n_verts + edges_sorted[:, 1]
     unique_enc, counts = np.unique(encoded, return_counts=True)
@@ -160,13 +144,11 @@ def _zscore_clip_normalize(values: np.ndarray, clip_range: float = 3.0) -> np.nd
 
 
 def _generate_hemisphere_samples(n_samples: int, rng: np.random.Generator) -> np.ndarray:
-    """Generate uniformly distributed points on the upper hemisphere (z >= 0)."""
-    # Fibonacci hemisphere sampling for deterministic, well-distributed points
     samples = np.zeros((n_samples, 3), dtype=np.float64)
     golden_ratio = (1 + np.sqrt(5)) / 2
 
     for i in range(n_samples):
-        theta = np.arccos(1 - (i + 0.5) / n_samples)  # [0, pi/2] for hemisphere
+        theta = np.arccos(1 - (i + 0.5) / n_samples)
         phi = 2 * np.pi * i / golden_ratio
         samples[i] = [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
 
@@ -174,7 +156,6 @@ def _generate_hemisphere_samples(n_samples: int, rng: np.random.Generator) -> np
 
 
 def _rotation_matrix_to_align(from_vec: np.ndarray, to_vec: np.ndarray) -> np.ndarray:
-    """Rotation matrix that aligns from_vec to to_vec using Rodrigues' formula."""
     from_vec = from_vec / (np.linalg.norm(from_vec) + 1e-12)
     to_vec = to_vec / (np.linalg.norm(to_vec) + 1e-12)
 
@@ -184,7 +165,6 @@ def _rotation_matrix_to_align(from_vec: np.ndarray, to_vec: np.ndarray) -> np.nd
     if dot > 0.9999:
         return np.eye(3)
     if dot < -0.9999:
-        # 180-degree rotation — find perpendicular axis
         perp = np.array([1, 0, 0]) if abs(from_vec[0]) < 0.9 else np.array([0, 1, 0])
         perp = perp - np.dot(perp, from_vec) * from_vec
         perp /= np.linalg.norm(perp) + 1e-12
@@ -227,11 +207,6 @@ def _orthonormal_basis(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
-    """Ambient occlusion per vertex via raycasting.
-
-    AO = fraction of hemisphere rays that hit other geometry.
-    Raises RuntimeError if no working ray intersector is available.
-    """
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
     n_verts = len(vertices)
@@ -243,7 +218,6 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
     hemisphere_samples = _generate_hemisphere_samples(n_rays, rng)
     z_axis = np.array([0.0, 0.0, 1.0])
 
-    # try ray intersection — validate with a test ray before committing
     intersector = None
     for loader in [
         lambda: __import__('trimesh.ray.ray_pyembree', fromlist=['RayMeshIntersector']).RayMeshIntersector,
@@ -252,7 +226,6 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
         try:
             cls = loader()
             candidate = cls(mesh)
-            # smoke test: single ray to verify dependencies are working
             test_origin = vertices[0:1] + normals[0:1] * epsilon
             test_dir = normals[0:1]
             candidate.intersects_any(test_origin, test_dir)
@@ -304,7 +277,6 @@ def compute_edge_sdf(
     unique_edges: np.ndarray,
     edge_to_faces: dict,
 ) -> np.ndarray:
-    """Inward ray thickness proxy per edge, normalized by bounding-box diagonal."""
     n_edges = len(unique_edges)
     if n_edges == 0:
         return np.zeros(0, dtype=np.float32)
@@ -425,8 +397,6 @@ def compute_edge_sdf(
 def detect_symmetry_axis(
     mesh: trimesh.Trimesh, threshold_ratio: float = 0.8
 ) -> int | None:
-    """Detect dominant mirror symmetry axis (0=X, 1=Y, 2=Z).
-    Returns None if no axis has a match ratio above threshold."""
     if cKDTree is None:
         return None
 
@@ -457,7 +427,6 @@ def detect_symmetry_axis(
 def compute_symmetry_distance(
     mesh: trimesh.Trimesh, unique_edges: np.ndarray
 ) -> np.ndarray:
-    """Feature 10: distance from edge midpoint to nearest symmetry plane, normalized to [0, 1]."""
     axis = detect_symmetry_axis(mesh)
     if axis is None:
         return np.full(len(unique_edges), 0.5, dtype=np.float32)
@@ -470,7 +439,6 @@ def compute_symmetry_distance(
 
 
 def compute_vertex_support_area(mesh: trimesh.Trimesh) -> np.ndarray:
-    """One-third incident face area per vertex on the feature mesh topology."""
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(mesh.vertices)
     support = np.zeros(n_verts, dtype=np.float64)
@@ -504,7 +472,6 @@ def _two_ring_neighborhood(adjacency: list[set[int]], vertex_idx: int) -> set[in
 
 
 def compute_vertex_relative_density(mesh: trimesh.Trimesh, eps: float = DENSITY_CONFIG['eps']) -> np.ndarray:
-    """Topology-local relative density from 2-ring median scale versus local scale."""
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(mesh.vertices)
     support_area = compute_vertex_support_area(mesh)
@@ -523,7 +490,6 @@ def _normalize_vertex_relative_density(
     vertex_density: np.ndarray,
     density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
 ) -> np.ndarray:
-    """Bound raw log-ratio density before edge-level aggregation."""
     clipped = np.clip(vertex_density, -density_log_clip, density_log_clip)
     return (clipped / density_log_clip).astype(np.float32)
 
@@ -667,7 +633,6 @@ def compute_edge_features(
     enable_density: bool = False,
     enable_thickness_sdf: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Backward-compatible wrapper for resolved edge feature computation."""
     group = feature_group if feature_group is not None else feature_preset
     selection = resolve_feature_selection(
         group,

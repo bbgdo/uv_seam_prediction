@@ -10,7 +10,6 @@ from torch_geometric.data import Data
 warnings.filterwarnings('ignore', category=UserWarning)
 import trimesh  # noqa: E402
 
-# support running both as `python preprocessing/build_gnn_dataset.py` and as a module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
@@ -78,7 +77,6 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
         return seam_map
 
     uv = mesh.visual.uv
-    # trimesh may give UV per face-corner instead of per merged vertex when the mesh has UV splits
     uv_is_per_face_corner = (len(uv) == len(faces) * 3)
 
     def get_uv_for_vertex_in_face(face_idx: int, geom_vertex: int) -> np.ndarray:
@@ -230,7 +228,6 @@ def _saved_graph_feature_dim(data: Data) -> int:
 
 
 def validate_saved_gnn_feature_metadata(dataset: list[Data]) -> None:
-    """Ensure saved PyG graphs expose edge features as data.x with matching names."""
     for graph_idx, data in enumerate(dataset):
         feature_names = list(getattr(data, 'feature_names', []))
         x = getattr(data, 'x', None)
@@ -260,7 +257,6 @@ def _extract_unique_edges(data: Data) -> np.ndarray:
 
 
 def build_dual_edge_index_from_unique_edges(unique_edges: np.ndarray) -> torch.LongTensor:
-    """Build line-graph adjacency for canonical undirected mesh edges."""
     unique_edges = np.asarray(unique_edges, dtype=np.int64)
     if unique_edges.ndim != 2 or unique_edges.shape[1] != 2:
         raise ValueError(f'unique_edges must have shape [E, 2], got {unique_edges.shape}')
@@ -285,7 +281,6 @@ def build_dual_edge_index_from_unique_edges(unique_edges: np.ndarray) -> torch.L
 
 
 def build_dual_data(original_data: Data) -> Data:
-    """Convert an original-graph mesh sample into its dual-graph PyG view."""
     unique_edges = _extract_unique_edges(original_data)
     dual_edges = build_dual_edge_index_from_unique_edges(unique_edges)
     num_unique = int(unique_edges.shape[0])
@@ -461,7 +456,6 @@ def process_mesh(
     endpoint_order: str = 'auto',
     endpoint_seed: int = 42,
 ) -> Data | None:
-    """Load an .obj file and return a PyG Data object with exact OBJ seam labels."""
     file_path = Path(file_path)
     feature_selection = resolve_feature_cli_selection(
         feature_preset=feature_preset,

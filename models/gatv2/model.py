@@ -5,11 +5,6 @@ from torch_geometric.nn import GATv2Conv
 
 
 class DualGATv2(nn.Module):
-    """GATv2 for edge classification via dual graph node classification.
-
-    On the dual graph, each node = original edge, each edge = face adjacency.
-    Output is one seam logit per dual node / original edge.
-    """
 
     def __init__(
         self,

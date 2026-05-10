@@ -6,7 +6,7 @@ from models.meshcnn_full.sparse_model import SparseMeshUNetSegmenter
 
 
 class MeshCNNSegmenter(SparseMeshUNetSegmenter):
-    """Drop-in sparse replacement for the previous MeshCNN-full segmenter."""
+    pass
 
 
 def build_model_from_checkpoint_payload(payload: dict, device: torch.device | str) -> MeshCNNSegmenter:

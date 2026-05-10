@@ -54,11 +54,6 @@ def _row_normalize_sparse(matrix: torch.Tensor, eps: float = 1e-8) -> torch.Tens
 
 
 def build_slot_matrices(unique_edges: torch.Tensor, faces: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Build four MeshCNN-style sparse neighbor-slot selectors.
-
-    Rows and columns are aligned with ``unique_edges``. Missing boundary slots are
-    represented by zero rows in the corresponding sparse selector.
-    """
     if faces.ndim != 2 or faces.shape[1] != 3:
         raise ValueError(f'expected triangular faces with shape [F, 3], got {tuple(faces.shape)}')
     if unique_edges.ndim != 2 or unique_edges.shape[1] != 2:
@@ -260,7 +255,6 @@ def _iter_tensors(value: Any, path: str = 'cache') -> Iterator[tuple[str, torch.
 
 
 def _drop_legacy_device_cache_entries(cache: dict[str, Any]) -> None:
-    # Older runs stored CUDA sparse tensors under these keys on the sample-owned cache.
     cache.pop('_device_caches', None)
     cache.pop('device_caches', None)
 

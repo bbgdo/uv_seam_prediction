@@ -5,11 +5,6 @@ from torch_geometric.utils import sort_edge_index
 
 
 class DualGraphSAGE(nn.Module):
-    """GraphSAGE for edge classification via dual graph node classification.
-
-    Same dual-graph approach as DualGATv2 but with SAGEConv aggregation.
-    Enables fair architecture comparison on identical data.
-    """
 
     def __init__(
         self,

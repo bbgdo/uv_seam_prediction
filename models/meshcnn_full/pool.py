@@ -37,7 +37,6 @@ def _flatten_lineage(lineage: list[list[int]]) -> list[int]:
 
 
 class MeshPool(nn.Module):
-    """Learned edge-collapse pooling over a mutable triangle topology."""
 
     def __init__(
         self,

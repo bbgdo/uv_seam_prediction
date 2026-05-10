@@ -13,7 +13,6 @@ def _norm(channels: int, norm: str | None) -> nn.Module:
 
 
 class SparseMeshConv(nn.Module):
-    """MeshCNN symmetric edge patch implemented with sparse slot selectors."""
 
     def __init__(
         self,
@@ -73,7 +72,6 @@ class SparseMeshConvBlock(nn.Module):
 
 
 class SparseMeshPool(nn.Module):
-    """Learned gated averaging over a fixed sparse fine-to-coarse assignment."""
 
     def __init__(self, channels: int, eps: float = 1e-8):
         super().__init__()

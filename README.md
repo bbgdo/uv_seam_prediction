@@ -4,7 +4,7 @@ PyTorch tooling for UV seam prediction on triangulated OBJ meshes.
 
 Maintained entrypoints:
 
-- `preprocessing/obj_to_dataset_graph.py` for GraphSAGE/GATv2 PyG datasets
+- `preprocessing/build_gnn_dataset.py` for GraphSAGE/GATv2 PyG datasets
 - `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN datasets
 - `tools/run_baseline.py` for single GraphSAGE/GATv2 training
 - `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations

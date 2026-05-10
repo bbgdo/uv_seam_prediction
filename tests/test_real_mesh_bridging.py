@@ -1,15 +1,3 @@
-"""
-Real-mesh bridging integration tests with operator-provided
-Truth Data on test_triang.obj and man_test_002.obj.
-
-The Truth Data was hand-curated by the Operator from visual
-inspection of failing/succeeding bridge cases. These tests are
-the ground truth for what 'correct bridging' means on real
-meshes. They MUST pass under any future bridging algorithm
-change; failure to pass requires a mathematical justification
-(see ESCAPE HATCH in the implementing patch).
-"""
-
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,13 +52,6 @@ def _build_honest_fixture(
     p_gap: float = 0.01,
     p_false: float = 0.001,
 ) -> _HonestProbabilityFixture:
-    """
-    Build an honest real-mesh fixture with three probability buckets.
-
-    true_skeleton_edges get high probabilities, gap_edges get probabilities
-    well below tau_low, and every other mesh edge stays below tau_low. The gap
-    edges are expected to be absent from Stage A and added by Stage B.
-    """
     if p_skeleton < 0.70:
         raise ValueError(f'p_skeleton must be >= 0.70, got {p_skeleton}')
     if p_gap >= 0.30:
@@ -153,9 +134,6 @@ class RealMeshBridgingTests(unittest.TestCase):
         )
 
     def test_fixture_actually_creates_a_gap(self):
-        """
-        Sentinel: the honest fixture must not put gap edges into Stage A.
-        """
         fixture = _build_honest_fixture(
             mesh_name='test_triang.obj',
             true_skeleton_edges=[(1007, 1006), (1988, 2518)],

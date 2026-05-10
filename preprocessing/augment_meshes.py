@@ -146,7 +146,6 @@ def augment_obj_file(
     shift_strength: float,
     rng: np.random.Generator,
 ) -> list[Path]:
-    """Directly manipulates OBJ text to guarantee UV preservation."""
     text = obj_path.read_text(encoding='utf-8', errors='replace')
     lines, vertex_indices, face_indices = _parse_obj_lines(text)
 
