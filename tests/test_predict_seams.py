@@ -482,6 +482,13 @@ class ThicknessSdfFlagTests(unittest.TestCase):
                 {},
             )
 
+    def test_infer_feature_bundle_rejects_legacy_paper_alias(self):
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'could not be inferred'):
+            predict_seams.infer_feature_bundle(
+                {'feature_group': 'paper'},
+                {},
+            )
+
     def test_validate_feature_metadata_rejects_legacy_custom_base_metadata(self):
         selection = predict_seams.resolve_feature_selection('paper14')
         config = {

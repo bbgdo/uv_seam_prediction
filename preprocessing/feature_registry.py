@@ -101,8 +101,6 @@ FEATURE_GROUPS = {
 
 def _normalize_group_name(name: str | None) -> str:
     group = name or 'paper14'
-    if group == 'paper':
-        group = 'paper14'
     if group not in FEATURE_GROUPS:
         raise ValueError(f"unknown feature group {group!r}; choose one of {FEATURE_GROUP_NAMES}")
     return group

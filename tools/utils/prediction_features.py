@@ -88,7 +88,7 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
         group = normalize_metadata_name(metadata.get('feature_group'))
         flags = infer_feature_flags(metadata)
 
-        if group in ('paper14', 'paper'):
+        if group == 'paper14':
             selection = resolve_feature_selection('paper14')
             return selection, resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
         if group == 'custom':
