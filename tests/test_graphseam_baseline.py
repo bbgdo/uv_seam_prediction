@@ -70,10 +70,10 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(gatv2_args.heads, 4)
         self.assertEqual(gatv2_args.lr, 3e-4)
 
-    def test_feature_preset_shapes(self):
+    def test_feature_group_shapes(self):
         mesh = _tiny_mesh()
 
-        paper, edges, _ = compute_edge_features(mesh, feature_preset='paper14', endpoint_order='random')
+        paper, edges, _ = compute_edge_features(mesh, feature_group='paper14', endpoint_order='random')
 
         self.assertEqual(paper.shape, (len(edges), 14))
 
@@ -84,8 +84,8 @@ class GraphSeamBaselineTests(unittest.TestCase):
             resolve_feature_selection('extended18')
 
     def test_feature_registry_scaffold_lists_existing_baselines(self):
-        self.assertEqual(get_feature_group('paper14').feature_preset, 'paper14')
-        self.assertEqual(get_feature_group('custom').feature_preset, 'custom')
+        self.assertEqual(get_feature_group('paper14').name, 'paper14')
+        self.assertEqual(get_feature_group('custom').name, 'custom')
 
     def test_feature_registry_resolves_custom_toggles(self):
         paper = resolve_feature_selection('paper14')
@@ -151,7 +151,6 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
         data.feature_names = list(resolve_feature_selection('custom', enable_density=True).feature_names)
         data.feature_group = 'custom'
-        data.feature_preset = 'custom'
         data.feature_flags = {'ao': False, 'signed_dihedral': False, 'symmetry': False, 'density': True}
         data.density_config = {'neighborhood': '2-ring'}
 
@@ -190,7 +189,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
     def test_runtime_feature_selection_accepts_paper14_shape(self):
         requested = resolve_feature_selection('paper14')
         data = Data(x=torch.zeros(2, 14))
-        data.feature_preset = 'paper14'
+        data.feature_group = 'paper14'
 
         apply_runtime_feature_selection([data], requested)
 

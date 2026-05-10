@@ -32,7 +32,6 @@ Serialized datasets and manifests should expose the same maintained metadata sur
 
 - `feature_names`
 - `feature_group`
-- `feature_preset`
 - `feature_flags`
 - `endpoint_order`
 - `label_source='exact_obj'`

@@ -41,7 +41,6 @@
     "density_diff",
     "thickness_sdf"
   ],
-  "feature_preset": "custom",
   "label_source": "exact_obj",
   "mesh_count": 626,
   "meshes": [

@@ -606,7 +606,6 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
         },
         'feature_selection': {
             'feature_group': selection.feature_group,
-            'feature_preset': selection.feature_preset,
             'feature_flags': selection.feature_flags.as_dict(),
             'feature_names': list(selection.feature_names),
         },

@@ -40,7 +40,6 @@
     "density_diff",
     "thickness_sdf"
   ],
-  "feature_preset": "custom",
   "graph_format": "dual_edge_graph",
   "label_source": "exact_obj",
   "mesh_count": 626,

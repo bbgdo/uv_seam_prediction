@@ -88,7 +88,6 @@ def selected_feature_metadata(
     manifest = manifest or {}
     return {
         'feature_group': selection.feature_group,
-        'feature_preset': selection.feature_preset,
         'feature_names': list(selection.feature_names),
         'feature_flags': selection.feature_flags.as_dict(),
         'feature_dim': len(selection.feature_names),
@@ -126,7 +125,6 @@ def slice_meshcnn_dataset_features(
             index=selected_indices,
         ).contiguous()
         sample.feature_group = selection.feature_group
-        sample.feature_preset = selection.feature_preset
         sample.feature_names = list(selection.feature_names)
         sample.feature_flags = selection.feature_flags.as_dict()
         sample.density_config = dict(selection.density_config) if selection.density_config else None

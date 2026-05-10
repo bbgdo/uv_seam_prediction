@@ -478,7 +478,7 @@ class ThicknessSdfFlagTests(unittest.TestCase):
     def test_infer_feature_bundle_rejects_custom_metadata_without_optional_flags(self):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'does not specify any optional custom feature flags'):
             predict_seams.infer_feature_bundle(
-                {'feature_group': 'custom', 'feature_preset': 'custom', 'feature_flags': {}},
+                {'feature_group': 'custom', 'feature_flags': {}},
                 {},
             )
 
@@ -486,7 +486,6 @@ class ThicknessSdfFlagTests(unittest.TestCase):
         selection = predict_seams.resolve_feature_selection('paper14')
         config = {
             'feature_group': 'custom',
-            'feature_preset': 'custom',
             'feature_flags': {},
             'feature_names': list(selection.feature_names),
             'in_dim': selection.feature_count,

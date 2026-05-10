@@ -21,7 +21,6 @@ class MeshCNNSample:
     boundary_mask: torch.Tensor
     file_path: str
     feature_group: str
-    feature_preset: str
     feature_names: list[str]
     feature_flags: dict[str, bool]
     endpoint_order: str

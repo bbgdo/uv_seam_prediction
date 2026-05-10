@@ -20,7 +20,7 @@ from preprocessing.topology import WeldConfig, build_topology
 
 def _feature_selection_from_metadata(metadata: dict[str, Any]):
     flags = dict(metadata.get('feature_flags') or {})
-    group = metadata.get('feature_group') or metadata.get('feature_preset') or 'paper14'
+    group = metadata.get('feature_group') or 'paper14'
     selection = resolve_feature_selection(
         group,
         enable_ao=bool(flags.get('ao', False)),

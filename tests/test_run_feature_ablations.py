@@ -49,7 +49,6 @@ def _custom_data(feature_names: list[str] | None = None, endpoint_order: str = '
     data = Data(x=torch.zeros(2, len(names)))
     data.file_path = 'mesh_0.obj'
     data.feature_group = 'custom'
-    data.feature_preset = 'custom'
     data.feature_names = names
     data.endpoint_order = endpoint_order
     return data
@@ -78,7 +77,6 @@ def _meshcnn_sample(feature_names: list[str] | None = None, endpoint_order: str 
         boundary_mask=torch.ones(edge_count, dtype=torch.bool),
         file_path='mesh_0.obj',
         feature_group='custom',
-        feature_preset='custom',
         feature_names=names,
         feature_flags={},
         endpoint_order=endpoint_order,

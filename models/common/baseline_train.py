@@ -24,7 +24,6 @@ from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatur
 
 METADATA_KEYS = (
     'label_source',
-    'feature_preset',
     'feature_group',
     'feature_names',
     'feature_flags',
@@ -118,8 +117,8 @@ def _coerce_feature_names(value) -> list[str] | None:
 
 
 def _feature_names_from_saved_paper14_dim(data: Data) -> list[str] | None:
-    preset = _metadata_value(data, 'feature_preset')
-    if preset == 'paper14' and getattr(data.x, 'shape', (0, 0))[1] == 14:
+    group = _metadata_value(data, 'feature_group')
+    if group == 'paper14' and getattr(data.x, 'shape', (0, 0))[1] == 14:
         return list(PAPER14_FEATURE_NAMES)
     return None
 
@@ -159,7 +158,6 @@ def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeat
         data.x = data.x[:, indices]
         data.feature_names = requested
         data.feature_group = selection.feature_group
-        data.feature_preset = selection.feature_preset
         data.feature_flags = selection.feature_flags.as_dict()
         if selection.density_config is not None:
             data.density_config = dict(selection.density_config)

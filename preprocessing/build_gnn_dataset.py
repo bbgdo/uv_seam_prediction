@@ -13,14 +13,14 @@ import trimesh  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
-    from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
+    from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
     from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
     from preprocessing.obj_parser import parse_obj
     from preprocessing.seam_labels import extract_seam_truth
     from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
 except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
     from canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
-    from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
+    from compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
     from feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
     from obj_parser import parse_obj
     from seam_labels import extract_seam_truth
@@ -30,8 +30,7 @@ EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
 
 
 def resolve_feature_cli_selection(
-    feature_preset: str = 'paper14',
-    feature_group: str | None = None,
+    feature_group: str = 'paper14',
     enable_ao: bool = False,
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
@@ -39,7 +38,7 @@ def resolve_feature_cli_selection(
     enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
     return resolve_feature_selection(
-        feature_group or feature_preset,
+        feature_group,
         enable_ao=enable_ao,
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,
@@ -143,7 +142,6 @@ def _build_graph_data(
     data.faces = torch.from_numpy(faces)
     data.file_path = str(file_path)
     data.label_source = label_source
-    data.feature_preset = feature_selection.feature_preset
     data.feature_group = feature_selection.feature_group
     data.feature_names = feature_names
     data.feature_flags = feature_selection.feature_flags.as_dict()
@@ -290,8 +288,7 @@ def build_dual_data(original_data: Data) -> Data:
     )
     dual.file_path = getattr(original_data, 'file_path', '')
     dual.label_source = getattr(original_data, 'label_source', '')
-    dual.feature_preset = getattr(original_data, 'feature_preset', '')
-    dual.feature_group = getattr(original_data, 'feature_group', getattr(original_data, 'feature_preset', ''))
+    dual.feature_group = getattr(original_data, 'feature_group', '')
     dual.feature_names = list(getattr(original_data, 'feature_names', []))
     dual.feature_flags = dict(getattr(original_data, 'feature_flags', {}))
     if hasattr(original_data, 'density_config'):
@@ -310,8 +307,7 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
         raise ValueError('cannot build a manifest for an empty dataset')
 
     label_source = getattr(dataset[0], 'label_source', '')
-    feature_preset = getattr(dataset[0], 'feature_preset', '')
-    feature_group = getattr(dataset[0], 'feature_group', feature_preset)
+    feature_group = getattr(dataset[0], 'feature_group', '')
     feature_names = list(getattr(dataset[0], 'feature_names', []))
     feature_flags = dict(getattr(dataset[0], 'feature_flags', {}))
     density_config = getattr(dataset[0], 'density_config', None)
@@ -330,7 +326,6 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
     manifest = {
         'dataset_path': str(dataset_path),
         'label_source': label_source,
-        'feature_preset': feature_preset,
         'feature_group': feature_group,
         'feature_flags': feature_flags,
         'feature_names': feature_names,
@@ -430,8 +425,7 @@ def _process_mesh_exact_obj(
 
 def process_mesh(
     file_path: str | Path,
-    feature_preset: str = 'paper14',
-    feature_group: str | None = None,
+    feature_group: str = 'paper14',
     enable_ao: bool = False,
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
@@ -442,7 +436,6 @@ def process_mesh(
 ) -> Data | None:
     file_path = Path(file_path)
     feature_selection = resolve_feature_cli_selection(
-        feature_preset=feature_preset,
         feature_group=feature_group,
         enable_ao=enable_ao,
         enable_dihedral=enable_dihedral,
@@ -493,13 +486,7 @@ def main(argv: list[str] | None = None) -> None:
         help='Output path when --save is set; exact_obj defaults to dataset_v2_exact_labels.pt',
     )
     parser.add_argument('--overwrite', action='store_true', help='Replace an existing output file')
-    parser.add_argument(
-        '--feature-preset',
-        choices=FEATURE_PRESETS,
-        default='paper14',
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default=None)
+    parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default='paper14')
     parser.add_argument('--enable-ao', action='store_true', help='Enable AO endpoint features for custom group')
     parser.add_argument('--enable-dihedral', action='store_true', help='Enable signed dihedral for custom group')
     parser.add_argument('--enable-symmetry', action='store_true', help='Enable symmetry distance for custom group')
@@ -510,7 +497,6 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         feature_selection = resolve_feature_cli_selection(
-            feature_preset=args.feature_preset,
             feature_group=args.feature_group,
             enable_ao=args.enable_ao,
             enable_dihedral=args.enable_dihedral,
@@ -547,7 +533,6 @@ def main(argv: list[str] | None = None) -> None:
         print(f"processing: {obj_file.name} ...", end=" ", flush=True)
         data = process_mesh(
             obj_file,
-            feature_preset=args.feature_preset,
             feature_group=args.feature_group,
             enable_ao=args.enable_ao,
             enable_dihedral=args.enable_dihedral,

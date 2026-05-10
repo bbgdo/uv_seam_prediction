@@ -65,7 +65,6 @@ class FeatureFlags:
 @dataclass(frozen=True)
 class FeatureGroup:
     name: str
-    feature_preset: str
     feature_names: tuple[str, ...]
     feature_flags: FeatureFlags
 
@@ -77,7 +76,6 @@ class FeatureGroup:
 @dataclass(frozen=True)
 class ResolvedFeatureSet:
     feature_group: str
-    feature_preset: str
     feature_names: tuple[str, ...]
     feature_flags: FeatureFlags
     density_config: dict | None = None
@@ -90,13 +88,11 @@ class ResolvedFeatureSet:
 FEATURE_GROUPS = {
     'paper14': FeatureGroup(
         name='paper14',
-        feature_preset='paper14',
         feature_names=PAPER14_FEATURE_NAMES,
         feature_flags=FeatureFlags(),
     ),
     'custom': FeatureGroup(
         name='custom',
-        feature_preset='custom',
         feature_names=PAPER14_FEATURE_NAMES,
         feature_flags=FeatureFlags(),
     ),
@@ -167,7 +163,6 @@ def resolve_feature_selection(
         density_config = dict(DENSITY_CONFIG) if group.feature_flags.density else None
         return ResolvedFeatureSet(
             feature_group=group.name,
-            feature_preset=group.feature_preset,
             feature_names=group.feature_names,
             feature_flags=group.feature_flags,
             density_config=density_config,
@@ -176,7 +171,6 @@ def resolve_feature_selection(
     names = _custom_feature_names(requested_flags)
     return ResolvedFeatureSet(
         feature_group='custom',
-        feature_preset='custom',
         feature_names=names,
         feature_flags=requested_flags,
         density_config=dict(DENSITY_CONFIG) if requested_flags.density else None,

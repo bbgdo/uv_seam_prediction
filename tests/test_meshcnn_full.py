@@ -87,7 +87,6 @@ def _sample_with_features(feature_names: list[str] | tuple[str, ...] | None = No
         boundary_mask=torch.ones(edge_count, dtype=torch.bool),
         file_path='toy.obj',
         feature_group='custom',
-        feature_preset='custom',
         feature_names=names,
         feature_flags=_full_custom_selection().feature_flags.as_dict(),
         endpoint_order='random',
@@ -142,7 +141,6 @@ class MeshCNNFullTests(unittest.TestCase):
             )
 
         self.assertEqual(sample.feature_group, 'custom')
-        self.assertEqual(sample.feature_preset, 'custom')
         self.assertEqual(tuple(sample.feature_names), selection.feature_names)
         self.assertEqual(sample.feature_flags, selection.feature_flags.as_dict())
         self.assertEqual(sample.endpoint_order, 'random')
@@ -164,7 +162,6 @@ class MeshCNNFullTests(unittest.TestCase):
 
         self.assertEqual(manifest['sample_format'], 'meshcnn_full_v2')
         self.assertEqual(manifest['feature_group'], 'custom')
-        self.assertEqual(manifest['feature_preset'], 'custom')
         self.assertEqual(manifest['feature_names'], list(selection.feature_names))
         self.assertEqual(manifest['feature_flags'], selection.feature_flags.as_dict())
         self.assertEqual(manifest['feature_dim'], len(selection.feature_names))

@@ -31,7 +31,6 @@ except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing
         resolve_feature_selection,
     )
 
-FEATURE_PRESETS = ('paper14',)
 ENDPOINT_ORDERS = ('fixed', 'random')
 
 
@@ -622,20 +621,18 @@ def compute_edge_features_for_selection(
 
 def compute_edge_features(
     mesh: trimesh.Trimesh,
-    feature_preset: str = 'paper14',
+    feature_group: str = 'paper14',
     endpoint_order: str = 'auto',
     rng_seed: int = 42,
     *,
-    feature_group: str | None = None,
     enable_ao: bool = False,
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
     enable_density: bool = False,
     enable_thickness_sdf: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    group = feature_group if feature_group is not None else feature_preset
     selection = resolve_feature_selection(
-        group,
+        feature_group,
         enable_ao=enable_ao,
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,

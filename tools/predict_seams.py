@@ -292,8 +292,7 @@ def _resolved_endpoint_order_from_metadata(
     if endpoint_order in ('fixed', 'random'):
         return endpoint_order
     group = _normalize_metadata_name(metadata.get('feature_group'))
-    preset = _normalize_metadata_name(metadata.get('feature_preset'))
-    if group == 'custom' or preset == 'custom':
+    if group == 'custom':
         return 'fixed'
     return _default_endpoint_order_for_selection(selection)
 
@@ -337,13 +336,12 @@ def resolve_feature_bundle(
 def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tuple[ResolvedFeatureSet, str, str]:
     for metadata in _feature_metadata_sources(config, summary):
         group = _normalize_metadata_name(metadata.get('feature_group'))
-        preset = _normalize_metadata_name(metadata.get('feature_preset'))
         flags = _infer_feature_flags(metadata)
 
-        if group in ('paper14', 'paper') or preset in ('paper14', 'paper'):
+        if group in ('paper14', 'paper'):
             selection = resolve_feature_selection('paper14')
             return selection, _resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
-        if group == 'custom' or preset == 'custom':
+        if group == 'custom':
             if not any(flags.values()):
                 raise PredictionError(
                     'feature metadata declares custom features but does not specify any optional custom feature flags',
@@ -526,8 +524,7 @@ def validate_feature_metadata(
 
     expected_flags = selection.feature_flags.as_dict()
     for source_name, metadata in sources:
-        _validate_feature_metadata_name(source_name, metadata, 'feature_group', selection)
-        _validate_feature_metadata_name(source_name, metadata, 'feature_preset', selection)
+        _validate_feature_metadata_name(source_name, metadata, selection)
 
         feature_names = _coerce_list(metadata.get('feature_names'))
         if feature_names is not None and feature_names != list(selection.feature_names):
@@ -574,17 +571,15 @@ def validate_feature_metadata(
 def _validate_feature_metadata_name(
     source_name: str,
     metadata: dict[str, Any],
-    key: str,
     selection: ResolvedFeatureSet,
 ) -> None:
-    value = metadata.get(key)
+    value = metadata.get('feature_group')
     if value in (None, ''):
         return
-    expected = selection.feature_group if key == 'feature_group' else selection.feature_preset
-    if _metadata_name_matches_expected(value, expected):
+    if _metadata_name_matches_expected(value, selection.feature_group):
         return
     raise PredictionError(
-        f'{source_name} {key} mismatch: expected {expected!r}, got {value!r}',
+        f"{source_name} feature_group mismatch: expected {selection.feature_group!r}, got {value!r}",
         'FeatureMetadataMismatch',
     )
 
@@ -682,7 +677,6 @@ def build_meshcnn_inference_sample(
         boundary_mask=torch.from_numpy(boundary_mask.astype(bool, copy=False)),
         file_path=str(mesh_path),
         feature_group=selection.feature_group,
-        feature_preset=selection.feature_preset,
         feature_names=list(selection.feature_names),
         feature_flags=selection.feature_flags.as_dict(),
         density_config=dict(selection.density_config) if selection.density_config else None,
