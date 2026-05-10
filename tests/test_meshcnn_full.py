@@ -174,12 +174,11 @@ class MeshCNNFullTests(unittest.TestCase):
 
     def test_slice_meshcnn_dataset_to_control14(self):
         sample = _sample_with_features()
-        _, metadata = slice_meshcnn_dataset_features(
-            [sample],
-            resolve_feature_selection('custom'),
-        )
+        selection = resolve_feature_selection('custom')
+        _, metadata = slice_meshcnn_dataset_features([sample], selection)
 
         self.assertEqual(sample.edge_features.shape[1], 14)
+        self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(tuple(sample.feature_names), PAPER14_FEATURE_NAMES)
         self.assertEqual(metadata['feature_names'], list(PAPER14_FEATURE_NAMES))
         self.assertEqual(metadata['feature_dim'], 14)

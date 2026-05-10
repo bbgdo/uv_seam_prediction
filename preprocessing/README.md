@@ -7,12 +7,14 @@ Maintained dataset builders:
 
 ## GNN / PyG Builder
 
-Use `preprocessing/build_gnn_dataset.py` for `paper14` and `custom` PyG datasets.
+Use `preprocessing/build_gnn_dataset.py` for `paper14` and custom-superset PyG datasets.
 
 ```bash
 python preprocessing/build_gnn_dataset.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
 python preprocessing/build_gnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
 ```
+
+`paper14` is the base bundle. `custom` is reserved for `paper14` plus at least one optional feature toggle.
 
 ## SparseMeshCNN Builder
 

@@ -15,7 +15,7 @@ python tools/run_training.py --model gatv2 --dataset datasets/gnn_custom.pt --fe
 python tools/run_training.py --model sparsemeshcnn --dataset datasets/sparsemeshcnn_custom_superset.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/sparsemeshcnn_custom
 ```
 
-`paper14` is the paper feature baseline.
+`paper14` is the paper feature baseline. `custom` means `paper14` plus at least one optional feature toggle.
 
 ## SparseMeshCNN
 
@@ -30,7 +30,7 @@ The public model name in the ablation runner is `sparsemeshcnn`. `models/meshcnn
 ## Ablation Protocol
 
 - `paper14` is the paper baseline bundle.
-- `custom` is the runtime-selectable superset.
+- `custom` is the runtime-selectable superset built on top of `paper14`.
 - Optional custom features are `ao`, `dihedral`, `symmetry`, `density`, and `sdf`.
 - Split protocol is `family` only.
 - No connectivity loss is used.

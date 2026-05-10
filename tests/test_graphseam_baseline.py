@@ -89,6 +89,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
     def test_feature_registry_resolves_custom_toggles(self):
         paper = resolve_feature_selection('paper14')
+        custom_base = resolve_feature_selection('custom')
         ao_only = resolve_feature_selection('custom', enable_ao=True)
         symmetry_only = resolve_feature_selection('custom', enable_symmetry=True)
         density_only = resolve_feature_selection('custom', enable_density=True)
@@ -100,6 +101,8 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
 
         self.assertEqual(paper.feature_count, 14)
+        self.assertEqual(custom_base.feature_group, 'paper14')
+        self.assertEqual(custom_base.feature_names, paper.feature_names)
         self.assertEqual(ao_only.feature_names[-1], 'ao_j')
         self.assertEqual(symmetry_only.feature_names[-1], 'symmetry_dist')
         self.assertEqual(density_only.feature_names[-2:], ('density_mean', 'density_diff'))

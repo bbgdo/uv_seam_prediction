@@ -218,7 +218,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertAlmostEqual(manifest['aggregate_seam_ratio'], 4 / 5)
             self.assertAlmostEqual(manifest['aggregate_pos_weight'], 1 / 4)
 
-    def test_custom_without_optional_flags_saves_only_base_dual_features(self):
+    def test_custom_without_optional_flags_canonicalizes_to_paper14(self):
         with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
             output_path = mesh_dir.parent / 'custom_base.pt'
             build_dataset_main([
@@ -234,7 +234,8 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             data = dataset[0]
 
             self.assertEqual(data.graph_format, 'dual_edge_graph')
-            self.assertEqual(data.feature_group, 'custom')
+            self.assertEqual(data.feature_group, 'paper14')
+            self.assertEqual(data.feature_preset, 'paper14')
             self.assertEqual(data.feature_names, list(PAPER14_FEATURE_NAMES))
             self.assertEqual(data.x.shape[1], 14)
             self.assertEqual(len(data.feature_names), data.x.shape[1])

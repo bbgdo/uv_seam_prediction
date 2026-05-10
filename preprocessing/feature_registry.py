@@ -153,6 +153,8 @@ def resolve_feature_selection(
         density=bool(enable_density),
         thickness_sdf=bool(enable_thickness_sdf),
     )
+    if group_name == 'custom' and not requested_flags.any_enabled():
+        group_name = 'paper14'
 
     if group_name != 'custom':
         if requested_flags.any_enabled():
