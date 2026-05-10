@@ -238,11 +238,11 @@ def _coerce_feature_names(value) -> list[str] | None:
     return None
 
 
-def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str]) -> None:
+def validate_gnn_dataset_metadata(dataset: list, experiment_names: list[str]) -> None:
     if not dataset:
-        raise ValueError('custom dataset is empty after resolution filtering')
-    _require_uniform_metadata(dataset, role='custom', key='feature_group', expected='custom')
-    _require_uniform_metadata_choice(dataset, role='custom', key='endpoint_order', expected=('fixed', 'random'))
+        raise ValueError('GNN dataset is empty after resolution filtering')
+    _require_uniform_metadata(dataset, role='GNN', key='feature_group', expected='custom')
+    _require_uniform_metadata_choice(dataset, role='GNN', key='endpoint_order', expected=('fixed', 'random'))
 
     requested_features: list[str] = []
     for name in experiment_names:
@@ -256,17 +256,17 @@ def validate_custom_dataset_metadata(dataset: list, experiment_names: list[str])
     for graph_idx, data in enumerate(dataset):
         names = _coerce_feature_names(_metadata_value(data, 'feature_names'))
         if names is None:
-            raise ValueError(f"custom dataset graph {graph_idx} is missing feature_names metadata")
+            raise ValueError(f"GNN dataset graph {graph_idx} is missing feature_names metadata")
         x = getattr(data, 'x', None)
         if x is not None and len(names) != int(x.shape[1]):
             raise ValueError(
-                f"custom dataset graph {graph_idx} feature_names length {len(names)} "
+                f"GNN dataset graph {graph_idx} feature_names length {len(names)} "
                 f"does not match x feature dim {int(x.shape[1])}"
             )
         missing = [feature for feature in requested_features if feature not in names]
         if missing:
             raise ValueError(
-                f"custom dataset graph {graph_idx} is missing requested feature(s): {missing}; "
+                f"GNN dataset graph {graph_idx} is missing requested feature(s): {missing}; "
                 f"available feature_names={names}"
             )
 
@@ -333,8 +333,8 @@ def validate_dataset_roles(args: argparse.Namespace, experiment_names: list[str]
     gnn_dataset = get_gnn_dataset_arg(args)
     if not gnn_dataset:
         raise ValueError('--gnn-dataset is required for GNN models')
-    datasets['custom'] = load_filtered_dataset(gnn_dataset, args.resolution_tag)
-    validate_custom_dataset_metadata(datasets['custom'], experiment_names)
+    datasets['gnn'] = load_filtered_dataset(gnn_dataset, args.resolution_tag)
+    validate_gnn_dataset_metadata(datasets['gnn'], experiment_names)
     return datasets
 
 

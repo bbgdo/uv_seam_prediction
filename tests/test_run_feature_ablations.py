@@ -31,7 +31,7 @@ from tools.run_feature_ablations import (
     split_path_for_seed,
     validate_dataset_roles,
     validate_experiment_selection,
-    validate_custom_dataset_metadata,
+    validate_gnn_dataset_metadata,
     validate_meshcnn_dataset_metadata,
     validate_split_files,
 )
@@ -165,16 +165,16 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(sdf_density.feature_names[-3:], ('density_mean', 'density_diff', 'thickness_sdf'))
 
     def test_endpoint_order_safety_checks(self):
-        validate_custom_dataset_metadata([_custom_data()], ['ao_dihedral'])
-        validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
+        validate_gnn_dataset_metadata([_custom_data()], ['ao_dihedral'])
+        validate_gnn_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
         validate_meshcnn_dataset_metadata([_meshcnn_sample(endpoint_order='fixed')], ['control14'])
 
         with self.assertRaisesRegex(ValueError, "endpoint_order must be one of"):
-            validate_custom_dataset_metadata([_custom_data(endpoint_order='invalid')], ['control14'])
+            validate_gnn_dataset_metadata([_custom_data(endpoint_order='invalid')], ['control14'])
 
     def test_failure_on_missing_features_or_wrong_dataset_metadata(self):
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
-            validate_custom_dataset_metadata(
+            validate_gnn_dataset_metadata(
                 [_custom_data(list(PAPER14_FEATURE_NAMES))],
                 ['ao_density'],
             )
@@ -186,7 +186,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             enable_density=True,
         ).feature_names
         with self.assertRaisesRegex(ValueError, 'thickness_sdf'):
-            validate_custom_dataset_metadata(
+            validate_gnn_dataset_metadata(
                 [_custom_data(list(without_sdf))],
                 ['ao_sdf'],
             )

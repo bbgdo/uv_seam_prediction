@@ -78,7 +78,7 @@ python tools/evaluate_dir_topology.py --input-dir data/objs --model-weights runs
 Reevaluate saved checkpoints:
 
 ```bash
-python tools/evaluate_saved_models.py --runs-root runs/ablations/graphsage --splits-dir runs/ablations/graphsage/splits --custom-dataset datasets/gnn_custom.pt
+python tools/evaluate_saved_models.py --runs-root runs/ablations/graphsage --splits-dir runs/ablations/graphsage/splits --gnn-dataset datasets/gnn_custom.pt
 ```
 
 Notes:

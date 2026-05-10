@@ -250,7 +250,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertEqual(grid[-2:], [0.995, 0.999])
         self.assertEqual(len(grid), 12)
 
-    def test_discover_saved_run_uses_custom_dataset_override(self):
+    def test_discover_saved_run_uses_gnn_dataset_override(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = root / 'experiments' / 'control14' / 'seed_7'
@@ -279,7 +279,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             targets = discover_saved_runs(Namespace(
                 runs_root=str(root),
                 splits_dir=str(splits_dir),
-                custom_dataset='custom_override.pt',
+                gnn_dataset='custom_override.pt',
                 experiments=['control14'],
                 seeds=[7],
             ))

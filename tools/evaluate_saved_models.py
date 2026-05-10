@@ -401,13 +401,13 @@ def _select_dataset_path(
     *,
     config: dict[str, Any],
     experiment_summary: dict[str, Any],
-    custom_dataset: str | None,
+    gnn_dataset: str | None,
 ) -> Path:
-    if custom_dataset:
-        return Path(custom_dataset)
+    if gnn_dataset:
+        return Path(gnn_dataset)
     dataset = config.get('dataset') or experiment_summary.get('dataset')
     if not dataset:
-        raise ValueError('missing dataset path metadata; provide --custom-dataset')
+        raise ValueError('missing dataset path metadata; provide --gnn-dataset')
     return Path(dataset)
 
 
@@ -461,7 +461,7 @@ def discover_saved_runs(args: argparse.Namespace) -> list[SavedRun]:
         dataset_path = _select_dataset_path(
             config=config,
             experiment_summary=experiment_summary,
-            custom_dataset=args.custom_dataset,
+            gnn_dataset=args.gnn_dataset,
         )
 
         targets.append(SavedRun(
@@ -851,7 +851,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Offline reevaluate saved best_model.pth checkpoints.')
     parser.add_argument('--runs-root', required=True, help='root directory containing experiment outputs')
     parser.add_argument('--splits-dir', required=True, help='directory containing frozen seed split JSON files')
-    parser.add_argument('--custom-dataset', default=None, help='custom/superset dual dataset override')
+    parser.add_argument('--gnn-dataset', default=None, help='GNN custom superset dual dataset override')
     parser.add_argument('--experiments', nargs='+', default=None, help='experiment names to reevaluate')
     parser.add_argument('--seeds', type=int, nargs='+', default=None, help='seed numbers to reevaluate')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='auto')
