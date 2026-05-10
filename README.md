@@ -9,7 +9,7 @@ Maintained entrypoints:
 - `tools/run_training.py` for single GraphSAGE, GATv2, and SparseMeshCNN training
 - `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations
 - `tools/predict_seams.py` for inference
-- `tools/evaluate_saved_models.py` for reevaluating saved checkpoints
+- `tools/evaluate_saved_models.py` for reevaluating saved GraphSAGE/GATv2 checkpoints
 - `preprocessing/validate_seam_truth.py` for exact OBJ seam truth validation
 
 ## Reproducibility Workflow
@@ -60,7 +60,7 @@ Run inference with the maintained bridge:
 python tools/predict_seams.py --mesh-path data/objs/example.obj --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --output-json outputs/predictions/example.json
 ```
 
-Reevaluate saved checkpoints:
+Reevaluate saved GraphSAGE/GATv2 checkpoints:
 
 ```bash
 python tools/evaluate_saved_models.py --runs-root runs/ablations/graphsage --splits-dir runs/ablations/graphsage/splits --gnn-dataset datasets/gnn_custom.pt

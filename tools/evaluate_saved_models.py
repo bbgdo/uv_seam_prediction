@@ -38,10 +38,10 @@ __all__ = [
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Offline reevaluate saved best_model.pth checkpoints.')
+    parser = argparse.ArgumentParser(description='Offline reevaluate saved GraphSAGE/GATv2 best_model.pth checkpoints.')
     parser.add_argument('--runs-root', required=True, help='root directory containing experiment outputs')
     parser.add_argument('--splits-dir', required=True, help='directory containing frozen seed split JSON files')
-    parser.add_argument('--gnn-dataset', default=None, help='GNN custom superset dual dataset override')
+    parser.add_argument('--gnn-dataset', default=None, help='GNN dataset override for saved GraphSAGE/GATv2 runs')
     parser.add_argument('--experiments', nargs='+', default=None, help='experiment names to reevaluate')
     parser.add_argument('--seeds', type=int, nargs='+', default=None, help='seed numbers to reevaluate')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='auto')

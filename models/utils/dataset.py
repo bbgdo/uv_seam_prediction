@@ -1,11 +1,8 @@
 import json
-import sys
 from pathlib import Path
 
 import torch
 from torch_geometric.data import Data
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.utils.filename_parsing import FilenameParseConfig, parse_mesh_name
 

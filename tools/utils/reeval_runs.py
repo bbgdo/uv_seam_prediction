@@ -143,6 +143,7 @@ def feature_selection_from_config(config: dict):
         enable_signed_dihedral=bool(flags.get('signed_dihedral', flags.get('dihedral', False))),
         enable_symmetry=bool(flags.get('symmetry', False)),
         enable_density=bool(flags.get('density', False)),
+        enable_thickness_sdf=bool(flags.get('thickness_sdf', False)),
     )
 
 
@@ -269,7 +270,6 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
         },
         'split': {
             'seed': split_info.get('seed'),
-            'group_mode': split_info.get('group_mode'),
             'resolution_tag': split_info.get('resolution_tag'),
             'val_graphs': len(val),
             'test_graphs': len(test),

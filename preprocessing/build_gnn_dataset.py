@@ -564,7 +564,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  total directed edges: {total_edges}")
         print(f"  total seam edges    : {int(total_seams)}  ({100*total_seams/max(total_edges,1):.2f}%)")
         print(f"  aggregate pos_weight: {agg_pos_weight:.4f}")
-        print(f"\n  train with: python tools/run_baseline.py --dataset <output.pt> --pos-weight {agg_pos_weight:.4f}")
+        print(f"\n  train with: python tools/run_training.py --model <graphsage|gatv2> --dataset <output.pt> --pos-weight {agg_pos_weight:.4f}")
         print(f"{'#'*60}\n")
 
     if args.save and dataset:

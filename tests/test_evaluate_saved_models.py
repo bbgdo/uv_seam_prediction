@@ -16,6 +16,7 @@ from tools.evaluate_saved_models import (
     exact_validation_threshold,
     load_reference_control_reevaluations,
 )
+from tools.utils.reeval_runs import feature_selection_from_config
 
 
 def _metrics(
@@ -165,6 +166,18 @@ def _bruteforce_exact_threshold(probs: np.ndarray, labels: np.ndarray) -> dict:
 
 
 class EvaluateSavedModelsTests(unittest.TestCase):
+    def test_feature_selection_from_config_includes_thickness_sdf(self):
+        selection = feature_selection_from_config({
+            'feature_group': 'custom',
+            'feature_flags': {
+                'thickness_sdf': True,
+            },
+        })
+
+        self.assertEqual(selection.feature_group, 'custom')
+        self.assertTrue(selection.feature_flags.thickness_sdf)
+        self.assertIn('thickness_sdf', selection.feature_names)
+
     def test_fast_threshold_matches_bruteforce_on_synthetic_example(self):
         probs = np.array([0.91, 0.83, 0.76, 0.65, 0.42, 0.21])
         labels = np.array([1, 0, 1, 1, 0, 0])
