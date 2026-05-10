@@ -1,14 +1,26 @@
+from __future__ import annotations
+
 import argparse
-import random
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
-from torch_geometric.data import Data
 
 from models.baselines.registry import get_baseline
-from models.common.config import BaselineConfig, baseline_config, replace_config
+from models.common.baseline_train_data import (
+    apply_runtime_feature_selection,
+    dataset_metadata_summary,
+    resolve_runtime_feature_selection,
+    set_random_seeds,
+)
+from models.common.baseline_train_loop import (
+    collect_logits_labels,
+    confusion_counts,
+    metric_line,
+    print_threshold_sweep,
+    run_epoch,
+)
+from models.common.baseline_train_runtime import build_runtime_config, logger_config, model_kwargs
 from models.utils.dataset import (
     compute_pos_weight,
     filter_dataset_by_resolution,
@@ -17,342 +29,18 @@ from models.utils.dataset import (
     split_dataset,
 )
 from models.utils.experiment_log import ExperimentLogger
-from models.utils.losses import focal_bce_with_logits
-from models.utils.metrics import RECALL_TPR_LABEL, edge_f1, threshold_sweep
-from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection
+from models.utils.metrics import threshold_sweep
 
 
-METADATA_KEYS = (
-    'label_source',
-    'feature_group',
-    'feature_names',
-    'feature_flags',
-    'density_config',
-    'endpoint_order',
-    'weld_mode',
-)
-
-
-def set_random_seeds(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def _metadata_value(data: Data, key: str):
-    try:
-        value = getattr(data, key)
-        if value not in (None, ''):
-            return value
-    except AttributeError:
-        pass
-
-    for container_key in ('metadata', 'meta', 'dataset_metadata'):
-        try:
-            container = getattr(data, container_key)
-        except AttributeError:
-            continue
-        if isinstance(container, dict) and key in container and container[key] not in (None, ''):
-            return container[key]
-        if hasattr(container, key):
-            value = getattr(container, key)
-            if value not in (None, ''):
-                return value
-    return None
-
-
-def dataset_metadata_summary(dataset: list[Data]) -> dict:
-    summary: dict = {'graph_count': len(dataset)}
-    for key in METADATA_KEYS:
-        values = []
-        missing = 0
-        for data in dataset:
-            value = _metadata_value(data, key)
-            if value is None:
-                missing += 1
-            else:
-                values.append(str(value))
-
-        if values:
-            unique_values = sorted(set(values))
-            summary[key] = unique_values[0] if len(unique_values) == 1 else unique_values
-        if missing and (values or missing != len(dataset)):
-            summary[f'{key}_missing'] = missing
-
-    feature_dims = []
-    for data in dataset:
-        x = getattr(data, 'x', None)
-        if x is not None and getattr(x, 'ndim', 0) == 2:
-            feature_dims.append(int(x.shape[1]))
-    if feature_dims:
-        unique_dims = sorted(set(feature_dims))
-        summary['x_feature_dim'] = unique_dims[0] if len(unique_dims) == 1 else unique_dims
-
-    return summary
-
-
-def resolve_runtime_feature_selection(args: argparse.Namespace) -> ResolvedFeatureSet:
-    feature_group = getattr(args, 'feature_group', None)
-    if feature_group is None:
-        feature_group = 'paper14'
-
-    return resolve_feature_selection(
-        feature_group,
-        enable_ao=bool(getattr(args, 'enable_ao', False)),
-        enable_dihedral=bool(getattr(args, 'enable_dihedral', False)),
-        enable_symmetry=bool(getattr(args, 'enable_symmetry', False)),
-        enable_density=bool(getattr(args, 'enable_density', False)),
-        enable_thickness_sdf=bool(getattr(args, 'enable_thickness_sdf', False)),
-    )
-
-
-def _coerce_feature_names(value) -> list[str] | None:
-    if value in (None, ''):
-        return None
-    if isinstance(value, (list, tuple)):
-        return [str(item) for item in value]
-    return None
-
-
-def _feature_names_from_saved_paper14_dim(data: Data) -> list[str] | None:
-    group = _metadata_value(data, 'feature_group')
-    if group == 'paper14' and getattr(data.x, 'shape', (0, 0))[1] == 14:
-        return list(PAPER14_FEATURE_NAMES)
-    return None
-
-
-def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeatureSet) -> list[Data]:
-    requested = list(selection.feature_names)
-    for graph_idx, data in enumerate(dataset):
-        feature_names = _coerce_feature_names(_metadata_value(data, 'feature_names'))
-        if feature_names is None:
-            feature_names = _feature_names_from_saved_paper14_dim(data)
-
-        current_dim = int(data.x.shape[1])
-        if feature_names is None:
-            if current_dim == selection.feature_count and selection.feature_group == 'paper14':
-                continue
-            raise ValueError(
-                f"dataset graph {graph_idx} is missing feature_names metadata; "
-                f"cannot select requested features {requested}"
-            )
-        if len(feature_names) != current_dim:
-            raise ValueError(
-                f"dataset graph {graph_idx} feature_names length {len(feature_names)} "
-                f"does not match x feature dim {current_dim}"
-            )
-
-        missing = [name for name in requested if name not in feature_names]
-        if missing:
-            raise ValueError(
-                f"dataset graph {graph_idx} is missing requested feature(s): {missing}; "
-                f"available feature_names={feature_names}"
-            )
-
-        if feature_names == requested:
-            continue
-
-        indices = [feature_names.index(name) for name in requested]
-        data.x = data.x[:, indices]
-        data.feature_names = requested
-        data.feature_group = selection.feature_group
-        data.feature_flags = selection.feature_flags.as_dict()
-        if selection.density_config is not None:
-            data.density_config = dict(selection.density_config)
-
-    return dataset
-
-
-
-def apply_paper_preset(args: argparse.Namespace) -> None:
-    if args.model != 'graphsage' or args.preset != 'paper':
-        return
-    args.lr = 5e-4
-    args.hidden = 64
-    args.num_layers = 3
-    args.pos_weight = 100.0
-    args.focal_gamma = 0.0
-    args.patience = 50
-    args.in_dim = 14
-    args.aggr = 'lstm'
-    args.skip_connections = 'all'
-
-
-def build_runtime_config(args: argparse.Namespace) -> BaselineConfig:
-    definition = get_baseline(args.model)
-    config = baseline_config(args.model, definition.default_config_overrides)
-    return replace_config(
-        config,
-        hidden_size=args.hidden,
-        num_layers=args.num_layers,
-        lr=args.lr,
-        pos_weight=args.pos_weight,
-        focal_gamma=args.focal_gamma,
-        epochs=args.epochs,
-        patience=args.patience,
-        in_dim=args.in_dim,
-        dropout=args.dropout,
-        weight_decay=getattr(args, 'weight_decay', None),
-        heads=args.heads,
-        aggr=args.aggr,
-        skip_connections=args.skip_connections,
-    )
-
-
-def _metric_line(label: str, loss: float | None, metrics: dict) -> str:
-    loss_part = f"loss {loss:.4f}  " if loss is not None else ''
-    return (
-        f"{label} | {loss_part}f1 {metrics['f1']:.4f}  "
-        f"prec {metrics['precision']:.4f}  {RECALL_TPR_LABEL} {metrics['recall']:.4f}  "
-        f"fpr {metrics['fpr']:.4f}  acc {metrics['accuracy']:.4f}"
-    )
-
-
-def _confusion_counts(metrics: dict) -> dict:
-    return {key: int(metrics[key]) for key in ('tp', 'fp', 'fn', 'tn')}
-
-
-def _run_epoch(
-    model: torch.nn.Module,
-    graphs: list[Data],
-    device: torch.device,
-    pos_weight: torch.Tensor,
-    optimizer: torch.optim.Optimizer | None = None,
-    focal_gamma: float = 2.0,
-) -> tuple[float, dict]:
-    training = optimizer is not None
-    model.train(training)
-
-    total_loss = 0.0
-    all_logits, all_labels = [], []
-
-    ctx = torch.enable_grad() if training else torch.no_grad()
-    with ctx:
-        for data in graphs:
-            x = data.x.to(device)
-            edge_index = data.edge_index.to(device)
-            y = data.y.to(device)
-
-            logits = model(x, edge_index)
-            loss = focal_bce_with_logits(logits, y, pos_weight, focal_gamma)
-
-            if training:
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-            total_loss += loss.item()
-            all_logits.append(logits.detach().cpu())
-            all_labels.append(y.cpu())
-
-            del x, edge_index, y, logits, loss
-            torch.cuda.empty_cache()
-
-    mean_loss = total_loss / len(graphs)
-    metrics = edge_f1(torch.cat(all_logits), torch.cat(all_labels))
-    return mean_loss, metrics
-
-
-def _collect_logits_labels(
-    model: torch.nn.Module,
-    graphs: list[Data],
-    device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    logits, labels = [], []
-    with torch.no_grad():
-        for data in graphs:
-            logits.append(model(data.x.to(device), data.edge_index.to(device)).cpu())
-            labels.append(data.y.cpu())
-    return torch.cat(logits), torch.cat(labels)
-
-
-def _model_kwargs(config: BaselineConfig) -> dict:
-    kwargs = {
-        'in_dim': config.in_dim,
-        'hidden_dim': config.hidden_size,
-        'num_layers': config.num_layers,
-        'dropout': config.dropout,
-    }
-    if config.model_name == 'graphsage':
-        kwargs.update({
-            'aggr': config.aggr,
-            'skip_connections': config.skip_connections,
-        })
-    elif config.model_name == 'gatv2':
-        kwargs['heads'] = config.heads
-    return kwargs
-
-
-def _logger_config(
-    args: argparse.Namespace,
-    config: BaselineConfig,
-    display_name: str,
-    pos_weight: torch.Tensor,
-    split_info: dict,
-    metadata_summary: dict,
-    filtered_graph_count: int,
-    seed: int | None,
-    split_sizes: tuple[int, int, int],
-) -> dict:
-    train_count, val_count, test_count = split_sizes
-    payload = {
-        'model': display_name,
-        'model_name': config.model_name,
-        'hidden': config.hidden_size,
-        'in_dim': config.in_dim,
-        'hidden_dim': config.hidden_size,
-        'num_layers': config.num_layers,
-        'dropout': config.dropout,
-        'lr': config.lr,
-        'focal_gamma': config.focal_gamma,
-        'patience': config.patience,
-        'dataset': args.dataset,
-        'feature_group': getattr(args, 'feature_group', None),
-        'feature_flags': {
-            'ao': bool(getattr(args, 'enable_ao', False)),
-            'signed_dihedral': bool(getattr(args, 'enable_dihedral', False)),
-            'symmetry': bool(getattr(args, 'enable_symmetry', False)),
-            'density': bool(getattr(args, 'enable_density', False)),
-            'thickness_sdf': bool(getattr(args, 'enable_thickness_sdf', False)),
-        },
-        'resolution_tag': args.resolution_tag,
-        'resolution_selector': args.resolution_tag,
-        'filtered_graph_count': filtered_graph_count,
-        'seed': seed,
-        'split_json_in': str(args.split_json_in) if args.split_json_in else None,
-        'split_json_out': str(args.split_json_out) if args.split_json_out else None,
-        'train_graphs': train_count,
-        'val_graphs': val_count,
-        'test_graphs': test_count,
-        'pos_weight': pos_weight.item(),
-        'split': split_info,
-        'dataset_metadata_summary': metadata_summary,
-    }
-    if config.model_name == 'graphsage':
-        payload.update({
-            'aggr': config.aggr,
-            'skip_connections': config.skip_connections,
-        })
-    elif config.model_name == 'gatv2':
-        payload['heads'] = config.heads
-    return payload
-
-
-def _print_threshold_sweep(title: str, rows: list[dict], best_t: float, marker_label: str) -> None:
-    print(title)
-    print(f"  {'t':>5s}  {'P':>7s}  {RECALL_TPR_LABEL:>8s}  {'F1':>7s}  {'FPR':>7s}")
-    for row in rows:
-        marker = marker_label if row['threshold'] == best_t else ''
-        print(
-            f"  {row['threshold']:>5.2f}  {row['precision']:>7.4f}  "
-            f"{row['recall']:>8.4f}  {row['f1']:>7.4f}  {row['fpr']:>7.4f}{marker}"
-        )
+_collect_logits_labels = collect_logits_labels
+_confusion_counts = confusion_counts
+_metric_line = metric_line
+_model_kwargs = model_kwargs
+_print_threshold_sweep = print_threshold_sweep
+_run_epoch = run_epoch
 
 
 def train_baseline(args: argparse.Namespace) -> None:
-    apply_paper_preset(args)
     feature_selection = resolve_runtime_feature_selection(args)
     args.feature_group = feature_selection.feature_group
     args.in_dim = feature_selection.feature_count
@@ -407,7 +95,7 @@ def train_baseline(args: argparse.Namespace) -> None:
         pos_weight = compute_pos_weight(train).to(device)
         print(f"pos_weight: {pos_weight.item():.4f} (auto-computed)")
 
-    model = definition.model_class(**_model_kwargs(config)).to(device)
+    model = definition.model_class(**model_kwargs(config)).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -416,7 +104,7 @@ def train_baseline(args: argparse.Namespace) -> None:
 
     logger = ExperimentLogger(
         run_dir=args.run_dir,
-        config=_logger_config(
+        config=logger_config(
             args,
             config,
             definition.display_name,
@@ -437,10 +125,10 @@ def train_baseline(args: argparse.Namespace) -> None:
 
     for epoch in range(1, config.epochs + 1):
         t0 = time.time()
-        train_loss, train_m = _run_epoch(
+        train_loss, train_m = run_epoch(
             model, train, device, pos_weight, optimizer, config.focal_gamma
         )
-        val_loss, val_m = _run_epoch(model, val, device, pos_weight, focal_gamma=config.focal_gamma)
+        val_loss, val_m = run_epoch(model, val, device, pos_weight, focal_gamma=config.focal_gamma)
         epoch_time = time.time() - t0
 
         current_lr = optimizer.param_groups[0]['lr']
@@ -470,7 +158,8 @@ def train_baseline(args: argparse.Namespace) -> None:
             f"epoch {epoch:03d} | "
             f"train loss {train_loss:.4f}  f1 {train_m['f1']:.4f} | "
             f"val loss {val_loss:.4f}  f1 {val_m['f1']:.4f}  "
-            f"prec {val_m['precision']:.4f}  {RECALL_TPR_LABEL} {val_m['recall']:.4f}  "
+            f"prec {val_m['precision']:.4f}  "
+            f"recall {val_m['recall']:.4f}  "
             f"fpr {val_m['fpr']:.4f}  acc {val_m['accuracy']:.4f}  "
             f"[{epoch_time:.1f}s]"
         )
@@ -489,28 +178,28 @@ def train_baseline(args: argparse.Namespace) -> None:
 
     print(f"\nloading best weights from {save_path}")
     model.load_state_dict(torch.load(save_path, map_location=device))
-    test_loss, test_m = _run_epoch(model, test, device, pos_weight, focal_gamma=config.focal_gamma)
+    test_loss, test_m = run_epoch(model, test, device, pos_weight, focal_gamma=config.focal_gamma)
 
     model.eval()
-    val_logits_cat, val_labels_cat = _collect_logits_labels(model, val, device)
-    test_logits_cat, test_labels_cat = _collect_logits_labels(model, test, device)
+    val_logits_cat, val_labels_cat = collect_logits_labels(model, val, device)
+    test_logits_cat, test_labels_cat = collect_logits_labels(model, test, device)
 
     val_sweep = threshold_sweep(val_logits_cat, val_labels_cat, config.threshold_values)
     test_sweep = threshold_sweep(test_logits_cat, test_labels_cat, config.threshold_values)
     best_t = val_sweep['best']['threshold']
-    test_best_val_t_m = edge_f1(test_logits_cat, test_labels_cat, threshold=best_t)
+    test_best_val_t_m = threshold_sweep(test_logits_cat, test_labels_cat, [best_t])['all'][0]
 
     logger.write_json('val_threshold_sweep.json', val_sweep)
     logger.write_json('test_threshold_sweep.json', test_sweep)
 
     print()
-    print(_metric_line('test @0.50', test_loss, test_m))
-    print(_metric_line(f'test @val-best {best_t:.2f}', None, test_best_val_t_m))
+    print(metric_line('test @0.50', test_loss, test_m))
+    print(metric_line(f'test @val-best {best_t:.2f}', None, test_best_val_t_m))
 
     print(f"\n{'-'*75}")
-    _print_threshold_sweep('threshold sweep (val):', val_sweep['all'], best_t, ' <-- best')
+    print_threshold_sweep('threshold sweep (val):', val_sweep['all'], best_t, ' <-- best')
     print()
-    _print_threshold_sweep('threshold sweep (test):', test_sweep['all'], best_t, ' <-- best val')
+    print_threshold_sweep('threshold sweep (test):', test_sweep['all'], best_t, ' <-- best val')
     print(f"\noptimal threshold (by val F1): {best_t:.2f}")
     print(f"{'-'*75}")
 
@@ -531,8 +220,8 @@ def train_baseline(args: argparse.Namespace) -> None:
             'best_validation_threshold': best_t,
             'test_metrics_threshold_0_5': test_m,
             'test_metrics_best_validation_threshold': test_best_val_t_m,
-            'test_confusion_threshold_0_5': _confusion_counts(test_m),
-            'test_confusion_best_validation_threshold': _confusion_counts(test_best_val_t_m),
+            'test_confusion_threshold_0_5': confusion_counts(test_m),
+            'test_confusion_best_validation_threshold': confusion_counts(test_best_val_t_m),
             'resolution_tag': args.resolution_tag,
             'resolution_selector': args.resolution_tag,
             'filtered_graph_count': filtered_graph_count,

@@ -82,7 +82,6 @@ def fill_training_defaults(args: argparse.Namespace) -> argparse.Namespace:
         raise ValueError(f'unsupported model: {args.model}')
 
     shared_defaults = {
-        'preset': 'extended',
         'val_ratio': 0.15,
         'test_ratio': 0.10,
         'seed': None,
@@ -143,7 +142,6 @@ def build_parser(
     parser.add_argument('--enable-thickness-sdf', action='store_true')
 
     if include_gnn_options:
-        parser.add_argument('--preset', choices=['extended', 'paper'], default='extended')
         parser.add_argument('--num-layers', type=int, default=None)
         parser.add_argument('--in-dim', type=int, default=None)
         parser.add_argument('--heads', type=int, default=None)
