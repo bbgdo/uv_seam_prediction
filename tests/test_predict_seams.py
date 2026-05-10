@@ -104,7 +104,11 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(selection.feature_count, 14)
         self.assertEqual(endpoint_order, 'random')
 
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('ao_density'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(
+            _args('custom', enable_ao=True, enable_density=True),
+            {},
+            {},
+        )
         self.assertEqual(selection.feature_group, 'custom')
         self.assertTrue(selection.feature_flags.ao)
         self.assertTrue(selection.feature_flags.density)
@@ -432,6 +436,21 @@ class ThicknessSdfFlagTests(unittest.TestCase):
             ])
         self.assertTrue(args.enable_thickness_sdf)
 
+    def test_parser_rejects_ao_density_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mesh = Path(tmp) / 'mesh.obj'
+            mesh.write_text('', encoding='utf-8')
+            out = Path(tmp) / 'out.json'
+            weights = Path(tmp) / 'weights.pth'
+            weights.write_bytes(b'')
+            with self.assertRaises(SystemExit):
+                predict_seams.parse_args([
+                    '--mesh-path', str(mesh),
+                    '--model-weights', str(weights),
+                    '--output-json', str(out),
+                    '--feature-bundle', 'ao_density',
+                ])
+
     def test_custom_bundle_with_sdf_flag_includes_sdf_feature(self):
         args = _args('custom', enable_ao=True, enable_thickness_sdf=True)
         selection, _, _ = predict_seams.resolve_feature_bundle(args, {}, {})
@@ -451,6 +470,29 @@ class ThicknessSdfFlagTests(unittest.TestCase):
         args = _args('auto', enable_thickness_sdf=True)
         with self.assertRaises(predict_seams.PredictionError):
             predict_seams.resolve_feature_bundle(args, {}, {})
+
+    def test_infer_feature_bundle_requires_metadata_in_auto_mode(self):
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'could not be inferred'):
+            predict_seams.infer_feature_bundle({}, {})
+
+    def test_infer_feature_bundle_rejects_custom_metadata_without_optional_flags(self):
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'does not specify any optional custom feature flags'):
+            predict_seams.infer_feature_bundle(
+                {'feature_group': 'custom', 'feature_preset': 'custom', 'feature_flags': {}},
+                {},
+            )
+
+    def test_validate_feature_metadata_rejects_legacy_custom_base_metadata(self):
+        selection = predict_seams.resolve_feature_selection('paper14')
+        config = {
+            'feature_group': 'custom',
+            'feature_preset': 'custom',
+            'feature_flags': {},
+            'feature_names': list(selection.feature_names),
+            'in_dim': selection.feature_count,
+        }
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_group mismatch'):
+            predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
 
 
 if __name__ == '__main__':

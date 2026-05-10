@@ -30,14 +30,14 @@ from models.utils.seam_topology import (  # noqa: E402
     topology_pipeline_result_to_json_dict,
 )
 from preprocessing.compute_features import compute_edge_features_for_selection  # noqa: E402
-from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
 from preprocessing.build_gnn_dataset import build_dual_edge_index_from_unique_edges  # noqa: E402
 from preprocessing.obj_parser import parse_obj  # noqa: E402
 from preprocessing.topology import CanonicalTopology, WeldConfig, build_topology  # noqa: E402
 
 
 MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'sparsemeshcnn')
-FEATURE_BUNDLES = ('auto', 'paper14', 'ao_density', 'custom')
+FEATURE_BUNDLES = ('auto', 'paper14', 'custom')
 _MODEL_TYPE_ALIASES: dict[str, str] = {}
 
 
@@ -54,7 +54,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--feature-bundle',
         default='auto',
-        help='feature bundle: auto, paper14, ao_density, or custom',
+        help='feature bundle: auto, paper14, or custom',
     )
     parser.add_argument('--output-json', required=True)
     parser.add_argument('--threshold', type=float, default=None)
@@ -257,19 +257,54 @@ def _normalize_model_name(value: Any) -> str | None:
     return None
 
 
+def _requested_feature_flags(args: argparse.Namespace) -> dict[str, bool]:
+    return {
+        'ao': bool(args.enable_ao),
+        'signed_dihedral': bool(args.enable_dihedral),
+        'symmetry': bool(args.enable_symmetry),
+        'density': bool(args.enable_density),
+        'thickness_sdf': bool(args.enable_thickness_sdf),
+    }
+
+
+def _selection_from_feature_flags(flags: dict[str, bool]) -> ResolvedFeatureSet:
+    if not any(flags.values()):
+        return resolve_feature_selection('paper14')
+    return resolve_feature_selection(
+        'custom',
+        enable_ao=flags['ao'],
+        enable_signed_dihedral=flags['signed_dihedral'],
+        enable_symmetry=flags['symmetry'],
+        enable_density=flags['density'],
+        enable_thickness_sdf=flags['thickness_sdf'],
+    )
+
+
+def _default_endpoint_order_for_selection(selection: ResolvedFeatureSet) -> str:
+    return 'random' if selection.feature_group == 'paper14' else 'fixed'
+
+
+def _resolved_endpoint_order_from_metadata(
+    metadata: dict[str, Any],
+    selection: ResolvedFeatureSet,
+) -> str:
+    endpoint_order = _normalize_metadata_name(metadata.get('endpoint_order'))
+    if endpoint_order in ('fixed', 'random'):
+        return endpoint_order
+    group = _normalize_metadata_name(metadata.get('feature_group'))
+    preset = _normalize_metadata_name(metadata.get('feature_preset'))
+    if group == 'custom' or preset == 'custom':
+        return 'fixed'
+    return _default_endpoint_order_for_selection(selection)
+
+
 def resolve_feature_bundle(
     args: argparse.Namespace,
     config: dict[str, Any],
     summary: dict[str, Any],
 ) -> tuple[ResolvedFeatureSet, str, str]:
-    toggles = {
-        'enable_ao': bool(args.enable_ao),
-        'enable_dihedral': bool(args.enable_dihedral),
-        'enable_symmetry': bool(args.enable_symmetry),
-        'enable_density': bool(args.enable_density),
-        'enable_thickness_sdf': bool(args.enable_thickness_sdf),
-    }
-    any_toggle = any(toggles.values())
+    flags = _requested_feature_flags(args)
+    any_toggle = any(flags.values())
 
     if args.feature_bundle == 'auto':
         if any_toggle:
@@ -280,79 +315,63 @@ def resolve_feature_bundle(
         return infer_feature_bundle(config, summary)
 
     if args.feature_bundle != 'custom' and any_toggle:
-        enabled = ', '.join(name for name, value in toggles.items() if value)
+        enabled = ', '.join(name for name, value in flags.items() if value)
         raise PredictionError(
             f'feature toggles ({enabled}) are only valid with --feature-bundle custom',
             'InvalidFeatureBundle',
         )
 
     if args.feature_bundle == 'paper14':
-        return resolve_feature_selection('paper14'), 'random', args.feature_bundle
-    if args.feature_bundle == 'ao_density':
-        return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', args.feature_bundle
+        selection = resolve_feature_selection('paper14')
+        return selection, _default_endpoint_order_for_selection(selection), args.feature_bundle
 
     if not any_toggle:
         raise PredictionError(
             '--feature-bundle custom requires at least one explicit feature toggle',
             'InvalidFeatureBundle',
         )
-    return (
-        resolve_feature_selection(
-            'custom',
-            enable_ao=args.enable_ao,
-            enable_dihedral=args.enable_dihedral,
-            enable_symmetry=args.enable_symmetry,
-            enable_density=args.enable_density,
-            enable_thickness_sdf=args.enable_thickness_sdf,
-        ),
-        'fixed',
-        args.feature_bundle,
-    )
+    selection = _selection_from_feature_flags(flags)
+    return selection, _default_endpoint_order_for_selection(selection), args.feature_bundle
 
 
 def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tuple[ResolvedFeatureSet, str, str]:
     for metadata in _feature_metadata_sources(config, summary):
         group = _normalize_metadata_name(metadata.get('feature_group'))
         preset = _normalize_metadata_name(metadata.get('feature_preset'))
+        flags = _infer_feature_flags(metadata)
 
         if group in ('paper14', 'paper') or preset in ('paper14', 'paper'):
-            return resolve_feature_selection('paper14'), 'random', 'auto'
+            selection = resolve_feature_selection('paper14')
+            return selection, _resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
         if group == 'custom' or preset == 'custom':
-            flags = _infer_feature_flags(metadata)
-            return (
-                resolve_feature_selection(
-                    'custom',
-                    enable_ao=flags['ao'],
-                    enable_signed_dihedral=flags['signed_dihedral'],
-                    enable_symmetry=flags['symmetry'],
-                    enable_density=flags['density'],
-                    enable_thickness_sdf=flags['thickness_sdf'],
-                ),
-                'fixed',
-                'auto',
-            )
+            if not any(flags.values()):
+                raise PredictionError(
+                    'feature metadata declares custom features but does not specify any optional custom feature flags',
+                    'MissingFeatureMetadata',
+                )
+            selection = _selection_from_feature_flags(flags)
+            return selection, _resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
 
     for metadata in _feature_metadata_sources(config, summary):
         feature_names = _coerce_list(metadata.get('feature_names'))
         if feature_names:
             names = tuple(feature_names)
-            if names == resolve_feature_selection('paper14').feature_names:
-                return resolve_feature_selection('paper14'), 'random', 'auto'
+            if names == PAPER14_FEATURE_NAMES:
+                selection = resolve_feature_selection('paper14')
+                return selection, _resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
             flags = _infer_feature_flags({'feature_names': feature_names})
-            return (
-                resolve_feature_selection(
-                    'custom',
-                    enable_ao=flags['ao'],
-                    enable_signed_dihedral=flags['signed_dihedral'],
-                    enable_symmetry=flags['symmetry'],
-                    enable_density=flags['density'],
-                    enable_thickness_sdf=flags['thickness_sdf'],
-                ),
-                'fixed',
-                'auto',
-            )
+            if not any(flags.values()):
+                raise PredictionError(
+                    f'feature_names do not match paper14 and do not identify a supported custom feature set: {feature_names}',
+                    'MissingFeatureMetadata',
+                )
+            selection = _selection_from_feature_flags(flags)
+            return selection, _resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
 
-    return resolve_feature_selection('custom', enable_ao=True, enable_density=True), 'fixed', 'auto'
+    raise PredictionError(
+        'feature bundle could not be inferred from config or summary metadata; pass --feature-bundle explicitly',
+        'MissingFeatureMetadata',
+    )
 
 
 def _feature_metadata_sources(config: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -507,8 +526,8 @@ def validate_feature_metadata(
 
     expected_flags = selection.feature_flags.as_dict()
     for source_name, metadata in sources:
-        _validate_metadata_scalar(source_name, metadata, 'feature_group', selection.feature_group)
-        _validate_metadata_scalar(source_name, metadata, 'feature_preset', selection.feature_preset)
+        _validate_feature_metadata_name(source_name, metadata, 'feature_group', selection)
+        _validate_feature_metadata_name(source_name, metadata, 'feature_preset', selection)
 
         feature_names = _coerce_list(metadata.get('feature_names'))
         if feature_names is not None and feature_names != list(selection.feature_names):
@@ -552,23 +571,29 @@ def validate_feature_metadata(
         )
 
 
-def _validate_metadata_scalar(source_name: str, metadata: dict[str, Any], key: str, expected: str) -> None:
+def _validate_feature_metadata_name(
+    source_name: str,
+    metadata: dict[str, Any],
+    key: str,
+    selection: ResolvedFeatureSet,
+) -> None:
     value = metadata.get(key)
     if value in (None, ''):
         return
-    if isinstance(value, (list, tuple, set)):
-        values = {str(item) for item in value if item not in (None, '')}
-        if values and expected not in values:
-            raise PredictionError(
-                f'{source_name} {key} mismatch: expected {expected!r}, got {sorted(values)}',
-                'FeatureMetadataMismatch',
-            )
+    expected = selection.feature_group if key == 'feature_group' else selection.feature_preset
+    if _metadata_name_matches_expected(value, expected):
         return
-    if str(value) != expected:
-        raise PredictionError(
-            f'{source_name} {key} mismatch: expected {expected!r}, got {value!r}',
-            'FeatureMetadataMismatch',
-        )
+    raise PredictionError(
+        f'{source_name} {key} mismatch: expected {expected!r}, got {value!r}',
+        'FeatureMetadataMismatch',
+    )
+
+
+def _metadata_name_matches_expected(value: Any, expected: str) -> bool:
+    if isinstance(value, (list, tuple, set)):
+        values = {_normalize_metadata_name(item) for item in value if item not in (None, '')}
+        return _normalize_metadata_name(expected) in values
+    return _normalize_metadata_name(value) == _normalize_metadata_name(expected)
 
 
 def _coerce_list(value: Any) -> list[str] | None:
