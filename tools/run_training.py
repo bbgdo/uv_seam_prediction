@@ -37,12 +37,14 @@ def _fill_gnn_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'in_dim': config.in_dim,
         'pos_weight': config.pos_weight,
         'focal_gamma': config.focal_gamma,
-        'heads': config.heads,
-        'aggr': config.aggr,
-        'skip_connections': config.skip_connections,
         'dataset': 'dataset_dual.pt',
         'feature_group': None,
     }
+    if args.model == 'gatv2':
+        defaults['heads'] = config.heads
+    if args.model == 'graphsage':
+        defaults['aggr'] = 'lstm'
+        defaults['skip_connections'] = config.skip_connections
     for key, value in defaults.items():
         if getattr(args, key, None) is None:
             setattr(args, key, value)
@@ -115,6 +117,8 @@ def build_parser(
     include_model_arg: bool = True,
 ) -> argparse.ArgumentParser:
     include_gnn_options = any(model in GNN_MODELS for model in model_choices)
+    include_graphsage_options = 'graphsage' in model_choices
+    include_gatv2_options = 'gatv2' in model_choices
     include_sparse_options = 'sparsemeshcnn' in model_choices
     parser = argparse.ArgumentParser(description=description)
     if include_model_arg:
@@ -144,8 +148,10 @@ def build_parser(
     if include_gnn_options:
         parser.add_argument('--num-layers', type=int, default=None)
         parser.add_argument('--in-dim', type=int, default=None)
+    if include_gatv2_options:
         parser.add_argument('--heads', type=int, default=None)
-        parser.add_argument('--aggr', choices=['mean', 'lstm'], default=None)
+    if include_graphsage_options:
+        parser.add_argument('--aggr', choices=['lstm'], default=None)
         parser.add_argument('--skip-connections', choices=['hidden', 'all', 'none'], default=None)
 
     parser.add_argument('--weight-decay', type=float, default=None)

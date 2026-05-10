@@ -23,9 +23,9 @@ def build_runtime_config(args: argparse.Namespace) -> BaselineConfig:
         in_dim=args.in_dim,
         dropout=args.dropout,
         weight_decay=getattr(args, 'weight_decay', None),
-        heads=args.heads,
-        aggr=args.aggr,
-        skip_connections=args.skip_connections,
+        heads=getattr(args, 'heads', None),
+        aggr=getattr(args, 'aggr', None),
+        skip_connections=getattr(args, 'skip_connections', None),
     )
 
 
