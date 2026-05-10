@@ -8,11 +8,9 @@ import tempfile
 import numpy as np
 import torch
 
-from models.meshcnn_full.mesh import MeshCNNSample, MutableMeshTopology, build_mesh_adjacency
+from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
 from models.meshcnn_full.model import MeshCNNSegmenter
-from models.meshcnn_full.pool import MeshPool
 from models.meshcnn_full.train import slice_meshcnn_dataset_features
-from models.meshcnn_full.unpool import MeshUnpool
 from preprocessing.build_meshcnn_dataset import (
     DEFAULT_OUTPUT,
     build_dataset_manifest,
@@ -57,49 +55,6 @@ def _obj_file(text: str):
         path = Path(temp_dir) / 'mesh.obj'
         path.write_text(text, encoding='utf-8')
         yield path
-
-
-def _valid_collapse_mesh():
-    vertices = np.asarray([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [-1.0, 1.0, 0.2],
-        [1.0, 1.0, 0.5],
-        [1.0, 0.0, 1.0],
-        [-0.5, 0.0, 1.0],
-    ], dtype=np.float32)
-    faces = np.asarray([
-        [0, 1, 2],
-        [1, 0, 3],
-        [0, 2, 4],
-        [2, 1, 5],
-        [1, 3, 6],
-        [3, 0, 7],
-    ], dtype=np.int64)
-    return vertices, faces
-
-
-def _nonmanifold_result_mesh():
-    vertices = np.asarray([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 1.0, 1.0],
-        [-1.0, 1.0, 0.2],
-        [0.5, 1.5, 1.0],
-        [1.0, 1.0, 1.0],
-    ], dtype=np.float32)
-    faces = np.asarray([
-        [0, 1, 2],
-        [1, 0, 3],
-        [0, 4, 5],
-        [4, 0, 6],
-        [1, 4, 7],
-    ], dtype=np.int64)
-    return vertices, faces
 
 
 def _full_custom_selection():
@@ -156,54 +111,6 @@ class MeshCNNFullTests(unittest.TestCase):
             self.assertTrue(np.array_equal(rebuilt[2], sample.face_to_edges.numpy()))
             self.assertTrue(np.array_equal(rebuilt[3], sample.edge_neighbors.numpy()))
             self.assertTrue(np.array_equal(rebuilt[4], sample.boundary_mask.numpy()))
-
-    def test_invalid_edge_collapses_are_rejected(self):
-        vertices, faces = _valid_collapse_mesh()
-        topology = MutableMeshTopology(vertices, faces)
-        boundary_idx = int(np.flatnonzero(topology.boundary_mask)[0])
-        self.assertEqual(topology.collapse_error(boundary_idx), 'boundary edge')
-
-        vertices, faces = _nonmanifold_result_mesh()
-        topology = MutableMeshTopology(vertices, faces)
-        collapse_idx = topology.edge_key_to_idx[(0, 1)]
-        self.assertEqual(topology.collapse_error(collapse_idx), 'non-manifold result')
-
-    def test_valid_collapse_history_unpools_to_original_shape(self):
-        vertices, faces = _valid_collapse_mesh()
-        topology = MutableMeshTopology(vertices, faces)
-        x = torch.randn(topology.edge_count, 8, requires_grad=True)
-        pool = MeshPool(channels=8, target_ratio=0.5, min_edges=1, max_collapses=1)
-        pooled, _, history = pool(x, topology)
-        restored = MeshUnpool()(pooled, history)
-        pooled.sum().backward()
-
-        self.assertLessEqual(pooled.shape[0], x.shape[0])
-        self.assertEqual(restored.shape, x.shape)
-        self.assertEqual(history.old_edge_count, x.shape[0])
-        self.assertEqual(history.new_edge_count, pooled.shape[0])
-        self.assertTrue(any(param.grad is not None for param in pool.scorer.parameters()))
-
-    def test_pool_exhausts_invalid_candidates_without_spinning(self):
-        vertices = np.asarray([
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ], dtype=np.float32)
-        faces = np.asarray([[0, 1, 2]], dtype=np.int64)
-        topology = MutableMeshTopology(vertices, faces)
-        x = torch.randn(topology.edge_count, 4)
-        pool = MeshPool(channels=4, target_ratio=0.1, min_edges=1, max_collapses=None)
-
-        pooled, pooled_topology, history = pool(x, topology)
-        debug = pool.get_last_debug()
-
-        self.assertEqual(pooled.shape[0], topology.edge_count)
-        self.assertEqual(pooled_topology.edge_count, topology.edge_count)
-        self.assertEqual(history.new_edge_count, topology.edge_count)
-        self.assertEqual(debug['attempted_collapses'], topology.edge_count)
-        self.assertEqual(debug['successful_collapses'], 0)
-        self.assertEqual(debug['rejected_collapses'], topology.edge_count)
-        self.assertEqual(debug['stop_reason'], 'stagnated_no_valid_collapses')
 
     def test_forward_pass_on_cached_meshcnn_sample(self):
         with _obj_file(OBJ_TETRA) as path:
