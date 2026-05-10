@@ -37,16 +37,6 @@ from tools.run_feature_ablations import (
 )
 
 
-def _paper_data(endpoint_order: str = 'random', feature_group: str = 'paper14') -> Data:
-    data = Data(x=torch.zeros(2, len(PAPER14_FEATURE_NAMES)))
-    data.file_path = 'mesh_0.obj'
-    data.feature_group = feature_group
-    data.feature_preset = 'paper14'
-    data.feature_names = list(PAPER14_FEATURE_NAMES)
-    data.endpoint_order = endpoint_order
-    return data
-
-
 def _custom_data(feature_names: list[str] | None = None, endpoint_order: str = 'random') -> Data:
     names = feature_names or list(resolve_feature_selection(
         'custom',
@@ -520,7 +510,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual(custom_command[0], sys.executable)
-        self.assertIn(str(Path('tools') / 'run_baseline.py'), custom_command)
+        self.assertIn(str(Path('tools') / 'run_training.py'), custom_command)
         self.assertIn('--split-json-in', custom_command)
         self.assertNotIn('--split-json-out', custom_command)
         self.assertIn('--enable-ao', custom_command)
@@ -553,19 +543,19 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual(command[0], sys.executable)
-        self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), command)
-        self.assertNotIn(str(Path('tools') / 'run_baseline.py'), command)
+        self.assertIn(str(Path('tools') / 'run_training.py'), command)
         for flag in ('--dataset', '--run-dir', '--epochs', '--seed', '--split-json-in'):
             self.assertIn(flag, command)
         self.assertNotIn('--group-mode', command)
         self.assertEqual(command[command.index('--dataset') + 1], 'meshcnn_superset.pt')
+        self.assertEqual(command[command.index('--model') + 1], 'sparsemeshcnn')
         self.assertEqual(command[command.index('--feature-group') + 1], 'custom')
         self.assertIn('--enable-ao', command)
         self.assertIn('--enable-thickness-sdf', command)
         self.assertNotIn('--enable-dihedral', command)
         self.assertNotIn('--enable-symmetry', command)
         self.assertNotIn('--enable-density', command)
-        for forbidden in ('--model', '--preset', '--pos-weight'):
+        for forbidden in ('--preset', '--pos-weight'):
             self.assertNotIn(forbidden, command)
 
     def test_run_experiment_reuses_existing_split_jsons(self):
@@ -579,6 +569,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             commands = []
 
             def fake_runner(command, check):
+                del check
                 commands.append(command)
                 seed = int(command[command.index('--seed') + 1])
                 run_dir = Path(command[command.index('--run-dir') + 1])
@@ -618,6 +609,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             commands = []
 
             def fake_runner(command, check):
+                del check
                 commands.append(command)
                 run_dir = Path(command[command.index('--run-dir') + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
@@ -654,6 +646,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 split_path_for_seed(splits_dir, seed).write_text('{}')
 
             def fake_runner(command, check):
+                del check
                 raise AssertionError('control14 should be reused, not trained')
 
             args = Namespace(
@@ -691,6 +684,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             spec = EXPERIMENT_SPECS['control14']
 
             def fake_runner(command, check):
+                del check
                 raise subprocess.CalledProcessError(9, command)
 
             records = run_experiment(args=args, spec=spec, runner=fake_runner)
@@ -708,6 +702,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             commands = []
 
             def fake_runner(command, check):
+                del check
                 commands.append(command)
                 run_dir = Path(command[command.index('--run-dir') + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
@@ -731,7 +726,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             records[0]['run_dir'],
             str(root / 'sparsemeshcnn' / 'experiments' / 'control14' / 'seed_1'),
         )
-        self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), commands[0])
+        self.assertIn(str(Path('tools') / 'run_training.py'), commands[0])
 
     def test_sparsemeshcnn_payload_reports_public_model_name(self):
         args = Namespace(

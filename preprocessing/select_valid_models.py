@@ -11,7 +11,7 @@ def clean_directory(target_folder, whitelist_file):
         print(f"Error: File {whitelist_file} is not found!")
         return
 
-    with open(whitelist_path, 'r', encoding='utf-8') as f:
+    with open(whitelist_path, encoding='utf-8') as f:
         valid_files = {line.strip() for line in f if line.strip()}
 
     if not os.path.exists(folder_path):

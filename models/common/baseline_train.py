@@ -196,6 +196,7 @@ def build_runtime_config(args: argparse.Namespace) -> BaselineConfig:
         patience=args.patience,
         in_dim=args.in_dim,
         dropout=args.dropout,
+        weight_decay=getattr(args, 'weight_decay', None),
         heads=args.heads,
         aggr=args.aggr,
         skip_connections=args.skip_connections,

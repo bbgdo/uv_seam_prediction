@@ -12,12 +12,14 @@ import trimesh  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
+    from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
     from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
     from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
     from preprocessing.obj_parser import parse_obj
     from preprocessing.seam_labels import extract_seam_truth
     from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
 except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
+    from canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
     from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
     from feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
     from obj_parser import parse_obj
@@ -25,12 +27,6 @@ except ModuleNotFoundError:  # pragma: no cover - supports direct script executi
     from topology import WeldConfig, build_topology, canonical_edge_key
 
 EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
-
-
-def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:
-    if endpoint_order != 'auto':
-        return endpoint_order
-    return 'random' if feature_group == 'paper14' else 'fixed'
 
 
 def resolve_feature_cli_selection(
@@ -87,10 +83,9 @@ def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
                 return np.array([0.0, 0.0])
             fc_idx = face_idx * 3 + local_pos[0]
             return uv[fc_idx]
-        else:
-            if geom_vertex < len(uv):
-                return uv[geom_vertex]
-            return np.array([0.0, 0.0])
+        if geom_vertex < len(uv):
+            return uv[geom_vertex]
+        return np.array([0.0, 0.0])
 
     UV_EPS = 1e-5
 
@@ -300,7 +295,7 @@ def build_dual_data(original_data: Data) -> Data:
     dual.feature_names = list(getattr(original_data, 'feature_names', []))
     dual.feature_flags = dict(getattr(original_data, 'feature_flags', {}))
     if hasattr(original_data, 'density_config'):
-        dual.density_config = dict(getattr(original_data, 'density_config'))
+        dual.density_config = dict(original_data.density_config)
     dual.endpoint_order = getattr(original_data, 'endpoint_order', '')
     dual.weld_mode = getattr(original_data, 'weld_mode', '')
     dual.seam_edge_count = getattr(original_data, 'seam_edge_count', int(dual_y.sum().item()))
@@ -364,14 +359,6 @@ def write_dataset_manifest(dataset: list[Data], dataset_path: Path) -> Path:
         json.dump(manifest, handle, indent=2, sort_keys=True)
         handle.write('\n')
     return manifest_path
-
-
-def build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
-    vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
-    faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
-    if len(vertices) == 0 or len(faces) == 0:
-        raise ValueError('exact_obj requires a non-empty OBJ mesh')
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
 def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:

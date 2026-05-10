@@ -10,13 +10,13 @@ import torch
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.obj_parser import parse_obj
 from preprocessing.build_gnn_dataset import (
-    build_feature_mesh_from_topology,
     build_dual_data,
     main as build_dataset_main,
     manifest_path_for_dataset,
     process_mesh,
     validate_saved_gnn_feature_metadata,
 )
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES
 from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import WeldConfig, build_topology

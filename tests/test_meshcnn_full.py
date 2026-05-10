@@ -1,5 +1,6 @@
 import json
 import unittest
+from argparse import Namespace
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +11,8 @@ import torch
 
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
 from models.meshcnn_full.model import MeshCNNSegmenter
-from models.meshcnn_full.train import slice_meshcnn_dataset_features
+from models.meshcnn_full.training import train_sparsemeshcnn
+from models.meshcnn_full.training_data import slice_meshcnn_dataset_features
 from preprocessing.build_meshcnn_dataset import (
     DEFAULT_OUTPUT,
     build_dataset_manifest,
@@ -268,8 +270,6 @@ class MeshCNNFullTests(unittest.TestCase):
 
 class TrainConfigMetadataTests(unittest.TestCase):
     def test_train_config_writes_sparsemeshcnn_model_name(self):
-        from models.meshcnn_full import train as train_module
-
         sample = _sample_with_features(list(PAPER14_FEATURE_NAMES))
         samples = [sample]
         fake_metrics = {'f1': 0.5, 'precision': 0.5, 'recall': 0.5}
@@ -281,14 +281,14 @@ class TrainConfigMetadataTests(unittest.TestCase):
             run_dir = Path(tmp) / 'run'
 
             with (
-                patch.object(train_module, 'load_meshcnn_dataset', return_value=samples),
-                patch.object(train_module, '_validate_dataset_tensors_cpu'),
-                patch.object(train_module, '_load_manifest', return_value={}),
-                patch.object(train_module, 'split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
-                patch.object(train_module, 'compute_pos_weight', return_value=torch.tensor([1.0])),
-                patch.object(train_module, '_run_epoch', return_value=(0.5, fake_metrics, {})),
-                patch.object(train_module, '_predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
-                patch.object(train_module, 'threshold_sweep', return_value=fake_sweep),
+                patch('models.meshcnn_full.training.load_meshcnn_dataset', return_value=samples),
+                patch('models.meshcnn_full.training.validate_dataset_tensors_cpu'),
+                patch('models.meshcnn_full.training.load_manifest', return_value={}),
+                patch('models.meshcnn_full.training.split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
+                patch('models.meshcnn_full.training.compute_pos_weight', return_value=torch.tensor([1.0])),
+                patch('models.meshcnn_full.training.run_epoch', return_value=(0.5, fake_metrics, {})),
+                patch('models.meshcnn_full.training.predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
+                patch('models.meshcnn_full.training.threshold_sweep', return_value=fake_sweep),
                 patch('torch.save'),
                 patch('torch.load', return_value={
                     'model_state': {},
@@ -298,15 +298,36 @@ class TrainConfigMetadataTests(unittest.TestCase):
                     'best_epoch': 1,
                     'best_val_f1': 0.5,
                 }),
-                patch.object(train_module.MeshCNNSegmenter, 'load_state_dict'),
+                patch.object(MeshCNNSegmenter, 'load_state_dict'),
             ):
-                train_module.main([
-                    '--dataset', str(dataset_pt),
-                    '--run-dir', str(run_dir),
-                    '--epochs', '1',
-                    '--hidden', '16',
-                    '--pool-ratios', '0.85,0.75',
-                ])
+                train_sparsemeshcnn(Namespace(
+                    dataset=str(dataset_pt),
+                    run_dir=str(run_dir),
+                    epochs=1,
+                    lr=1e-3,
+                    weight_decay=1e-4,
+                    hidden=16,
+                    dropout=0.2,
+                    pool_ratios='0.85,0.75',
+                    min_edges=32,
+                    max_pool_collapses=2048,
+                    focal_gamma=2.0,
+                    pos_weight=None,
+                    grad_accum_steps=1,
+                    patience=50,
+                    val_ratio=0.15,
+                    test_ratio=0.10,
+                    seed=42,
+                    split_json_in=None,
+                    split_json_out=None,
+                    resolution_tag='all',
+                    feature_group='paper14',
+                    enable_ao=False,
+                    enable_dihedral=False,
+                    enable_symmetry=False,
+                    enable_density=False,
+                    enable_thickness_sdf=False,
+                ))
 
             config = json.loads((run_dir / 'config.json').read_text(encoding='utf-8'))
             self.assertEqual(config['model'], 'sparsemeshcnn')

@@ -16,7 +16,7 @@ def reset_scene():
     for pool in (bpy.data.meshes, bpy.data.materials, bpy.data.textures,
                  bpy.data.images, bpy.data.armatures, bpy.data.libraries,
                  bpy.data.lights, bpy.data.cameras):
-        for item in pool:
+        for item in list(pool):
             try:
                 pool.remove(item)
             except Exception:

@@ -18,7 +18,7 @@ class SeamApplyResult:
 
 
 def load_predicted_edge_keys(json_path):
-    with open(json_path, 'r', encoding='utf-8') as file:
+    with open(json_path, encoding='utf-8') as file:
         payload = json.load(file)
 
     if not isinstance(payload, dict):
@@ -51,7 +51,7 @@ def load_accepted_bridge_edge_keys(json_path):
 
 
 def load_accepted_bridge_debug_entries(json_path):
-    with open(json_path, 'r', encoding='utf-8') as file:
+    with open(json_path, encoding='utf-8') as file:
         payload = json.load(file)
 
     if not isinstance(payload, dict):

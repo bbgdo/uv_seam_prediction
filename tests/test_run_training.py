@@ -1,0 +1,74 @@
+import unittest
+from argparse import Namespace
+from unittest.mock import patch
+
+from tools import run_training
+
+
+class RunTrainingTests(unittest.TestCase):
+    def test_parse_graphsage_defaults(self):
+        args = run_training.parse_args(['--model', 'graphsage', '--epochs', '1'])
+
+        self.assertEqual(args.model, 'graphsage')
+        self.assertEqual(args.dataset, 'dataset_dual.pt')
+        self.assertEqual(args.feature_group, None)
+        self.assertEqual(args.aggr, 'lstm')
+        self.assertTrue(args.run_dir.startswith('runs/dual_graphsage_'))
+
+    def test_parse_gatv2_defaults(self):
+        args = run_training.parse_args(['--model', 'gatv2', '--epochs', '1'])
+
+        self.assertEqual(args.model, 'gatv2')
+        self.assertEqual(args.dataset, 'dataset_dual.pt')
+        self.assertEqual(args.heads, 4)
+        self.assertTrue(args.run_dir.startswith('runs/gatv2_'))
+
+    def test_parse_sparsemeshcnn_defaults(self):
+        args = run_training.parse_args(['--model', 'sparsemeshcnn', '--epochs', '1'])
+
+        self.assertEqual(args.model, 'sparsemeshcnn')
+        self.assertEqual(args.dataset, 'dataset_sparsemeshcnn_paper14.pt')
+        self.assertEqual(args.feature_group, 'paper14')
+        self.assertEqual(args.pool_ratios, '0.85,0.75')
+        self.assertEqual(args.min_edges, 32)
+        self.assertTrue(args.run_dir.startswith('runs/sparsemeshcnn_'))
+
+    def test_dispatches_graph_model_to_baseline_trainer(self):
+        args = run_training.parse_args(['--model', 'graphsage', '--epochs', '1'])
+
+        with patch.object(run_training, 'train_baseline') as train_baseline:
+            run_training.train_model(args)
+
+        train_baseline.assert_called_once_with(args)
+
+    def test_dispatches_sparsemeshcnn_to_sparse_trainer(self):
+        args = run_training.parse_args(['--model', 'sparsemeshcnn', '--epochs', '1'])
+
+        with patch.object(run_training, 'train_sparsemeshcnn') as train_sparsemeshcnn:
+            run_training.train_model(args)
+
+        train_sparsemeshcnn.assert_called_once_with(args)
+
+    def test_architecture_script_accepts_namespace(self):
+        from models.dual_graphsage import train as graphsage_train
+
+        args = Namespace(dataset='dataset.pt', epochs=1)
+        with patch.object(run_training, 'train_baseline') as train_baseline:
+            graphsage_train.main(args)
+
+        train_baseline.assert_called_once()
+        self.assertEqual(train_baseline.call_args.args[0].model, 'graphsage')
+
+    def test_sparsemeshcnn_script_accepts_namespace(self):
+        from models.meshcnn_full import train as sparsemeshcnn_train
+
+        args = Namespace(dataset='dataset.pt', epochs=1)
+        with patch.object(run_training, 'train_sparsemeshcnn') as train_sparsemeshcnn:
+            sparsemeshcnn_train.main(args)
+
+        train_sparsemeshcnn.assert_called_once()
+        self.assertEqual(train_sparsemeshcnn.call_args.args[0].model, 'sparsemeshcnn')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -2,27 +2,26 @@
 
 Maintained training entrypoints:
 
-- `tools/run_baseline.py` for single GraphSAGE and GATv2 runs
+- `tools/run_training.py` for single GraphSAGE, GATv2, and SparseMeshCNN runs
 - `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations
-- `models/meshcnn_full/train.py` for direct SparseMeshCNN training
 
-## GraphSAGE and GATv2
+## Single Training Runs
 
-Train GraphSAGE or GATv2 through `tools/run_baseline.py`.
+Train any maintained architecture through `tools/run_training.py`.
 
 ```bash
-python tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --run-dir runs/models/graphsage_paper14
-python tools/run_baseline.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
+python tools/run_training.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --run-dir runs/models/graphsage_paper14
+python tools/run_training.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
+python tools/run_training.py --model sparsemeshcnn --dataset datasets/sparsemeshcnn_custom_superset.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/sparsemeshcnn_custom
 ```
 
 `paper14` is the paper feature baseline.
 
 ## SparseMeshCNN
 
-Train SparseMeshCNN directly through `models/meshcnn_full/train.py` or run ablations through `tools/run_feature_ablations.py`.
+Run SparseMeshCNN ablations through `tools/run_feature_ablations.py`.
 
 ```bash
-python models/meshcnn_full/train.py --dataset datasets/sparsemeshcnn_custom_superset.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/sparsemeshcnn_custom
 python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
 ```
 

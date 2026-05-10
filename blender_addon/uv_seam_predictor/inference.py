@@ -137,6 +137,6 @@ def cleanup_job(job, keep_temp_files=False):
 def read_text_tail(path, max_chars=4000):
     if not os.path.exists(path):
         return ''
-    with open(path, 'r', encoding='utf-8', errors='replace') as file:
+    with open(path, encoding='utf-8', errors='replace') as file:
         data = file.read()
     return data[-max_chars:].strip()

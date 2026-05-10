@@ -11,11 +11,11 @@ import torch
 
 import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
-import trimesh  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
 from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
 from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
 from preprocessing.obj_parser import parse_obj
@@ -26,22 +26,8 @@ from preprocessing.topology import WeldConfig, build_topology
 DEFAULT_OUTPUT = 'dataset_sparsemeshcnn_paper14.pt'
 
 
-def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:
-    if endpoint_order != 'auto':
-        return endpoint_order
-    return 'random' if feature_group == 'paper14' else 'fixed'
-
-
 def manifest_path_for_dataset(dataset_path: Path) -> Path:
     return dataset_path.with_name(f'{dataset_path.stem}_manifest.json')
-
-
-def _build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
-    vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
-    faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
-    if len(vertices) == 0 or len(faces) == 0:
-        raise ValueError('exact OBJ MeshCNN samples require a non-empty triangle mesh')
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
 def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:
@@ -112,7 +98,10 @@ def build_meshcnn_sample(
             f'missing occurrences={seam_truth.audit.missing_uv_occurrences}'
         )
 
-    feature_mesh = _build_feature_mesh_from_topology(topology)
+    feature_mesh = build_feature_mesh_from_topology(
+        topology,
+        empty_message='exact OBJ MeshCNN samples require a non-empty triangle mesh',
+    )
     edge_features, unique_edges, _ = compute_edge_features_for_selection(
         feature_mesh,
         feature_selection,

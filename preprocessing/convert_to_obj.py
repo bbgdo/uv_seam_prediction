@@ -24,10 +24,10 @@ def reset_scene():
 
     for collection in [bpy.data.meshes, bpy.data.materials, bpy.data.textures, bpy.data.images, bpy.data.armatures,
                        bpy.data.libraries, bpy.data.lights, bpy.data.cameras]:
-        for item in collection:
+        for item in list(collection):
             try:
                 collection.remove(item)
-            except:
+            except Exception:
                 pass
 
 

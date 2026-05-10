@@ -21,10 +21,10 @@ def reset_scene():
     bpy.ops.object.delete()
 
     for collection in [bpy.data.meshes, bpy.data.materials, bpy.data.textures, bpy.data.images, bpy.data.libraries]:
-        for item in collection:
+        for item in list(collection):
             try:
                 collection.remove(item)
-            except:
+            except Exception:
                 pass
 
 
@@ -56,6 +56,7 @@ def robust_cleanup_and_triangulate():
     bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
 
     bpy.ops.object.mode_set(mode='OBJECT')
+    return True
 
 
 def export_obj_modern(out_path):
@@ -116,7 +117,7 @@ def process_directory(input_path_arg):
                 bpy.ops.wm.obj_import(filepath=full_path)
             else:
                 bpy.ops.import_scene.obj(filepath=full_path)
-        except Exception as e:
+        except Exception:
             print(f"FAIL (Import Error)")
             fail_count += 1
             continue

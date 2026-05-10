@@ -27,7 +27,7 @@ THRESHOLD_05_PREFIX = 'test_0_5'
 VAL_BEST_PREFIX = 'test_val_best'
 GNN_MODELS = ('graphsage', 'gatv2')
 SPARSE_MESHCNN_MODEL = 'sparsemeshcnn'
-SPARSE_MESHCNN_TRAIN_SCRIPT = Path('models') / 'meshcnn_full' / 'train.py'
+TRAINING_SCRIPT = Path('tools') / 'run_training.py'
 ABLATION_MODELS = (*GNN_MODELS, SPARSE_MESHCNN_MODEL)
 
 
@@ -420,7 +420,9 @@ def build_train_command(
             raise ValueError(f'{spec.name} requires a MeshCNN dataset')
         command = [
             sys.executable,
-            str(SPARSE_MESHCNN_TRAIN_SCRIPT),
+            str(TRAINING_SCRIPT),
+            '--model',
+            model,
             '--dataset',
             meshcnn_dataset,
             '--run-dir',
@@ -455,7 +457,7 @@ def build_train_command(
 
     command = [
         sys.executable,
-        str(Path('tools') / 'run_baseline.py'),
+        str(TRAINING_SCRIPT),
         '--model',
         model,
         '--dataset',

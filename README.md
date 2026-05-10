@@ -6,9 +6,8 @@ Maintained entrypoints:
 
 - `preprocessing/build_gnn_dataset.py` for GraphSAGE/GATv2 PyG datasets
 - `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN datasets
-- `tools/run_baseline.py` for single GraphSAGE/GATv2 training
+- `tools/run_training.py` for single GraphSAGE, GATv2, and SparseMeshCNN training
 - `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations
-- `models/meshcnn_full/train.py` for direct SparseMeshCNN training
 - `tools/predict_seams.py` for inference
 - `tools/evaluate_dir_topology.py` for topology and post-processing evaluation
 - `tools/evaluate_saved_models.py` for reevaluating saved checkpoints
@@ -43,11 +42,12 @@ python tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-
 python tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
 ```
 
-Run a single GraphSAGE or GATv2 training job:
+Run a single training job:
 
 ```bash
-python tools/run_baseline.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --run-dir runs/models/graphsage_paper14
-python tools/run_baseline.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
+python tools/run_training.py --model graphsage --dataset datasets/gnn_paper14.pt --feature-group paper14 --run-dir runs/models/graphsage_paper14
+python tools/run_training.py --model gatv2 --dataset datasets/gnn_custom.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/gatv2_custom
+python tools/run_training.py --model sparsemeshcnn --dataset datasets/sparsemeshcnn_custom_superset.pt --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --run-dir runs/models/sparsemeshcnn_custom
 ```
 
 Run GraphSAGE and GATv2 feature ablations on the custom superset dataset:

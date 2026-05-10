@@ -12,7 +12,7 @@ from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
 from models.common.baseline_train import _model_kwargs, apply_runtime_feature_selection, build_runtime_config
 from models.baselines.registry import get_baseline
-from tools.run_baseline import parse_args as parse_baseline_args
+from tools.run_training import parse_args as parse_training_args
 from models.utils.experiment_log import ExperimentLogger
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.feature_registry import get_feature_group, resolve_feature_selection
@@ -59,8 +59,8 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(get_baseline('gatv2').default_config_overrides['heads'], 4)
 
     def test_unified_runner_defaults_graphsage_and_gatv2(self):
-        graphsage_args = parse_baseline_args(['--epochs', '1'])
-        gatv2_args = parse_baseline_args(['--model', 'gatv2', '--epochs', '1'])
+        graphsage_args = parse_training_args(['--epochs', '1'])
+        gatv2_args = parse_training_args(['--model', 'gatv2', '--epochs', '1'])
 
         self.assertEqual(graphsage_args.model, 'graphsage')
         self.assertEqual(graphsage_args.hidden, 128)
@@ -206,7 +206,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(out.shape, (5,))
 
     def test_shared_trainer_instantiates_gatv2_with_runtime_dims(self):
-        args = parse_baseline_args([
+        args = parse_training_args([
             '--model', 'gatv2',
             '--epochs', '1',
             '--feature-group', 'custom',

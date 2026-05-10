@@ -782,8 +782,8 @@ def _bridge_report_base(left: int, right: int, component_id_of: dict[int, int]) 
     return {
         'endpoint_vertex_ids': endpoints,
         'component_ids_before': [
-            component_id_of.get(endpoints[0], None),
-            component_id_of.get(endpoints[1], None),
+            component_id_of.get(endpoints[0]),
+            component_id_of.get(endpoints[1]),
         ],
     }
 
@@ -937,10 +937,10 @@ def _candidate_debug_report(
     interior_vertices = path_vertices[1:-1] if len(path_vertices) >= 2 else tuple()
     return {
         'endpoint_vertex_ids': [int(min(left, right)), int(max(left, right))],
-        'component_id': component_id_of.get(int(left), None),
+        'component_id': component_id_of.get(int(left)),
         'component_ids_before': [
-            component_id_of.get(int(min(left, right)), None),
-            component_id_of.get(int(max(left, right)), None),
+            component_id_of.get(int(min(left, right))),
+            component_id_of.get(int(max(left, right))),
         ],
         'path_edge_ids': [int(edge_index) for edge_index in path_edges],
         'path_edge_count': len(path_edges) if path is not None else None,
@@ -1034,7 +1034,7 @@ def _build_unmatched_endpoint_reports(
         local_candidates.sort(key=_report_sort_key)
         reports.append({
             'endpoint_vertex_id': int(endpoint),
-            'component_id': component_id_of.get(int(endpoint), None),
+            'component_id': component_id_of.get(int(endpoint)),
             'nearest_endpoint_candidates': local_candidates[:per_endpoint_limit],
         })
     return tuple(reports[:max_debug_candidates])

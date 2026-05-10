@@ -9,27 +9,33 @@ bl_info = {
 }
 
 import bpy
+import importlib
+import sys
 
-if 'prefs' in locals():
-    import importlib
+should_reload = f'{__name__}.prefs' in sys.modules
 
-    importlib.reload(prefs)
-    importlib.reload(properties)
-    importlib.reload(validation)
-    importlib.reload(export_obj)
-    importlib.reload(inference)
-    importlib.reload(seam_mapping)
-    importlib.reload(operators)
-    importlib.reload(ui)
-else:
-    from . import export_obj
-    from . import inference
-    from . import operators
-    from . import prefs
-    from . import properties
-    from . import seam_mapping
-    from . import ui
-    from . import validation
+from . import export_obj
+from . import inference
+from . import operators
+from . import prefs
+from . import properties
+from . import seam_mapping
+from . import ui
+from . import validation
+
+reload_modules = (
+    prefs,
+    properties,
+    validation,
+    export_obj,
+    inference,
+    seam_mapping,
+    operators,
+    ui,
+)
+if should_reload:
+    for module in reload_modules:
+        importlib.reload(module)
 
 
 classes = (
