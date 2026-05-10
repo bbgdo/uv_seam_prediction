@@ -18,13 +18,13 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
-from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
-from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
-from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-from preprocessing.obj_parser import parse_obj
-from preprocessing.seam_labels import extract_seam_truth
-from preprocessing.topology import WeldConfig, build_topology
+from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa: E402
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order  # noqa: E402
+from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection  # noqa: E402
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.obj_parser import parse_obj  # noqa: E402
+from preprocessing.seam_labels import extract_seam_truth  # noqa: E402
+from preprocessing.topology import WeldConfig, build_topology  # noqa: E402
 
 
 DEFAULT_OUTPUT = 'dataset_sparsemeshcnn_paper14.pt'
@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(f'no .obj files found in {mesh_dir}')
 
     print(f'found {len(obj_files)} OBJ file(s)')
-    print(f'label source: exact_obj')
+    print('label source: exact_obj')
     print(f'features: {feature_selection.feature_group} ({feature_selection.feature_count})')
     print(f'endpoint order: {endpoint_order}')
 

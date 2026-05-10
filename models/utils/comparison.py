@@ -48,7 +48,7 @@ def plot_comparison_f1(runs: dict[str, tuple[dict, list[dict]]], output_dir: Pat
     fig.tight_layout()
     fig.savefig(output_dir / 'comparison_f1.png', dpi=DPI)
     plt.close(fig)
-    print(f"  saved comparison_f1.png")
+    print("  saved comparison_f1.png")
 
 
 def plot_comparison_table(runs: dict[str, tuple[dict, list[dict]]], output_dir: Path) -> None:
@@ -90,7 +90,7 @@ def plot_comparison_table(runs: dict[str, tuple[dict, list[dict]]], output_dir: 
     fig.tight_layout()
     fig.savefig(output_dir / 'comparison_table.png', dpi=DPI, bbox_inches='tight')
     plt.close(fig)
-    print(f"  saved comparison_table.png")
+    print("  saved comparison_table.png")
 
 
 if __name__ == '__main__':

@@ -8,20 +8,20 @@ bl_info = {
     'category': 'UV',
 }
 
-import bpy
-import importlib
-import sys
+import bpy  # noqa: E402
+import importlib  # noqa: E402
+import sys  # noqa: E402
 
 should_reload = f'{__name__}.prefs' in sys.modules
 
-from . import export_obj
-from . import inference
-from . import operators
-from . import prefs
-from . import properties
-from . import seam_mapping
-from . import ui
-from . import validation
+from . import export_obj  # noqa: E402
+from . import inference  # noqa: E402
+from . import operators  # noqa: E402
+from . import prefs  # noqa: E402
+from . import properties  # noqa: E402
+from . import seam_mapping  # noqa: E402
+from . import ui  # noqa: E402
+from . import validation  # noqa: E402
 
 reload_modules = (
     prefs,

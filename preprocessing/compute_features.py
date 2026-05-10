@@ -19,8 +19,8 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from preprocessing.topology import canonical_edge_key
-from preprocessing.feature_registry import (
+from preprocessing.topology import canonical_edge_key  # noqa: E402
+from preprocessing.feature_registry import (  # noqa: E402
     ALL_ATOMIC_FEATURE_NAMES,
     DENSITY_CONFIG,
     PAPER14_FEATURE_NAMES,

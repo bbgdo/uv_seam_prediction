@@ -17,12 +17,12 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order
-from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
-from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-from preprocessing.obj_parser import parse_obj
-from preprocessing.seam_labels import extract_seam_truth
-from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order  # noqa: E402
+from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection  # noqa: E402
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.obj_parser import parse_obj  # noqa: E402
+from preprocessing.seam_labels import extract_seam_truth  # noqa: E402
+from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key  # noqa: E402
 
 EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
 
@@ -460,7 +460,7 @@ def print_stats(data: Data, file_name: str) -> None:
     print(f"  unique edges  : {num_unique_edges}")
     print(f"  directed edges: {num_edges}  (both directions)")
     print(f"  edge features : {data.edge_attr.shape[1]}  ({data.edge_attr.shape[1]}-dim feature vector)")
-    print(f"  --- class balance ---")
+    print("  --- class balance ---")
     print(f"  seam  (1): {num_seams:>8d}  ({seam_pct:.2f}%)")
     print(f"  other (0): {num_nonseams:>8d}  ({100 - seam_pct:.2f}%)")
     print(f"  pos_weight: {pos_weight:.4f}")

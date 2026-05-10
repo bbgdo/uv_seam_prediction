@@ -11,8 +11,8 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from preprocessing.obj_parser import ObjCorner, parse_obj
-from preprocessing.topology import (
+from preprocessing.obj_parser import ObjCorner, parse_obj  # noqa: E402
+from preprocessing.topology import (  # noqa: E402
     CanonicalTopology,
     EdgeKey,
     FaceEdgeOccurrence,

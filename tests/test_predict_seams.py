@@ -18,9 +18,9 @@ predict_seams = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = predict_seams
 spec.loader.exec_module(predict_seams)
 
-from preprocessing.build_gnn_dataset import build_dual_edge_index_from_unique_edges
-from preprocessing.obj_parser import parse_obj_text
-from preprocessing.topology import WeldConfig, build_topology
+from preprocessing.build_gnn_dataset import build_dual_edge_index_from_unique_edges  # noqa: E402
+from preprocessing.obj_parser import parse_obj_text  # noqa: E402
+from preprocessing.topology import WeldConfig, build_topology  # noqa: E402
 
 
 SQUARE_OBJ = """

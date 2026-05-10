@@ -8,11 +8,11 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from models.baselines.registry import SUPPORTED_BASELINES, get_baseline
-from models.common.baseline_train import train_baseline
-from models.common.config import baseline_config
-from models.meshcnn_full.training import train_sparsemeshcnn
-from preprocessing.feature_registry import FEATURE_GROUP_NAMES
+from models.baselines.registry import SUPPORTED_BASELINES, get_baseline  # noqa: E402
+from models.common.baseline_train import train_baseline  # noqa: E402
+from models.common.config import baseline_config  # noqa: E402
+from models.meshcnn_full.training import train_sparsemeshcnn  # noqa: E402
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES  # noqa: E402
 
 
 GNN_MODELS = tuple(SUPPORTED_BASELINES)

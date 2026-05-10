@@ -14,9 +14,9 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from preprocessing.obj_parser import ObjCorner, ObjMesh, parse_obj
-from preprocessing.seam_labels import SeamTruth, extract_seam_truth
-from preprocessing.topology import CanonicalTopology, EdgeKey, WeldConfig, build_topology, canonical_edge_key
+from preprocessing.obj_parser import ObjCorner, ObjMesh, parse_obj  # noqa: E402
+from preprocessing.seam_labels import SeamTruth, extract_seam_truth  # noqa: E402
+from preprocessing.topology import CanonicalTopology, EdgeKey, WeldConfig, build_topology, canonical_edge_key  # noqa: E402
 
 
 OccurrenceId = tuple[int, int]

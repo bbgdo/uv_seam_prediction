@@ -10,7 +10,7 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh, parse_obj
+from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh, parse_obj  # noqa: E402
 
 
 class TopologyError(ValueError):
