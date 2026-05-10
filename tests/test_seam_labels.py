@@ -3,7 +3,7 @@ import unittest
 from preprocessing.obj_parser import parse_obj_text
 from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import build_topology
-from tools.validate_seam_truth import compare_maps, direct_reference_from_obj
+from preprocessing.validate_seam_truth import compare_maps, direct_reference_from_obj
 
 
 NON_SEAM_SHARED_EDGE = """

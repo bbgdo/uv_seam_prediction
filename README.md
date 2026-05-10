@@ -9,17 +9,15 @@ Maintained entrypoints:
 - `tools/run_training.py` for single GraphSAGE, GATv2, and SparseMeshCNN training
 - `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations
 - `tools/predict_seams.py` for inference
-- `tools/evaluate_dir_topology.py` for topology and post-processing evaluation
 - `tools/evaluate_saved_models.py` for reevaluating saved checkpoints
-- `tools/audit_dataset.py` for dataset audit and family split leakage inspection
-- `tools/validate_seam_truth.py` for exact OBJ seam truth validation
+- `preprocessing/validate_seam_truth.py` for exact OBJ seam truth validation
 
 ## Reproducibility Workflow
 
 Validate exact OBJ seam truth before building datasets:
 
 ```bash
-python tools/validate_seam_truth.py --mesh-dir data/objs
+python preprocessing/validate_seam_truth.py --mesh-dir data/objs
 ```
 
 Build the maintained PyG datasets:
@@ -33,13 +31,6 @@ Build one SparseMeshCNN custom superset dataset for all SparseMeshCNN ablations:
 
 ```bash
 python preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order fixed --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
-```
-
-Audit dataset contents and family split leakage:
-
-```bash
-python tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-out outputs/audit_raw.csv
-python tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
 ```
 
 Run a single training job:
@@ -67,12 +58,6 @@ Run inference with the maintained bridge:
 
 ```bash
 python tools/predict_seams.py --mesh-path data/objs/example.obj --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --output-json outputs/predictions/example.json
-```
-
-Run topology and post-processing evaluation:
-
-```bash
-python tools/evaluate_dir_topology.py --input-dir data/objs --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --csv-out outputs/predictions/topology.csv
 ```
 
 Reevaluate saved checkpoints:

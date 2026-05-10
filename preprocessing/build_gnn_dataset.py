@@ -585,7 +585,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"manifest saved -> {manifest_path.resolve()}")
         print(
             "sanity check: "
-            f"python tools/validate_seam_truth.py --mesh-dir {mesh_dir} --max-meshes {len(dataset)}"
+            f"python preprocessing/validate_seam_truth.py --mesh-dir {mesh_dir} --max-meshes {len(dataset)}"
         )
 
     if outliers:

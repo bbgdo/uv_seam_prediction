@@ -37,14 +37,9 @@ Serialized datasets and manifests should expose the same maintained metadata sur
 - `label_source='exact_obj'`
 - family split compatibility
 
-## Dataset Audit
+## Seam Truth Validation
 
-Use `tools/audit_dataset.py` to inspect raw OBJ directories or serialized datasets and verify family-only split compatibility:
-
-```bash
-python tools/audit_dataset.py data/objs --json-out outputs/audit_raw.json --csv-out outputs/audit_raw.csv
-python tools/audit_dataset.py datasets/gnn_custom.pt --json-out outputs/audit_gnn_custom.json --csv-out outputs/audit_gnn_custom.csv
-```
+Use `python preprocessing/validate_seam_truth.py --mesh-dir <obj_dir>` to parity-check exact OBJ seam extraction against direct face-corner UV signatures before building datasets.
 
 ## Autodesk Character Generator FBX
 
