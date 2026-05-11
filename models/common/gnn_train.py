@@ -202,7 +202,6 @@ def train_gnn(args: argparse.Namespace) -> None:
     final_summary = {
         'seed': seed,
         'model_name': config.model_name,
-        'hidden': config.hidden_size,
         'hidden_dim': config.hidden_size,
         'num_layers': config.num_layers,
         'dropout': config.dropout,
@@ -215,7 +214,6 @@ def train_gnn(args: argparse.Namespace) -> None:
         'test_confusion_threshold_0_5': confusion_counts(test_m),
         'test_confusion_best_validation_threshold': confusion_counts(test_best_val_t_m),
         'resolution_tag': args.resolution_tag,
-        'resolution_selector': args.resolution_tag,
         'filtered_graph_count': filtered_graph_count,
         'dataset_metadata_summary': metadata_summary,
     }

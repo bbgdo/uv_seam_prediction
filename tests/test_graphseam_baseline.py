@@ -11,7 +11,7 @@ from torch_geometric.data import Data
 from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
 from models.common.gnn_train_data import apply_runtime_feature_selection
-from models.common.gnn_train_runtime import build_runtime_config, model_kwargs
+from models.common.gnn_train_runtime import build_runtime_config, logger_config, model_kwargs
 from models.common.gnn_registry import get_gnn_model
 from tools.run_training import parse_args as parse_training_args
 from models.utils.experiment_log import ExperimentLogger
@@ -231,6 +231,31 @@ class GraphSeamBaselineTests(unittest.TestCase):
         ], dtype=torch.long)
 
         self.assertEqual(model(x, edge_index).shape, (4,))
+
+    def test_gnn_logger_config_uses_canonical_metadata_fields(self):
+        args = parse_training_args([
+            '--model', 'gatv2',
+            '--feature-group', 'custom',
+            '--enable-ao',
+            '--resolution-tag', 'all',
+        ])
+        config = build_runtime_config(args)
+        payload = logger_config(
+            args,
+            config,
+            'GATv2',
+            torch.tensor([1.0]),
+            {'train': [], 'val': [], 'test': []},
+            {'graph_count': 0},
+            0,
+            33,
+            (0, 0, 0),
+        )
+
+        self.assertEqual(payload['hidden_dim'], config.hidden_size)
+        self.assertEqual(payload['resolution_tag'], 'all')
+        self.assertNotIn('hidden', payload)
+        self.assertNotIn('resolution_selector', payload)
 
     def test_lstm_graphsage_forward(self):
         model = DualGraphSAGE(

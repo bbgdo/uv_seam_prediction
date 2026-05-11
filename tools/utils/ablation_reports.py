@@ -54,7 +54,7 @@ def collect_success_record(seed: int, run_dir: Path, split_json: Path) -> dict[s
         'split_json': str(split_json),
         'best_epoch': summary.get('best_epoch'),
         'best_val_threshold': summary.get('best_validation_threshold'),
-        'resolution_selector': summary.get('resolution_selector', summary.get('resolution_tag')),
+        'resolution_tag': summary.get('resolution_tag'),
         'filtered_graph_count': summary.get('filtered_graph_count'),
     }
     for metric in METRIC_KEYS:
@@ -71,7 +71,7 @@ def failure_record(seed: int, run_dir: Path, split_json: Path, error: str) -> di
         'split_json': str(split_json),
         'best_epoch': None,
         'best_val_threshold': None,
-        'resolution_selector': None,
+        'resolution_tag': None,
         'filtered_graph_count': None,
         'error': error,
     }
@@ -199,7 +199,7 @@ def write_experiment_reports(experiment_dir: Path, payload: dict[str, Any]) -> N
         'split_json',
         'best_epoch',
         'best_val_threshold',
-        'resolution_selector',
+        'resolution_tag',
         'filtered_graph_count',
         *_metric_columns(THRESHOLD_05_PREFIX),
         *_metric_columns(VAL_BEST_PREFIX),

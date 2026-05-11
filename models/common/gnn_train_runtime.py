@@ -59,7 +59,6 @@ def logger_config(
     payload = {
         'model': display_name,
         'model_name': config.model_name,
-        'hidden': config.hidden_size,
         'in_dim': config.in_dim,
         'hidden_dim': config.hidden_size,
         'num_layers': config.num_layers,
@@ -77,7 +76,6 @@ def logger_config(
             'thickness_sdf': bool(getattr(args, 'enable_thickness_sdf', False)),
         },
         'resolution_tag': args.resolution_tag,
-        'resolution_selector': args.resolution_tag,
         'filtered_graph_count': filtered_graph_count,
         'seed': seed,
         'split_json_in': str(args.split_json_in) if args.split_json_in else None,

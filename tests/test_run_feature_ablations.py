@@ -88,7 +88,7 @@ def _summary(seed: int, fpr_best: float, f1_best: float, fpr_05: float, f1_05: f
     return {
         'best_epoch': seed + 1,
         'best_validation_threshold': 0.6,
-        'resolution_selector': 'all',
+        'resolution_tag': 'all',
         'filtered_graph_count': 4,
         'test_metrics_threshold_0_5': {
             'f1': f1_05,
@@ -598,6 +598,8 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             records = run_experiment(args=args, spec=spec, runner=fake_runner)
 
         self.assertEqual([record['status'] for record in records], ['completed', 'completed'])
+        self.assertEqual(records[0]['resolution_tag'], 'all')
+        self.assertNotIn('resolution_selector', records[0])
         self.assertEqual(
             records[0]['run_dir'],
             str(root / 'gatv2' / 'experiments' / 'control14' / 'seed_1'),
