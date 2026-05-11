@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from typing import Any
 
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection
 from tools.utils.prediction_common import PredictionError, coerce_dict, coerce_list, normalize_metadata_name
+
+
+LEGACY_STRINGIFIED_METADATA_SOURCES = {
+    'config.dataset_metadata_summary',
+    'summary.dataset_metadata_summary',
+}
 
 
 def requested_feature_flags(args: argparse.Namespace) -> dict[str, bool]:
@@ -191,7 +198,8 @@ def validate_feature_metadata(
     for source_name, metadata in sources:
         validate_feature_metadata_name(source_name, metadata, selection)
 
-        feature_names = coerce_list(metadata.get('feature_names'))
+        allow_legacy_strings = source_name in LEGACY_STRINGIFIED_METADATA_SOURCES
+        feature_names = coerce_metadata_list(metadata.get('feature_names'), allow_legacy_strings=allow_legacy_strings)
         if 'feature_names' in metadata and metadata.get('feature_names') not in (None, '') and feature_names is None:
             raise PredictionError(
                 f'{source_name} feature_names must be a JSON list',
@@ -203,7 +211,7 @@ def validate_feature_metadata(
                 'FeatureMetadataMismatch',
             )
 
-        flags = coerce_dict(metadata.get('feature_flags'))
+        flags = coerce_metadata_dict(metadata.get('feature_flags'), allow_legacy_strings=allow_legacy_strings)
         if 'feature_flags' in metadata and metadata.get('feature_flags') not in (None, '') and flags is None:
             raise PredictionError(
                 f'{source_name} feature_flags must be a JSON object',
@@ -266,3 +274,25 @@ def metadata_name_matches_expected(value: Any, expected: str) -> bool:
         values = {normalize_metadata_name(item) for item in value if item not in (None, '')}
         return normalize_metadata_name(expected) in values
     return normalize_metadata_name(value) == normalize_metadata_name(expected)
+
+
+def coerce_metadata_list(value: Any, *, allow_legacy_strings: bool = False) -> list[str] | None:
+    parsed = coerce_list(value)
+    if parsed is not None or not allow_legacy_strings or not isinstance(value, str):
+        return parsed
+    try:
+        literal = ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        return None
+    return coerce_list(literal)
+
+
+def coerce_metadata_dict(value: Any, *, allow_legacy_strings: bool = False) -> dict[str, Any] | None:
+    parsed = coerce_dict(value)
+    if parsed is not None or not allow_legacy_strings or not isinstance(value, str):
+        return parsed
+    try:
+        literal = ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        return None
+    return coerce_dict(literal)

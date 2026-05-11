@@ -398,6 +398,24 @@ class PredictSeamsTests(unittest.TestCase):
                 {'in_dim': selection.feature_count},
             )
 
+    def test_feature_metadata_accepts_legacy_stringified_dataset_summary(self):
+        selection = predict_seams.resolve_feature_selection('paper14')
+        summary = {
+            'dataset_metadata_summary': {
+                'feature_group': 'paper14',
+                'feature_names': str(list(selection.feature_names)),
+                'feature_flags': str(selection.feature_flags.as_dict()),
+                'x_feature_dim': selection.feature_count,
+            },
+        }
+
+        predict_seams.validate_feature_metadata(
+            {'feature_group': 'paper14', 'in_dim': selection.feature_count},
+            summary,
+            selection,
+            {'in_dim': selection.feature_count},
+        )
+
     def test_auto_feature_inference_rejects_stringified_metadata(self):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_flags must be a JSON object'):
             predict_seams.infer_feature_bundle(
