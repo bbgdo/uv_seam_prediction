@@ -63,6 +63,18 @@ class _DummyModel(torch.nn.Module):
         return torch.asarray(self._logits[:x.shape[0]], dtype=torch.float32, device=x.device)
 
 
+def _assert_prediction_artifact_loads(test_case, config, payload):
+    model_type = predict_seams.resolve_model_type('auto', config, Path('best_model.pth'))
+    kwargs = predict_seams.resolve_model_kwargs(model_type, config)
+    model = predict_seams.build_prediction_model(model_type, kwargs)
+    state_dict = predict_seams.extract_state_dict(payload)
+    incompatible = model.load_state_dict(state_dict, strict=True)
+
+    test_case.assertEqual(incompatible.missing_keys, [])
+    test_case.assertEqual(incompatible.unexpected_keys, [])
+    return model_type, kwargs
+
+
 class PredictSeamsTests(unittest.TestCase):
     def test_threshold_resolution_precedence(self):
         summary = {'best_validation_threshold': 0.7}
@@ -304,6 +316,67 @@ class PredictSeamsTests(unittest.TestCase):
         for stale_key in ('state_dict', 'model_state_dict'):
             with self.subTest(stale_key=stale_key):
                 self.assertEqual(predict_seams.extract_state_dict({stale_key: state}), state)
+
+    def test_legacy_graphsage_mean_artifact_loads_strictly(self):
+        config = {
+            'model': 'DualGraphSAGE',
+            'model_name': 'graphsage',
+            'in_dim': 14,
+            'hidden': 8,
+            'num_layers': 1,
+            'dropout': 0.0,
+            'skip_connections': 'hidden',
+            'aggr': 'mean',
+        }
+        source = predict_seams.build_prediction_model(
+            'graphsage',
+            {
+                'in_dim': 14,
+                'hidden_dim': 8,
+                'num_layers': 1,
+                'dropout': 0.0,
+                'skip_connections': 'hidden',
+                'aggr': 'mean',
+            },
+        )
+
+        model_type, kwargs = _assert_prediction_artifact_loads(self, config, {'state_dict': source.state_dict()})
+
+        self.assertEqual(model_type, 'graphsage')
+        self.assertEqual(kwargs['aggr'], 'mean')
+
+    def test_legacy_sparsemeshcnn_artifact_name_loads_strictly(self):
+        config = {
+            'model': 'meshcnn_full',
+            'model_config': {
+                'in_channels': 14,
+                'hidden_channels': 8,
+                'dropout': 0.0,
+                'pool_ratios': [0.85, 0.75],
+                'min_edges': 16,
+                'max_pool_collapses': 2048,
+            },
+            'feature_metadata': {
+                'feature_group': 'paper14',
+                'feature_dim': 14,
+                'sample_format': 'meshcnn_full_v2',
+            },
+        }
+        source = predict_seams.build_prediction_model(
+            'sparsemeshcnn',
+            {
+                'in_channels': 14,
+                'hidden_channels': 8,
+                'dropout': 0.0,
+                'pool_ratios': (0.85, 0.75),
+                'min_edges': 16,
+            },
+        )
+
+        model_type, kwargs = _assert_prediction_artifact_loads(self, config, {'model_state_dict': source.state_dict()})
+
+        self.assertEqual(model_type, 'sparsemeshcnn')
+        self.assertEqual(kwargs['in_channels'], 14)
 
     def test_feature_metadata_rejects_stringified_feature_names(self):
         selection = predict_seams.resolve_feature_selection('paper14')
