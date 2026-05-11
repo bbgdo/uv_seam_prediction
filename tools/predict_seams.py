@@ -93,32 +93,13 @@ __all__ = [
 
 
 def postprocess_kwargs_from_args(args) -> dict[str, Any]:
-    kwargs = {
+    return {
         'tau_low': float(args.postprocess_tau_low),
         'd_max': int(args.postprocess_d_max),
         'r_bridge': int(args.postprocess_r_bridge),
         'l_min': int(args.postprocess_l_min),
         'anchor_boundary': bool(args.postprocess_anchor_boundary),
     }
-    if hasattr(args, 'postprocess_max_bridge_edges'):
-        kwargs['max_bridge_edges'] = (
-            None
-            if args.postprocess_max_bridge_edges is None
-            else int(args.postprocess_max_bridge_edges)
-        )
-    if hasattr(args, 'postprocess_max_bridge_euclidean_ratio'):
-        kwargs['max_bridge_euclidean_ratio'] = float(args.postprocess_max_bridge_euclidean_ratio)
-    if hasattr(args, 'postprocess_max_endpoint_candidates'):
-        kwargs['max_endpoint_candidates'] = int(args.postprocess_max_endpoint_candidates)
-    if hasattr(args, 'postprocess_require_mutual_pairing'):
-        kwargs['require_mutual_pairing'] = bool(args.postprocess_require_mutual_pairing)
-    if hasattr(args, 'postprocess_min_loop_size_to_allow'):
-        kwargs['min_loop_size_to_allow'] = int(args.postprocess_min_loop_size_to_allow)
-    if hasattr(args, 'postprocess_tangent_alignment_weight'):
-        kwargs['tangent_alignment_weight'] = float(args.postprocess_tangent_alignment_weight)
-    if hasattr(args, 'postprocess_max_debug_candidates'):
-        kwargs['max_debug_candidates'] = int(args.postprocess_max_debug_candidates)
-    return kwargs
 
 
 def run_prediction(args) -> dict[str, Any]:
@@ -136,7 +117,7 @@ def run_prediction(args) -> dict[str, Any]:
     config = load_json_object(config_path, 'config JSON')
     summary = load_json_object(summary_path, 'summary JSON')
     model_type = resolve_model_type(args.model_type, config, weights_path)
-    threshold = resolve_threshold(args.threshold, summary, args.fail_if_threshold_missing)
+    threshold = resolve_threshold(args.threshold, summary)
     selection, endpoint_order, resolved_feature_bundle = resolve_feature_bundle(args, config, summary)
     device = resolve_device(args.device)
     model_kwargs = resolve_model_kwargs(model_type, config)

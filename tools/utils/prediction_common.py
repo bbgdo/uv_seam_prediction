@@ -64,7 +64,6 @@ def load_json_object(path: Path, label: str) -> dict[str, Any]:
 def resolve_threshold(
     explicit_threshold: float | None,
     summary: dict[str, Any],
-    fail_if_missing: bool = True,
 ) -> float:
     if explicit_threshold is not None:
         return validate_threshold(explicit_threshold)
@@ -72,11 +71,8 @@ def resolve_threshold(
     if 'best_validation_threshold' in summary:
         return validate_threshold(summary['best_validation_threshold'])
 
-    suffix = ''
-    if not fail_if_missing:
-        suffix = '; no alternate threshold policy is implemented'
     raise PredictionError(
-        'threshold is required: pass --threshold or provide summary.json["best_validation_threshold"]' + suffix,
+        'threshold is required: pass --threshold or provide summary.json["best_validation_threshold"]',
         'MissingThreshold',
     )
 

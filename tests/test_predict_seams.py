@@ -72,6 +72,15 @@ class PredictSeamsTests(unittest.TestCase):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'threshold is required'):
             predict_seams.resolve_threshold(None, {})
 
+    def test_parser_rejects_threshold_policy_toggle(self):
+        with self.assertRaises(SystemExit):
+            predict_seams.parse_args([
+                '--mesh-path', 'mesh.obj',
+                '--model-weights', 'weights.pt',
+                '--output-json', 'out.json',
+                '--no-fail-if-threshold-missing',
+            ])
+
     def test_model_type_resolution_precedence(self):
         with tempfile.TemporaryDirectory() as tmp:
             weights = Path(tmp) / 'gatv2_run' / 'best_model.pth'
@@ -242,6 +251,26 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertIs(type(kwargs['tau_low']), float)
         self.assertIs(type(kwargs['d_max']), int)
         self.assertIs(type(kwargs['anchor_boundary']), bool)
+
+    def test_parser_rejects_internal_postprocess_stage_b_knobs(self):
+        internal_flags = (
+            '--postprocess-max-bridge-edges',
+            '--postprocess-max-bridge-euclidean-ratio',
+            '--postprocess-max-endpoint-candidates',
+            '--postprocess-require-mutual-pairing',
+            '--postprocess-min-loop-size-to-allow',
+            '--postprocess-tangent-alignment-weight',
+            '--postprocess-max-debug-candidates',
+        )
+        for flag in internal_flags:
+            with self.subTest(flag=flag):
+                with self.assertRaises(SystemExit):
+                    predict_seams.parse_args([
+                        '--mesh-path', 'mesh.obj',
+                        '--model-weights', 'weights.pt',
+                        '--output-json', 'out.json',
+                        flag, '1',
+                    ])
 
     def test_postprocess_path_invokes_pipeline_when_enabled(self):
         calls = {'pipeline': 0}

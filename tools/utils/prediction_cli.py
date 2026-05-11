@@ -31,7 +31,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--enable-thickness-sdf', action='store_true')
     parser.add_argument('--endpoint-seed', type=int, default=42)
     parser.add_argument('--write-all-edges', action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--fail-if-threshold-missing', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--postprocess', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         '--postprocess-tau-low', type=float, default=0.30,
@@ -44,35 +43,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         '--postprocess-r-bridge', type=int, default=6,
         help='Default mesh-edge bridge radius for endpoint bridging (Stage B).'
-    )
-    parser.add_argument(
-        '--postprocess-max-bridge-edges', type=int, default=None,
-        help='Maximum mesh-edge length for endpoint bridging (Stage B).'
-    )
-    parser.add_argument(
-        '--postprocess-max-bridge-euclidean-ratio', type=float, default=0.03,
-        help='Maximum endpoint Euclidean distance as a mesh bbox diagonal ratio for Stage B.'
-    )
-    parser.add_argument(
-        '--postprocess-max-endpoint-candidates', type=int, default=4,
-        help='Maximum retained endpoint candidates per endpoint for Stage B.'
-    )
-    parser.add_argument(
-        '--postprocess-require-mutual-pairing',
-        action=argparse.BooleanOptionalAction, default=True,
-        help='Require reciprocal best endpoint pairs in Stage B.'
-    )
-    parser.add_argument(
-        '--postprocess-min-loop-size-to-allow', type=int, default=8,
-        help='Minimum same-component loop size allowed by Stage B.'
-    )
-    parser.add_argument(
-        '--postprocess-tangent-alignment-weight', type=float, default=0.25,
-        help='Soft tangent-alignment score weight for Stage B.'
-    )
-    parser.add_argument(
-        '--postprocess-max-debug-candidates', type=int, default=64,
-        help='Maximum diagnostic Stage B local gap candidates to include per list.'
     )
     parser.add_argument(
         '--postprocess-l-min', type=int, default=4,
