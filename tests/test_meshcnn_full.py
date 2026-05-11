@@ -8,6 +8,7 @@ import tempfile
 
 import numpy as np
 import torch
+import trimesh
 
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
 from models.meshcnn_full.model import MeshCNNSegmenter
@@ -19,6 +20,7 @@ from preprocessing.build_meshcnn_dataset import (
     build_meshcnn_sample,
     validate_saved_meshcnn_feature_metadata,
 )
+from preprocessing.compute_features import build_edge_topology, compute_edge_sdf
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 
 
@@ -96,6 +98,16 @@ def _sample_with_features(feature_names: list[str] | tuple[str, ...] | None = No
 
 
 class MeshCNNFullTests(unittest.TestCase):
+    def test_thickness_sdf_requires_real_ray_intersector(self):
+        with _obj_file(OBJ_TETRA) as path:
+            mesh = trimesh.load_mesh(path, process=False)
+
+        unique_edges, edge_to_faces = build_edge_topology(mesh)
+
+        with patch('preprocessing.compute_features._build_ray_intersector', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'thickness_sdf raycasting requires'):
+                compute_edge_sdf(mesh, unique_edges, edge_to_faces)
+
     def test_topology_reconstruction_matches_cached_arrays(self):
         with _obj_file(OBJ_TWO_TRIANGLES) as path:
             sample = build_meshcnn_sample(

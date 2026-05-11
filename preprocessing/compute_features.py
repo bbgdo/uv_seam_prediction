@@ -347,8 +347,10 @@ def compute_edge_sdf(
         flat_directions[first_valid_ray:first_valid_ray + 1],
     )
     if intersector is None:
-        print('  [thickness_sdf] raycasting unavailable, using fallback distance')
-        return np.ones(n_edges, dtype=np.float32)
+        raise RuntimeError(
+            'thickness_sdf raycasting requires pyembree or trimesh ray_triangle; '
+            'install pyembree or ensure trimesh ray_triangle is functional.'
+        )
 
     try:
         hit_faces, hit_rays, hit_locations = intersector.intersects_id(
@@ -357,9 +359,8 @@ def compute_edge_sdf(
             multiple_hits=True,
             return_locations=True,
         )
-    except Exception:
-        print('  [thickness_sdf] raycasting failed, using fallback distance')
-        return np.ones(n_edges, dtype=np.float32)
+    except Exception as exc:
+        raise RuntimeError(f'thickness_sdf raycasting failed: {exc}') from exc
 
     nearest_by_ray = np.full(len(flat_origins), np.inf, dtype=np.float64)
     for face_idx, ray_idx, location in zip(hit_faces, hit_rays, hit_locations):
