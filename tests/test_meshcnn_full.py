@@ -11,7 +11,7 @@ import torch
 
 from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
 from models.meshcnn_full.model import MeshCNNSegmenter
-from models.meshcnn_full.training import train_sparsemeshcnn
+from models.meshcnn_full.train import train_sparsemeshcnn
 from models.meshcnn_full.training_data import slice_meshcnn_dataset_features
 from preprocessing.build_meshcnn_dataset import (
     DEFAULT_OUTPUT,
@@ -125,7 +125,6 @@ class MeshCNNFullTests(unittest.TestCase):
                 hidden_channels=16,
                 pool_ratios=(0.9, 0.9),
                 min_edges=1,
-                max_pool_collapses=4,
             )
             logits = model(sample)
             self.assertEqual(logits.shape, sample.edge_labels.shape)
@@ -277,14 +276,14 @@ class TrainConfigMetadataTests(unittest.TestCase):
             run_dir = Path(tmp) / 'run'
 
             with (
-                patch('models.meshcnn_full.training.load_meshcnn_dataset', return_value=samples),
-                patch('models.meshcnn_full.training.validate_dataset_tensors_cpu'),
-                patch('models.meshcnn_full.training.load_manifest', return_value={}),
-                patch('models.meshcnn_full.training.split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
-                patch('models.meshcnn_full.training.compute_pos_weight', return_value=torch.tensor([1.0])),
-                patch('models.meshcnn_full.training.run_epoch', return_value=(0.5, fake_metrics, {})),
-                patch('models.meshcnn_full.training.predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
-                patch('models.meshcnn_full.training.threshold_sweep', return_value=fake_sweep),
+                patch('models.meshcnn_full.train.load_meshcnn_dataset', return_value=samples),
+                patch('models.meshcnn_full.train.validate_dataset_tensors_cpu'),
+                patch('models.meshcnn_full.train.load_manifest', return_value={}),
+                patch('models.meshcnn_full.train.split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
+                patch('models.meshcnn_full.train.compute_pos_weight', return_value=torch.tensor([1.0])),
+                patch('models.meshcnn_full.train.run_epoch', return_value=(0.5, fake_metrics, {})),
+                patch('models.meshcnn_full.train.predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
+                patch('models.meshcnn_full.train.threshold_sweep', return_value=fake_sweep),
                 patch('torch.save'),
                 patch('torch.load', return_value={
                     'model_state': {},
@@ -306,7 +305,6 @@ class TrainConfigMetadataTests(unittest.TestCase):
                     dropout=0.2,
                     pool_ratios='0.85,0.75',
                     min_edges=32,
-                    max_pool_collapses=2048,
                     focal_gamma=2.0,
                     pos_weight=None,
                     grad_accum_steps=1,

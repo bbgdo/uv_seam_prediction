@@ -8,9 +8,7 @@ try:
 except ImportError:
     cKDTree = None
 
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning)
-import trimesh  # noqa: E402
+import trimesh
 
 try:
     from preprocessing._bootstrap import ensure_repo_root_on_path

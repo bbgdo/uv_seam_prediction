@@ -6,18 +6,16 @@ DEFAULT_THRESHOLD_VALUES = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 
 
 
 @dataclass(frozen=True)
-class BaselineConfig:
+class GNNTrainConfig:
     model_name: str = 'graphsage'
     hidden_size: int = 128
     num_layers: int = 3
-    lr: float = 1e-3
+    lr: float = 3e-4
     pos_weight: float | None = None
     focal_gamma: float = 2.0
     epochs: int = 100
     patience: int = 15
     threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES
-    threshold_metric: str = 'f1'
-    threshold_default: float = 0.5
     in_dim: int = 18
     dropout: float = 0.3
     weight_decay: float = 1e-4
@@ -28,13 +26,13 @@ class BaselineConfig:
     skip_connections: str = 'hidden'
 
 
-def baseline_config(model_name: str, overrides: dict[str, Any] | None = None) -> BaselineConfig:
+def gnn_train_config(model_name: str, overrides: dict[str, Any] | None = None) -> GNNTrainConfig:
     values = {'model_name': model_name}
     if overrides:
         values.update(overrides)
-    return replace(BaselineConfig(), **values)
+    return replace(GNNTrainConfig(), **values)
 
 
-def replace_config(config: BaselineConfig, **overrides: Any) -> BaselineConfig:
+def replace_config(config: GNNTrainConfig, **overrides: Any) -> GNNTrainConfig:
     clean_overrides = {key: value for key, value in overrides.items() if value is not None}
     return replace(config, **clean_overrides)

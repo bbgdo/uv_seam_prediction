@@ -1,14 +1,12 @@
 import json
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch_geometric.data import Data
 
-warnings.filterwarnings('ignore', category=UserWarning)
-import trimesh  # noqa: E402
+import trimesh
 
 try:
     from preprocessing._bootstrap import ensure_repo_root_on_path

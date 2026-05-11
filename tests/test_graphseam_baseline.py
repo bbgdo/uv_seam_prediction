@@ -65,7 +65,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
         self.assertEqual(graphsage_args.model, 'graphsage')
         self.assertEqual(graphsage_args.hidden, 128)
-        self.assertEqual(graphsage_args.lr, 1e-3)
+        self.assertEqual(graphsage_args.lr, 3e-4)
         self.assertEqual(gatv2_args.model, 'gatv2')
         self.assertEqual(gatv2_args.hidden, 64)
         self.assertEqual(gatv2_args.heads, 4)

@@ -29,6 +29,7 @@ class RunTrainingTests(unittest.TestCase):
         self.assertEqual(args.model, 'sparsemeshcnn')
         self.assertEqual(args.dataset, 'dataset_sparsemeshcnn_paper14.pt')
         self.assertEqual(args.feature_group, 'paper14')
+        self.assertEqual(args.lr, 3e-4)
         self.assertEqual(args.pool_ratios, '0.85,0.75')
         self.assertEqual(args.min_edges, 32)
         self.assertTrue(args.run_dir.startswith('runs/sparsemeshcnn_'))

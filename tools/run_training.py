@@ -10,8 +10,8 @@ ensure_repo_root_on_path()
 
 from models.baselines.registry import SUPPORTED_BASELINES, get_baseline  # noqa: E402
 from models.common.baseline_train import train_baseline  # noqa: E402
-from models.common.config import baseline_config  # noqa: E402
-from models.meshcnn_full.training import train_sparsemeshcnn  # noqa: E402
+from models.common.gnn_config import gnn_train_config  # noqa: E402
+from models.meshcnn_full.train import train_sparsemeshcnn  # noqa: E402
 from preprocessing.feature_registry import FEATURE_GROUP_NAMES  # noqa: E402
 
 
@@ -26,7 +26,7 @@ def _default_run_dir(model_name: str, timestamp: str) -> str:
 
 def _fill_gnn_defaults(args: argparse.Namespace) -> argparse.Namespace:
     definition = get_baseline(args.model)
-    config = baseline_config(args.model, definition.default_config_overrides)
+    config = gnn_train_config(args.model, definition.default_config_overrides)
     defaults = {
         'epochs': config.epochs,
         'lr': config.lr,
@@ -55,13 +55,12 @@ def _fill_sparsemeshcnn_defaults(args: argparse.Namespace) -> argparse.Namespace
     defaults = {
         'dataset': 'dataset_sparsemeshcnn_paper14.pt',
         'epochs': 100,
-        'lr': 1e-3,
+        'lr': 3e-4,
         'weight_decay': 1e-4,
         'hidden': 64,
         'dropout': 0.2,
         'pool_ratios': '0.85,0.75',
         'min_edges': 32,
-        'max_pool_collapses': 2048,
         'focal_gamma': 2.0,
         'pos_weight': None,
         'grad_accum_steps': 1,
@@ -151,7 +150,6 @@ def build_parser(
     if include_gatv2_options:
         parser.add_argument('--heads', type=int, default=None)
     if include_graphsage_options:
-        parser.add_argument('--aggr', choices=['lstm'], default=None)
         parser.add_argument('--skip-connections', choices=['hidden', 'all', 'none'], default=None)
 
     parser.add_argument('--weight-decay', type=float, default=None)
@@ -159,7 +157,6 @@ def build_parser(
     if include_sparse_options:
         parser.add_argument('--pool-ratios', default=None)
         parser.add_argument('--min-edges', type=int, default=None)
-        parser.add_argument('--max-pool-collapses', type=int, default=None)
         parser.add_argument('--grad-accum-steps', type=int, default=None)
     return parser
 

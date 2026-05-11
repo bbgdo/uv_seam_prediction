@@ -5,12 +5,12 @@ import argparse
 import torch
 
 from models.baselines.registry import get_baseline
-from models.common.config import BaselineConfig, baseline_config, replace_config
+from models.common.gnn_config import GNNTrainConfig, gnn_train_config, replace_config
 
 
-def build_runtime_config(args: argparse.Namespace) -> BaselineConfig:
+def build_runtime_config(args: argparse.Namespace) -> GNNTrainConfig:
     definition = get_baseline(args.model)
-    config = baseline_config(args.model, definition.default_config_overrides)
+    config = gnn_train_config(args.model, definition.default_config_overrides)
     return replace_config(
         config,
         hidden_size=args.hidden,
@@ -29,7 +29,7 @@ def build_runtime_config(args: argparse.Namespace) -> BaselineConfig:
     )
 
 
-def model_kwargs(config: BaselineConfig) -> dict:
+def model_kwargs(config: GNNTrainConfig) -> dict:
     kwargs = {
         'in_dim': config.in_dim,
         'hidden_dim': config.hidden_size,
@@ -48,7 +48,7 @@ def model_kwargs(config: BaselineConfig) -> dict:
 
 def logger_config(
     args: argparse.Namespace,
-    config: BaselineConfig,
+    config: GNNTrainConfig,
     display_name: str,
     pos_weight: torch.Tensor,
     split_info: dict,

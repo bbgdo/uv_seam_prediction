@@ -64,9 +64,6 @@ def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, A
             ),
             'min_edges': int(optional_config_value_from_sources(sources, ('min_edges',), 32)),
         }
-        max_pool_collapses = optional_config_value_from_sources(sources, ('max_pool_collapses',), None)
-        if max_pool_collapses is not None:
-            kwargs['max_pool_collapses'] = int(max_pool_collapses)
         return kwargs
 
     in_dim = required_config_value(config, ('in_dim',), 'in_dim')

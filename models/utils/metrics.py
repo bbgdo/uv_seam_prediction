@@ -1,6 +1,6 @@
 import torch
 
-from models.common.config import DEFAULT_THRESHOLD_VALUES
+from models.common.gnn_config import DEFAULT_THRESHOLD_VALUES
 
 
 RECALL_TPR_LABEL = 'rec(tpr)'

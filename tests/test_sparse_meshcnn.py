@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from models.meshcnn_full.mesh import MeshCNNSample
 from models.meshcnn_full.sparse_layers import SparseMeshConv, SparseMeshPool, SparseMeshUnpool
-from models.meshcnn_full.sparse_model import SparseMeshUNetSegmenter
+from models.meshcnn_full.model import MeshCNNSegmenter
 from models.meshcnn_full.sparse_precompute import (
     assert_sparse_cache_cpu_only,
     build_slot_matrices,
@@ -212,7 +212,7 @@ class SparseModelTests(unittest.TestCase):
     def test_model_accepts_arbitrary_in_channels(self):
         for fin in (5, 15, 23):
             sample = _toy_sample(fin=fin)
-            model = SparseMeshUNetSegmenter(
+            model = MeshCNNSegmenter(
                 in_channels=fin,
                 hidden_channels=8,
                 pool_ratios=(0.7, 0.5),
@@ -223,7 +223,7 @@ class SparseModelTests(unittest.TestCase):
 
     def test_model_returns_logits_for_original_edges(self):
         sample = _toy_sample(fin=15)
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=8,
             pool_ratios=(0.7, 0.5),
@@ -268,7 +268,7 @@ class SparseModelTests(unittest.TestCase):
             endpoint_order='fixed',
         )
         self.assertGreaterEqual(edge_count, 20000)
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=16,
             pool_ratios=(0.8, 0.6),
@@ -284,7 +284,7 @@ class SparseModelTests(unittest.TestCase):
 
     def test_no_dense_fallback_in_hot_path(self):
         sample = _toy_sample(fin=15)
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=8,
             pool_ratios=(0.7, 0.5),
@@ -300,7 +300,7 @@ class SparseModelTests(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA sparse-cache lifecycle test requires a GPU')
     def test_forward_does_not_persist_cuda_cache(self):
         sample = _toy_sample(fin=15)
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=8,
             pool_ratios=(0.7, 0.5),
@@ -316,7 +316,7 @@ class SparseModelTests(unittest.TestCase):
     def test_repeated_two_sample_forward_does_not_accumulate_persistent_cuda_refs(self):
         sample_a = _toy_sample(fin=15)
         sample_b = _toy_sample(fin=15)
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=8,
             pool_ratios=(0.7, 0.5),
@@ -334,7 +334,7 @@ class SparseModelTests(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA two-step training smoke requires a GPU')
     def test_training_two_steps_smoke_on_gpu(self):
         samples = [_toy_sample(fin=15), _toy_sample(fin=15)]
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=8,
             pool_ratios=(0.7, 0.5),
@@ -356,7 +356,7 @@ class SparseModelTests(unittest.TestCase):
     def test_max_memory_stabilizes_across_steps(self):
         device = torch.device('cuda')
         samples = [_toy_sample(fin=15), _toy_sample(fin=15), _toy_sample(fin=15)]
-        model = SparseMeshUNetSegmenter(
+        model = MeshCNNSegmenter(
             in_channels=15,
             hidden_channels=8,
             pool_ratios=(0.7, 0.5),

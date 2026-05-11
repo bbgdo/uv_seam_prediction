@@ -285,7 +285,6 @@ class BridgingResult:
     require_mutual_pairing: bool = True
     min_loop_size_to_allow: int = 8
     tangent_alignment_weight: float = 0.25
-    path_weighting: str = 'edge_length'
     component_reports: tuple[dict, ...] = tuple()
     r_bridge: int = 6
 
@@ -1157,7 +1156,6 @@ def compute_endpoint_bridging(
         require_mutual_pairing=bool(require_mutual_pairing),
         min_loop_size_to_allow=min_loop_size_value,
         tangent_alignment_weight=tangent_weight_value,
-        path_weighting='edge_length',
         component_reports=component_reports,
         **counters,
     )
@@ -1500,7 +1498,6 @@ def topology_pipeline_result_to_json_dict(
                 'require_mutual_pairing': bool(bridging.require_mutual_pairing),
                 'tangent_alignment_weight': float(bridging.tangent_alignment_weight),
             },
-            'path_weighting': str(bridging.path_weighting),
             'rejected_bridge_reports': [dict(report) for report in bridging.rejected_bridge_reports],
             'same_component_bridges_accepted': int(bridging.same_component_bridges_accepted),
             'same_component_bridges_rejected_by_already_connected': int(

@@ -8,7 +8,7 @@ from models.baselines.registry import get_baseline
 from models.common.baseline_train_data import apply_runtime_feature_selection
 from models.common.baseline_train_loop import collect_logits_labels
 from models.common.baseline_train_runtime import model_kwargs
-from models.common.config import baseline_config, replace_config
+from models.common.gnn_config import gnn_train_config, replace_config
 from models.utils.dataset import filter_dataset_by_resolution, load_dataset, load_split_json_metadata, split_dataset
 from preprocessing.feature_registry import resolve_feature_selection
 from tools.utils.ablation_specs import EXPERIMENT_SPECS
@@ -151,7 +151,7 @@ def feature_selection_from_config(config: dict):
 
 def runtime_config_from_saved(config: dict):
     definition = get_baseline(config['model_name'])
-    base = baseline_config(config['model_name'], definition.default_config_overrides)
+    base = gnn_train_config(config['model_name'], definition.default_config_overrides)
     return replace_config(
         base,
         hidden_size=config.get('hidden_dim'),
