@@ -72,6 +72,13 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(gatv2_args.heads, 4)
         self.assertEqual(gatv2_args.lr, 3e-4)
 
+    def test_graphsage_default_aggregation_is_lstm_but_mean_artifacts_can_load(self):
+        lstm_model = DualGraphSAGE(in_dim=14, hidden_dim=8, num_layers=1)
+        mean_model = DualGraphSAGE(in_dim=14, hidden_dim=8, num_layers=1, aggr='mean')
+
+        self.assertTrue(any('aggr_module' in key for key in lstm_model.state_dict()))
+        self.assertFalse(any('aggr_module' in key for key in mean_model.state_dict()))
+
     def test_feature_group_shapes(self):
         mesh = _tiny_mesh()
 

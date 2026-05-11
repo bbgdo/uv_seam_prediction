@@ -17,6 +17,11 @@ MODEL_NAME_ALIASES = {
     'dual_graphsage': 'graphsage',
     'sparsemeshcnn': 'sparsemeshcnn',
 }
+LEGACY_ARTIFACT_MODEL_NAME_ALIASES = {
+    'meshcnn': 'sparsemeshcnn',
+    'meshcnn_full': 'sparsemeshcnn',
+    'sparse_meshcnn': 'sparsemeshcnn',
+}
 
 
 class PredictionError(RuntimeError):
@@ -50,6 +55,13 @@ def normalize_model_name(value: Any) -> str | None:
         return None
     normalized = str(value).strip().lower().replace('-', '_').replace(' ', '_')
     return MODEL_NAME_ALIASES.get(normalized)
+
+
+def normalize_artifact_model_name(value: Any) -> str | None:
+    if value in (None, ''):
+        return None
+    normalized = str(value).strip().lower().replace('-', '_').replace(' ', '_')
+    return MODEL_NAME_ALIASES.get(normalized) or LEGACY_ARTIFACT_MODEL_NAME_ALIASES.get(normalized)
 
 
 def load_json_object(path: Path, label: str) -> dict[str, Any]:

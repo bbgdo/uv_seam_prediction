@@ -5,6 +5,7 @@ from torch_geometric.utils import sort_edge_index
 
 
 GRAPH_SAGE_AGGREGATION = 'lstm'
+SUPPORTED_GRAPH_SAGE_AGGREGATIONS = ('lstm', 'mean')
 
 
 class DualGraphSAGE(nn.Module):
@@ -16,8 +17,11 @@ class DualGraphSAGE(nn.Module):
         num_layers: int = 3,
         dropout: float = 0.3,
         skip_connections: str = 'hidden',
+        aggr: str = GRAPH_SAGE_AGGREGATION,
     ):
         super().__init__()
+        if aggr not in SUPPORTED_GRAPH_SAGE_AGGREGATIONS:
+            raise ValueError(f'aggr must be one of {SUPPORTED_GRAPH_SAGE_AGGREGATIONS}, got {aggr!r}')
         self.num_layers = num_layers
         self.dropout = dropout
         self.skip_connections = skip_connections
@@ -26,12 +30,12 @@ class DualGraphSAGE(nn.Module):
         self.norms = nn.ModuleList()
         self.skips = nn.ModuleList()
 
-        self.convs.append(SAGEConv(in_dim, hidden_dim, aggr=GRAPH_SAGE_AGGREGATION))
+        self.convs.append(SAGEConv(in_dim, hidden_dim, aggr=aggr))
         self.norms.append(nn.LayerNorm(hidden_dim))
         self.skips.append(nn.Linear(in_dim, hidden_dim) if in_dim != hidden_dim else nn.Identity())
 
         for _ in range(num_layers - 1):
-            self.convs.append(SAGEConv(hidden_dim, hidden_dim, aggr=GRAPH_SAGE_AGGREGATION))
+            self.convs.append(SAGEConv(hidden_dim, hidden_dim, aggr=aggr))
             self.norms.append(nn.LayerNorm(hidden_dim))
             self.skips.append(nn.Identity())
 

@@ -96,8 +96,10 @@ class PredictSeamsTests(unittest.TestCase):
                 predict_seams.resolve_model_type('auto', {}, weights)
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {'model_name': 'my_gatv2_experiment'}, weights)
-            with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
-                predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, Path(tmp) / 'run' / 'best_model.pth')
+            self.assertEqual(
+                predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, Path(tmp) / 'run' / 'best_model.pth'),
+                'sparsemeshcnn',
+            )
 
     def test_cli_rejects_meshcnn_full_as_model_type(self):
         with self.assertRaises(SystemExit):
@@ -234,15 +236,28 @@ class PredictSeamsTests(unittest.TestCase):
             with self.assertRaisesRegex(predict_seams.PredictionError, 'CUDA is unavailable'):
                 predict_seams.resolve_device('cuda')
 
-    def test_prediction_model_kwargs_require_maintained_gnn_keys(self):
-        with self.assertRaisesRegex(predict_seams.PredictionError, 'hidden_dim'):
-            predict_seams.resolve_model_kwargs('gatv2', {
-                'in_dim': 14,
-                'hidden': 8,
-                'num_layers': 1,
-                'dropout': 0.0,
-                'heads': 1,
-            })
+    def test_prediction_model_kwargs_accept_legacy_gnn_hidden_key(self):
+        kwargs = predict_seams.resolve_model_kwargs('gatv2', {
+            'in_dim': 14,
+            'hidden': 8,
+            'num_layers': 1,
+            'dropout': 0.0,
+            'heads': 1,
+        })
+
+        self.assertEqual(kwargs['hidden_dim'], 8)
+
+    def test_prediction_model_kwargs_accept_legacy_graphsage_mean_aggregation(self):
+        kwargs = predict_seams.resolve_model_kwargs('graphsage', {
+            'in_dim': 14,
+            'hidden_dim': 8,
+            'num_layers': 1,
+            'dropout': 0.0,
+            'skip_connections': 'hidden',
+            'aggr': 'mean',
+        })
+
+        self.assertEqual(kwargs['aggr'], 'mean')
 
     def test_prediction_model_kwargs_require_sparsemeshcnn_model_config(self):
         kwargs = predict_seams.resolve_model_kwargs('sparsemeshcnn', {
@@ -282,14 +297,13 @@ class PredictSeamsTests(unittest.TestCase):
                 'feature_metadata': "{'feature_dim': 14}",
             })
 
-    def test_extract_state_dict_rejects_stale_wrapper_keys(self):
+    def test_extract_state_dict_accepts_legacy_wrapper_keys(self):
         state = {'layer.weight': torch.zeros(1)}
         self.assertIs(predict_seams.extract_state_dict(state), state)
         self.assertEqual(predict_seams.extract_state_dict({'model_state': state}), state)
         for stale_key in ('state_dict', 'model_state_dict'):
             with self.subTest(stale_key=stale_key):
-                with self.assertRaisesRegex(predict_seams.PredictionError, 'model_state'):
-                    predict_seams.extract_state_dict({stale_key: state})
+                self.assertEqual(predict_seams.extract_state_dict({stale_key: state}), state)
 
     def test_feature_metadata_rejects_stringified_feature_names(self):
         selection = predict_seams.resolve_feature_selection('paper14')

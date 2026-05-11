@@ -8,7 +8,7 @@ import torch
 
 from models.common.gnn_registry import get_gnn_model
 from models.meshcnn_full.model import MeshCNNSegmenter
-from tools.utils.prediction_common import PredictionError, coerce_dict, normalize_model_name
+from tools.utils.prediction_common import PredictionError, coerce_dict, normalize_artifact_model_name, normalize_model_name
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -28,7 +28,7 @@ def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Pat
         return resolved
 
     for key in ('model', 'model_name'):
-        resolved = normalize_model_name(config.get(key))
+        resolved = normalize_artifact_model_name(config.get(key))
         if resolved is not None:
             return resolved
 
@@ -62,7 +62,7 @@ def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, A
         return kwargs
 
     in_dim = required_config_value(config, ('in_dim',), 'in_dim')
-    hidden_dim = required_config_value(config, ('hidden_dim',), 'hidden_dim')
+    hidden_dim = required_config_value(config, ('hidden_dim', 'hidden', 'hidden_size'), 'hidden_dim')
     kwargs = {
         'in_dim': int(in_dim),
         'hidden_dim': int(hidden_dim),
@@ -75,6 +75,8 @@ def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, A
         kwargs['skip_connections'] = str(
             required_config_value(config, ('skip_connections',), 'skip_connections')
         )
+        if config.get('aggr') in ('mean', 'lstm'):
+            kwargs['aggr'] = str(config['aggr'])
     else:
         raise PredictionError(f'unsupported model type: {model_name}', 'InvalidModelType')
     return kwargs
@@ -140,9 +142,10 @@ def load_weights_payload(weights_path: Path, device: torch.device) -> Any:
 
 def extract_state_dict(payload: Any) -> dict[str, torch.Tensor]:
     if isinstance(payload, dict):
-        nested = payload.get('model_state')
-        if isinstance(nested, dict):
-            return nested
+        for key in ('model_state', 'state_dict', 'model_state_dict'):
+            nested = payload.get(key)
+            if isinstance(nested, dict):
+                return nested
         if all(torch.is_tensor(value) for value in payload.values()):
             return payload
     raise PredictionError(
