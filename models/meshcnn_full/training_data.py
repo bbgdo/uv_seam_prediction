@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from models.meshcnn_full.mesh import MeshCNNSample
+from models.meshcnn_full.mesh import SPARSE_MESHCNN_SAMPLE_FORMAT, MeshCNNSample
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection
 
 
@@ -94,7 +94,7 @@ def selected_feature_metadata(
         'endpoint_order': manifest.get('endpoint_order', sample.endpoint_order),
         'density_config': selection.density_config,
         'label_source': manifest.get('label_source', sample.label_source),
-        'sample_format': manifest.get('sample_format', 'meshcnn_full_v2'),
+        'sample_format': SPARSE_MESHCNN_SAMPLE_FORMAT,
         'source_feature_names': list(source_feature_names),
         'original_feature_names': list(source_feature_names),
     }

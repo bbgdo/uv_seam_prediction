@@ -133,16 +133,14 @@ def resolve_feature_selection(
     *,
     enable_ao: bool = False,
     enable_dihedral: bool = False,
-    enable_signed_dihedral: bool | None = None,
     enable_symmetry: bool = False,
     enable_density: bool = False,
     enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
     group_name = _normalize_group_name(feature_group)
-    signed_dihedral = enable_dihedral if enable_signed_dihedral is None else enable_signed_dihedral
     requested_flags = FeatureFlags(
         ao=bool(enable_ao),
-        signed_dihedral=bool(signed_dihedral),
+        signed_dihedral=bool(enable_dihedral),
         symmetry=bool(enable_symmetry),
         density=bool(enable_density),
         thickness_sdf=bool(enable_thickness_sdf),

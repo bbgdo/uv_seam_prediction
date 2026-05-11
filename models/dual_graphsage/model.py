@@ -4,6 +4,9 @@ from torch_geometric.nn import SAGEConv
 from torch_geometric.utils import sort_edge_index
 
 
+GRAPH_SAGE_AGGREGATION = 'lstm'
+
+
 class DualGraphSAGE(nn.Module):
 
     def __init__(
@@ -12,25 +15,23 @@ class DualGraphSAGE(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 3,
         dropout: float = 0.3,
-        aggr: str = 'lstm',
         skip_connections: str = 'hidden',
     ):
         super().__init__()
         self.num_layers = num_layers
         self.dropout = dropout
-        self.aggr = aggr
         self.skip_connections = skip_connections
 
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList()
         self.skips = nn.ModuleList()
 
-        self.convs.append(SAGEConv(in_dim, hidden_dim, aggr=aggr))
+        self.convs.append(SAGEConv(in_dim, hidden_dim, aggr=GRAPH_SAGE_AGGREGATION))
         self.norms.append(nn.LayerNorm(hidden_dim))
         self.skips.append(nn.Linear(in_dim, hidden_dim) if in_dim != hidden_dim else nn.Identity())
 
         for _ in range(num_layers - 1):
-            self.convs.append(SAGEConv(hidden_dim, hidden_dim, aggr=aggr))
+            self.convs.append(SAGEConv(hidden_dim, hidden_dim, aggr=GRAPH_SAGE_AGGREGATION))
             self.norms.append(nn.LayerNorm(hidden_dim))
             self.skips.append(nn.Identity())
 
@@ -42,8 +43,7 @@ class DualGraphSAGE(nn.Module):
         )
 
     def forward(self, x, edge_index):
-        if self.aggr == 'lstm':
-            edge_index = sort_edge_index(edge_index, sort_by_row=False)
+        edge_index = sort_edge_index(edge_index, sort_by_row=False)
 
         for i, (conv, norm, skip) in enumerate(zip(self.convs, self.norms, self.skips)):
             residual = x

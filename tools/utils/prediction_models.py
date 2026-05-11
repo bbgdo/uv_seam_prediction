@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from models.baselines.registry import get_baseline
+from models.common.gnn_registry import get_gnn_model
 from models.meshcnn_full.model import MeshCNNSegmenter
 from tools.utils.prediction_common import PredictionError, coerce_dict, normalize_model_name
 
@@ -77,7 +77,6 @@ def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, A
     if model_name == 'gatv2':
         kwargs['heads'] = int(required_config_value(config, ('heads',), 'heads'))
     elif model_name == 'graphsage':
-        kwargs['aggr'] = str(required_config_value(config, ('aggr',), 'aggr'))
         kwargs['skip_connections'] = str(
             required_config_value(config, ('skip_connections',), 'skip_connections')
         )
@@ -175,5 +174,5 @@ def load_state_dict(weights_path: Path, device: torch.device) -> dict[str, torch
 def build_prediction_model(model_type: str, model_kwargs: dict[str, Any]) -> torch.nn.Module:
     if model_type == 'sparsemeshcnn':
         return MeshCNNSegmenter(**model_kwargs)
-    definition = get_baseline(model_type)
+    definition = get_gnn_model(model_type)
     return definition.model_class(**model_kwargs)

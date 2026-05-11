@@ -281,7 +281,6 @@ class EvaluateSavedModelsTests(unittest.TestCase):
                 'feature_group': 'custom',
                 'feature_flags': {},
                 'resolution_tag': 'all',
-                'aggr': 'lstm',
                 'skip_connections': 'all',
             }))
             (run_dir / 'summary.json').write_text(json.dumps({'best_validation_threshold': 0.95}))

@@ -23,7 +23,7 @@ def selection_from_feature_flags(flags: dict[str, bool]) -> ResolvedFeatureSet:
     return resolve_feature_selection(
         'custom',
         enable_ao=flags['ao'],
-        enable_signed_dihedral=flags['signed_dihedral'],
+        enable_dihedral=flags['signed_dihedral'],
         enable_symmetry=flags['symmetry'],
         enable_density=flags['density'],
         enable_thickness_sdf=flags['thickness_sdf'],
@@ -152,7 +152,6 @@ def infer_feature_flags(metadata: dict[str, Any]) -> dict[str, bool]:
         'ao': bool(flags.get('ao')) or 'ao_i' in names or 'ao_j' in names,
         'signed_dihedral': (
             bool(flags.get('signed_dihedral'))
-            or bool(flags.get('dihedral'))
             or 'signed_dihedral' in names
         ),
         'symmetry': bool(flags.get('symmetry')) or 'symmetry_dist' in names,
@@ -191,15 +190,17 @@ def validate_feature_metadata(
 
         flags = coerce_dict(metadata.get('feature_flags'))
         if flags is not None:
+            unknown_flags = sorted(set(flags) - set(expected_flags))
+            if unknown_flags:
+                raise PredictionError(
+                    f'{source_name} feature_flags contains unsupported key(s): {unknown_flags}',
+                    'FeatureMetadataMismatch',
+                )
             for key, expected_value in expected_flags.items():
-                aliases = (key,)
-                if key == 'signed_dihedral':
-                    aliases = ('signed_dihedral', 'dihedral')
-                present = [alias for alias in aliases if alias in flags]
-                if present and bool(flags[present[0]]) != bool(expected_value):
+                if key in flags and bool(flags[key]) != bool(expected_value):
                     raise PredictionError(
-                        f'{source_name} feature_flags mismatch for {present[0]}: '
-                        f'expected {expected_value}, got {flags[present[0]]}',
+                        f'{source_name} feature_flags mismatch for {key}: '
+                        f'expected {expected_value}, got {flags[key]}',
                         'FeatureMetadataMismatch',
                     )
 

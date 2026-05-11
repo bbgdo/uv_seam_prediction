@@ -12,7 +12,6 @@ class RunTrainingTests(unittest.TestCase):
         self.assertEqual(args.model, 'graphsage')
         self.assertEqual(args.dataset, 'dataset_dual.pt')
         self.assertEqual(args.feature_group, None)
-        self.assertEqual(args.aggr, 'lstm')
         self.assertTrue(args.run_dir.startswith('runs/dual_graphsage_'))
 
     def test_parse_gatv2_defaults(self):
@@ -34,13 +33,13 @@ class RunTrainingTests(unittest.TestCase):
         self.assertEqual(args.min_edges, 32)
         self.assertTrue(args.run_dir.startswith('runs/sparsemeshcnn_'))
 
-    def test_dispatches_graph_model_to_baseline_trainer(self):
+    def test_dispatches_graph_model_to_gnn_trainer(self):
         args = run_training.parse_args(['--model', 'graphsage', '--epochs', '1'])
 
-        with patch.object(run_training, 'train_baseline') as train_baseline:
+        with patch.object(run_training, 'train_gnn') as train_gnn:
             run_training.train_model(args)
 
-        train_baseline.assert_called_once_with(args)
+        train_gnn.assert_called_once_with(args)
 
     def test_dispatches_sparsemeshcnn_to_sparse_trainer(self):
         args = run_training.parse_args(['--model', 'sparsemeshcnn', '--epochs', '1'])
@@ -54,11 +53,11 @@ class RunTrainingTests(unittest.TestCase):
         from models.dual_graphsage import train as graphsage_train
 
         args = Namespace(dataset='dataset.pt', epochs=1)
-        with patch.object(run_training, 'train_baseline') as train_baseline:
+        with patch.object(run_training, 'train_gnn') as train_gnn:
             graphsage_train.main(args)
 
-        train_baseline.assert_called_once()
-        self.assertEqual(train_baseline.call_args.args[0].model, 'graphsage')
+        train_gnn.assert_called_once()
+        self.assertEqual(train_gnn.call_args.args[0].model, 'graphsage')
 
     def test_sparsemeshcnn_script_accepts_namespace(self):
         from models.meshcnn_full import train as sparsemeshcnn_train

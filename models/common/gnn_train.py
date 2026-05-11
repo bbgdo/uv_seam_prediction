@@ -6,21 +6,21 @@ from pathlib import Path
 
 import torch
 
-from models.baselines.registry import get_baseline
-from models.common.baseline_train_data import (
+from models.common.gnn_registry import get_gnn_model
+from models.common.gnn_train_data import (
     apply_runtime_feature_selection,
     dataset_metadata_summary,
     resolve_runtime_feature_selection,
     set_random_seeds,
 )
-from models.common.baseline_train_loop import (
+from models.common.gnn_train_loop import (
     collect_logits_labels,
     confusion_counts,
     metric_line,
     print_threshold_sweep,
     run_epoch,
 )
-from models.common.baseline_train_runtime import build_runtime_config, logger_config, model_kwargs
+from models.common.gnn_train_runtime import build_runtime_config, logger_config, model_kwargs
 from models.utils.dataset import (
     compute_pos_weight,
     filter_dataset_by_resolution,
@@ -32,12 +32,16 @@ from models.utils.experiment_log import ExperimentLogger
 from models.utils.metrics import threshold_sweep
 
 
-def train_baseline(args: argparse.Namespace) -> None:
+LR_SCHEDULER_FACTOR = 0.5
+LR_SCHEDULER_PATIENCE = 5
+
+
+def train_gnn(args: argparse.Namespace) -> None:
     feature_selection = resolve_runtime_feature_selection(args)
     args.feature_group = feature_selection.feature_group
     args.in_dim = feature_selection.feature_count
     config = build_runtime_config(args)
-    definition = get_baseline(config.model_name)
+    definition = get_gnn_model(config.model_name)
 
     split_metadata = load_split_json_metadata(args.split_json_in) if args.split_json_in else {}
     seed_value = args.seed if args.seed is not None else split_metadata.get('seed')
@@ -91,7 +95,7 @@ def train_baseline(args: argparse.Namespace) -> None:
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=config.scheduler_factor, patience=config.scheduler_patience
+        optimizer, mode='max', factor=LR_SCHEDULER_FACTOR, patience=LR_SCHEDULER_PATIENCE
     )
 
     logger = ExperimentLogger(
@@ -176,8 +180,8 @@ def train_baseline(args: argparse.Namespace) -> None:
     val_logits_cat, val_labels_cat = collect_logits_labels(model, val, device)
     test_logits_cat, test_labels_cat = collect_logits_labels(model, test, device)
 
-    val_sweep = threshold_sweep(val_logits_cat, val_labels_cat, config.threshold_values)
-    test_sweep = threshold_sweep(test_logits_cat, test_labels_cat, config.threshold_values)
+    val_sweep = threshold_sweep(val_logits_cat, val_labels_cat)
+    test_sweep = threshold_sweep(test_logits_cat, test_labels_cat)
     best_t = val_sweep['best']['threshold']
     test_best_val_t_m = threshold_sweep(test_logits_cat, test_labels_cat, [best_t])['all'][0]
 
@@ -195,30 +199,33 @@ def train_baseline(args: argparse.Namespace) -> None:
     print(f"\noptimal threshold (by val F1): {best_t:.2f}")
     print(f"{'-'*75}")
 
+    final_summary = {
+        'seed': seed,
+        'model_name': config.model_name,
+        'hidden': config.hidden_size,
+        'hidden_dim': config.hidden_size,
+        'num_layers': config.num_layers,
+        'dropout': config.dropout,
+        'lr': config.lr,
+        'split_json_in': str(args.split_json_in) if args.split_json_in else None,
+        'split_json_out': str(args.split_json_out) if args.split_json_out else None,
+        'best_validation_threshold': best_t,
+        'test_metrics_threshold_0_5': test_m,
+        'test_metrics_best_validation_threshold': test_best_val_t_m,
+        'test_confusion_threshold_0_5': confusion_counts(test_m),
+        'test_confusion_best_validation_threshold': confusion_counts(test_best_val_t_m),
+        'resolution_tag': args.resolution_tag,
+        'resolution_selector': args.resolution_tag,
+        'filtered_graph_count': filtered_graph_count,
+        'dataset_metadata_summary': metadata_summary,
+    }
+    if config.model_name == 'gatv2':
+        final_summary['heads'] = config.heads
+
     logger.finalize(
         test_metrics=test_m,
         best_epoch=best_epoch,
-        extra_summary={
-            'seed': seed,
-            'model_name': config.model_name,
-            'hidden': config.hidden_size,
-            'hidden_dim': config.hidden_size,
-            'heads': config.heads if config.model_name == 'gatv2' else None,
-            'num_layers': config.num_layers,
-            'dropout': config.dropout,
-            'lr': config.lr,
-            'split_json_in': str(args.split_json_in) if args.split_json_in else None,
-            'split_json_out': str(args.split_json_out) if args.split_json_out else None,
-            'best_validation_threshold': best_t,
-            'test_metrics_threshold_0_5': test_m,
-            'test_metrics_best_validation_threshold': test_best_val_t_m,
-            'test_confusion_threshold_0_5': confusion_counts(test_m),
-            'test_confusion_best_validation_threshold': confusion_counts(test_best_val_t_m),
-            'resolution_tag': args.resolution_tag,
-            'resolution_selector': args.resolution_tag,
-            'filtered_graph_count': filtered_graph_count,
-            'dataset_metadata_summary': metadata_summary,
-        },
+        extra_summary=final_summary,
     )
     logger.save()
     logger.plot()

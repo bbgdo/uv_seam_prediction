@@ -45,9 +45,7 @@ def normalize_model_name(value: Any) -> str | None:
         return 'gatv2'
     if normalized == 'graphsage' or 'graphsage' in normalized:
         return 'graphsage'
-    if normalized in ('meshcnn_full', 'meshcnn', 'sparsemeshcnn', 'sparse_meshcnn'):
-        return 'sparsemeshcnn'
-    if 'meshcnn_full' in normalized or ('meshcnn' in normalized and 'sparse' in normalized):
+    if normalized == 'sparsemeshcnn':
         return 'sparsemeshcnn'
     return None
 

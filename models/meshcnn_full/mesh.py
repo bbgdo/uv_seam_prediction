@@ -8,6 +8,9 @@ import numpy as np
 import torch
 
 
+SPARSE_MESHCNN_SAMPLE_FORMAT = 'sparsemeshcnn_v2'
+
+
 @dataclass
 class MeshCNNSample:
     vertices: torch.Tensor

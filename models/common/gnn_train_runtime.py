@@ -4,13 +4,13 @@ import argparse
 
 import torch
 
-from models.baselines.registry import get_baseline
+from models.common.gnn_registry import get_gnn_model
 from models.common.gnn_config import GNNTrainConfig, gnn_train_config, replace_config
 
 
 def build_runtime_config(args: argparse.Namespace) -> GNNTrainConfig:
-    definition = get_baseline(args.model)
-    config = gnn_train_config(args.model, definition.default_config_overrides)
+    definition = get_gnn_model(args.model)
+    config = gnn_train_config(args.model, definition.gnn_config_overrides)
     return replace_config(
         config,
         hidden_size=args.hidden,
@@ -24,7 +24,6 @@ def build_runtime_config(args: argparse.Namespace) -> GNNTrainConfig:
         dropout=args.dropout,
         weight_decay=getattr(args, 'weight_decay', None),
         heads=getattr(args, 'heads', None),
-        aggr=getattr(args, 'aggr', None),
         skip_connections=getattr(args, 'skip_connections', None),
     )
 
@@ -38,7 +37,6 @@ def model_kwargs(config: GNNTrainConfig) -> dict:
     }
     if config.model_name == 'graphsage':
         kwargs.update({
-            'aggr': config.aggr,
             'skip_connections': config.skip_connections,
         })
     elif config.model_name == 'gatv2':
@@ -93,7 +91,6 @@ def logger_config(
     }
     if config.model_name == 'graphsage':
         payload.update({
-            'aggr': config.aggr,
             'skip_connections': config.skip_connections,
         })
     elif config.model_name == 'gatv2':

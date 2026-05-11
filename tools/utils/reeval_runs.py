@@ -4,10 +4,10 @@ from pathlib import Path
 
 import torch
 
-from models.baselines.registry import get_baseline
-from models.common.baseline_train_data import apply_runtime_feature_selection
-from models.common.baseline_train_loop import collect_logits_labels
-from models.common.baseline_train_runtime import model_kwargs
+from models.common.gnn_registry import get_gnn_model
+from models.common.gnn_train_data import apply_runtime_feature_selection
+from models.common.gnn_train_loop import collect_logits_labels
+from models.common.gnn_train_runtime import model_kwargs
 from models.common.gnn_config import gnn_train_config, replace_config
 from models.utils.dataset import filter_dataset_by_resolution, load_dataset, load_split_json_metadata, split_dataset
 from preprocessing.feature_registry import resolve_feature_selection
@@ -72,9 +72,8 @@ def require_config(config: dict, run_dir: Path) -> None:
     if missing:
         raise ValueError(f'{run_dir / "config.json"} missing required field(s): {", ".join(missing)}')
     if config.get('model_name') == 'graphsage':
-        for key in ('aggr', 'skip_connections'):
-            if config.get(key) is None:
-                raise ValueError(f'{run_dir / "config.json"} missing required field: {key}')
+        if config.get('skip_connections') is None:
+            raise ValueError(f'{run_dir / "config.json"} missing required field: skip_connections')
 
 
 def discover_saved_runs(args) -> list[SavedRun]:
@@ -142,7 +141,7 @@ def feature_selection_from_config(config: dict):
     return resolve_feature_selection(
         config.get('feature_group'),
         enable_ao=bool(flags.get('ao', False)),
-        enable_signed_dihedral=bool(flags.get('signed_dihedral', flags.get('dihedral', False))),
+        enable_dihedral=bool(flags.get('signed_dihedral', False)),
         enable_symmetry=bool(flags.get('symmetry', False)),
         enable_density=bool(flags.get('density', False)),
         enable_thickness_sdf=bool(flags.get('thickness_sdf', False)),
@@ -150,8 +149,8 @@ def feature_selection_from_config(config: dict):
 
 
 def runtime_config_from_saved(config: dict):
-    definition = get_baseline(config['model_name'])
-    base = gnn_train_config(config['model_name'], definition.default_config_overrides)
+    definition = get_gnn_model(config['model_name'])
+    base = gnn_train_config(config['model_name'], definition.gnn_config_overrides)
     return replace_config(
         base,
         hidden_size=config.get('hidden_dim'),
@@ -163,7 +162,6 @@ def runtime_config_from_saved(config: dict):
         focal_gamma=config.get('focal_gamma'),
         patience=config.get('patience'),
         heads=config.get('heads'),
-        aggr=config.get('aggr'),
         skip_connections=config.get('skip_connections'),
     )
 
@@ -196,7 +194,7 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
     config = target.config
     selection = feature_selection_from_config(config)
     runtime_config = runtime_config_from_saved(config)
-    definition = get_baseline(runtime_config.model_name)
+    definition = get_gnn_model(runtime_config.model_name)
 
     dataset = load_dataset(target.dataset_path)
     resolution_tag = config.get('resolution_tag', 'all')

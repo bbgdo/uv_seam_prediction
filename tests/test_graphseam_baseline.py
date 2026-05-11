@@ -10,9 +10,9 @@ from torch_geometric.data import Data
 
 from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
-from models.common.baseline_train_data import apply_runtime_feature_selection
-from models.common.baseline_train_runtime import build_runtime_config, model_kwargs
-from models.baselines.registry import get_baseline
+from models.common.gnn_train_data import apply_runtime_feature_selection
+from models.common.gnn_train_runtime import build_runtime_config, model_kwargs
+from models.common.gnn_registry import get_gnn_model
 from tools.run_training import parse_args as parse_training_args
 from models.utils.experiment_log import ExperimentLogger
 from preprocessing.compute_features import compute_edge_features
@@ -53,11 +53,12 @@ def _skewed_density_mesh() -> trimesh.Trimesh:
 
 
 class GraphSeamBaselineTests(unittest.TestCase):
-    def test_baseline_registry_exposes_supported_models(self):
-        self.assertIs(get_baseline('graphsage').model_class, DualGraphSAGE)
-        self.assertIs(get_baseline('gatv2').model_class, DualGATv2)
-        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 64)
-        self.assertEqual(get_baseline('gatv2').default_config_overrides['heads'], 4)
+    def test_gnn_registry_exposes_supported_models(self):
+        self.assertIs(get_gnn_model('graphsage').model_class, DualGraphSAGE)
+        self.assertIs(get_gnn_model('gatv2').model_class, DualGATv2)
+        self.assertEqual(get_gnn_model('graphsage').gnn_config_overrides, {})
+        self.assertEqual(get_gnn_model('gatv2').gnn_config_overrides['hidden_size'], 64)
+        self.assertEqual(get_gnn_model('gatv2').gnn_config_overrides['heads'], 4)
 
     def test_unified_runner_defaults_graphsage_and_gatv2(self):
         graphsage_args = parse_training_args(['--epochs', '1'])
@@ -218,7 +219,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         selection = resolve_feature_selection('custom', enable_ao=True, enable_density=True)
         args.in_dim = selection.feature_count
         config = build_runtime_config(args)
-        definition = get_baseline(config.model_name)
+        definition = get_gnn_model(config.model_name)
 
         model = definition.model_class(**model_kwargs(config))
         x = torch.randn(4, selection.feature_count)
@@ -234,7 +235,6 @@ class GraphSeamBaselineTests(unittest.TestCase):
             in_dim=14,
             hidden_dim=64,
             num_layers=3,
-            aggr='lstm',
             skip_connections='all',
         )
         x = torch.randn(5, 14)

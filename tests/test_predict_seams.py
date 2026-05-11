@@ -79,11 +79,12 @@ class PredictSeamsTests(unittest.TestCase):
             self.assertEqual(predict_seams.resolve_model_type('graphsage', {'model': 'gatv2'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {'model_name': 'DualGraphSAGE'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {}, weights), 'gatv2')
-            self.assertEqual(predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, weights), 'sparsemeshcnn')
             self.assertEqual(predict_seams.resolve_model_type('sparsemeshcnn', {}, weights), 'sparsemeshcnn')
 
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
+            with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
+                predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, Path(tmp) / 'run' / 'best_model.pth')
 
     def test_cli_rejects_meshcnn_full_as_model_type(self):
         with self.assertRaises(SystemExit):
@@ -506,6 +507,17 @@ class ThicknessSdfFlagTests(unittest.TestCase):
             'in_dim': selection.feature_count,
         }
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_group mismatch'):
+            predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
+
+    def test_validate_feature_metadata_rejects_legacy_dihedral_flag_alias(self):
+        selection = predict_seams.resolve_feature_selection('custom', enable_dihedral=True)
+        config = {
+            'feature_group': 'custom',
+            'feature_flags': {'dihedral': True},
+            'feature_names': list(selection.feature_names),
+            'in_dim': selection.feature_count,
+        }
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'unsupported key'):
             predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
 
 

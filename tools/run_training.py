@@ -8,14 +8,14 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from models.baselines.registry import SUPPORTED_BASELINES, get_baseline  # noqa: E402
-from models.common.baseline_train import train_baseline  # noqa: E402
+from models.common.gnn_registry import SUPPORTED_GNN_MODELS, get_gnn_model  # noqa: E402
+from models.common.gnn_train import train_gnn  # noqa: E402
 from models.common.gnn_config import gnn_train_config  # noqa: E402
 from models.meshcnn_full.train import train_sparsemeshcnn  # noqa: E402
 from preprocessing.feature_registry import FEATURE_GROUP_NAMES  # noqa: E402
 
 
-GNN_MODELS = tuple(SUPPORTED_BASELINES)
+GNN_MODELS = tuple(SUPPORTED_GNN_MODELS)
 TRAINING_MODELS = (*GNN_MODELS, 'sparsemeshcnn')
 
 
@@ -25,8 +25,8 @@ def _default_run_dir(model_name: str, timestamp: str) -> str:
 
 
 def _fill_gnn_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    definition = get_baseline(args.model)
-    config = gnn_train_config(args.model, definition.default_config_overrides)
+    definition = get_gnn_model(args.model)
+    config = gnn_train_config(args.model, definition.gnn_config_overrides)
     defaults = {
         'epochs': config.epochs,
         'lr': config.lr,
@@ -43,7 +43,6 @@ def _fill_gnn_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if args.model == 'gatv2':
         defaults['heads'] = config.heads
     if args.model == 'graphsage':
-        defaults['aggr'] = 'lstm'
         defaults['skip_connections'] = config.skip_connections
     for key, value in defaults.items():
         if getattr(args, key, None) is None:
@@ -172,7 +171,7 @@ def parse_args(
 
 
 def train_graph_model(args: argparse.Namespace) -> None:
-    train_baseline(args)
+    train_gnn(args)
 
 
 def train_model(args: argparse.Namespace) -> None:

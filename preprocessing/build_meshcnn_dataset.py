@@ -15,7 +15,7 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
-from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency  # noqa: E402
+from models.meshcnn_full.mesh import SPARSE_MESHCNN_SAMPLE_FORMAT, MeshCNNSample, build_mesh_adjacency  # noqa: E402
 from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order  # noqa: E402
 from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection  # noqa: E402
 from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
@@ -169,7 +169,7 @@ def build_dataset_manifest(samples: list[MeshCNNSample], dataset_path: Path) -> 
 
     manifest = {
         'dataset_path': str(dataset_path),
-        'sample_format': 'meshcnn_full_v2',
+        'sample_format': SPARSE_MESHCNN_SAMPLE_FORMAT,
         'label_source': 'exact_obj',
         'feature_group': first.feature_group,
         'feature_names': list(first.feature_names),

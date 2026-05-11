@@ -159,7 +159,7 @@ class MeshCNNFullTests(unittest.TestCase):
             )
             manifest = build_dataset_manifest([sample], path.with_suffix('.pt'))
 
-        self.assertEqual(manifest['sample_format'], 'meshcnn_full_v2')
+        self.assertEqual(manifest['sample_format'], 'sparsemeshcnn_v2')
         self.assertEqual(manifest['feature_group'], 'custom')
         self.assertEqual(manifest['feature_names'], list(selection.feature_names))
         self.assertEqual(manifest['feature_flags'], selection.feature_flags.as_dict())
@@ -260,7 +260,7 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(metadata['feature_flags'], target_selection.feature_flags.as_dict())
         self.assertEqual(metadata['endpoint_order'], 'random')
         self.assertEqual(metadata['label_source'], 'exact_obj')
-        self.assertEqual(metadata['sample_format'], 'meshcnn_full_v2')
+        self.assertEqual(metadata['sample_format'], 'sparsemeshcnn_v2')
 
 
 class TrainConfigMetadataTests(unittest.TestCase):
