@@ -8,6 +8,15 @@ from typing import Any
 
 MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'sparsemeshcnn')
 FEATURE_BUNDLES = ('auto', 'paper14', 'custom')
+MODEL_NAME_ALIASES = {
+    'gatv2': 'gatv2',
+    'dualgatv2': 'gatv2',
+    'dual_gatv2': 'gatv2',
+    'graphsage': 'graphsage',
+    'dualgraphsage': 'graphsage',
+    'dual_graphsage': 'graphsage',
+    'sparsemeshcnn': 'sparsemeshcnn',
+}
 
 
 class PredictionError(RuntimeError):
@@ -40,13 +49,7 @@ def normalize_model_name(value: Any) -> str | None:
     if value in (None, ''):
         return None
     normalized = str(value).strip().lower().replace('-', '_').replace(' ', '_')
-    if normalized == 'gatv2' or 'gatv2' in normalized:
-        return 'gatv2'
-    if normalized == 'graphsage' or 'graphsage' in normalized:
-        return 'graphsage'
-    if normalized == 'sparsemeshcnn':
-        return 'sparsemeshcnn'
-    return None
+    return MODEL_NAME_ALIASES.get(normalized)
 
 
 def load_json_object(path: Path, label: str) -> dict[str, Any]:

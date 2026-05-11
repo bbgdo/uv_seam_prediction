@@ -20,21 +20,20 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Path) -> str:
+    del weights_path
     if requested != 'auto':
         resolved = normalize_model_name(requested)
-        return resolved or requested
+        if resolved is None:
+            raise PredictionError(f'unsupported model type: {requested}', 'InvalidModelType')
+        return resolved
 
     for key in ('model', 'model_name'):
         resolved = normalize_model_name(config.get(key))
         if resolved is not None:
             return resolved
 
-    resolved = normalize_model_name(weights_path.parent.name)
-    if resolved is not None:
-        return resolved
-
     raise PredictionError(
-        'model type could not be resolved from --model-type, config metadata, or parent run directory',
+        'model type could not be resolved from --model-type or config metadata',
         'MissingModelType',
     )
 

@@ -87,11 +87,15 @@ class PredictSeamsTests(unittest.TestCase):
 
             self.assertEqual(predict_seams.resolve_model_type('graphsage', {'model': 'gatv2'}, weights), 'graphsage')
             self.assertEqual(predict_seams.resolve_model_type('auto', {'model_name': 'DualGraphSAGE'}, weights), 'graphsage')
-            self.assertEqual(predict_seams.resolve_model_type('auto', {}, weights), 'gatv2')
+            self.assertEqual(predict_seams.resolve_model_type('auto', {'model': 'DualGATv2'}, weights), 'gatv2')
             self.assertEqual(predict_seams.resolve_model_type('sparsemeshcnn', {}, weights), 'sparsemeshcnn')
 
+            with self.assertRaisesRegex(predict_seams.PredictionError, 'unsupported model type'):
+                predict_seams.resolve_model_type('unknown', {}, weights)
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
-                predict_seams.resolve_model_type('auto', {}, Path(tmp) / 'run' / 'best_model.pth')
+                predict_seams.resolve_model_type('auto', {}, weights)
+            with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
+                predict_seams.resolve_model_type('auto', {'model_name': 'my_gatv2_experiment'}, weights)
             with self.assertRaisesRegex(predict_seams.PredictionError, 'model type could not be resolved'):
                 predict_seams.resolve_model_type('auto', {'model': 'meshcnn_full'}, Path(tmp) / 'run' / 'best_model.pth')
 
