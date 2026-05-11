@@ -314,7 +314,6 @@ class TopologyPipelineResult:
     r_bridge: int
     l_min: int
     anchor_boundary: bool
-    max_bridge_edges: int = 6
     max_bridge_euclidean_ratio: float = 0.03
     max_endpoint_candidates: int = 4
     require_mutual_pairing: bool = True
@@ -1349,7 +1348,6 @@ def apply_topology_pipeline(
     d_max: int = 3,
     r_bridge: int = 6,
     l_min: int = 4,
-    max_bridge_edges: int | None = None,
     max_bridge_euclidean_ratio: float = 0.03,
     max_endpoint_candidates: int = 4,
     require_mutual_pairing: bool = True,
@@ -1375,7 +1373,7 @@ def apply_topology_pipeline(
     bridge = compute_endpoint_bridging(
         view,
         skel,
-        max_bridge_edges=r_bridge if max_bridge_edges is None else max_bridge_edges,
+        max_bridge_edges=r_bridge,
         max_bridge_euclidean_ratio=max_bridge_euclidean_ratio,
         max_endpoint_candidates=max_endpoint_candidates,
         require_mutual_pairing=require_mutual_pairing,
@@ -1401,7 +1399,6 @@ def apply_topology_pipeline(
         r_bridge=int(r_bridge),
         l_min=int(l_min),
         anchor_boundary=bool(anchor_boundary),
-        max_bridge_edges=int(r_bridge if max_bridge_edges is None else max_bridge_edges),
         max_bridge_euclidean_ratio=float(max_bridge_euclidean_ratio),
         max_endpoint_candidates=int(max_endpoint_candidates),
         require_mutual_pairing=bool(require_mutual_pairing),
@@ -1535,7 +1532,6 @@ def topology_pipeline_result_to_json_dict(
             'anchor_boundary': bool(result.anchor_boundary),
             'd_max': int(result.d_max),
             'l_min': int(result.l_min),
-            'max_bridge_edges': int(result.max_bridge_edges),
             'max_bridge_euclidean_ratio': float(result.max_bridge_euclidean_ratio),
             'max_debug_candidates': int(result.max_debug_candidates),
             'max_endpoint_candidates': int(result.max_endpoint_candidates),

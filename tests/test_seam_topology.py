@@ -1837,7 +1837,6 @@ class PipelineTests(unittest.TestCase):
                 'r_bridge',
                 'l_min',
                 'anchor_boundary',
-                'max_bridge_edges',
                 'max_bridge_euclidean_ratio',
                 'max_debug_candidates',
                 'max_endpoint_candidates',

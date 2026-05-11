@@ -201,10 +201,10 @@ def compute_seam_mask_diagnostics(
 def diagnostics_to_json_dict(d: SeamMaskDiagnostics) -> dict:
     payload = {
         'branch_count': int(d.branch_count),
-        'branch_length_histogram': ordered_string_dict(d.branch_length_histogram, _BRANCH_LENGTH_BUCKETS),
+        'branch_length_histogram': ordered_bucket_dict(d.branch_length_histogram, _BRANCH_LENGTH_BUCKETS),
         'component_count': int(d.component_count),
-        'component_size_histogram': ordered_string_dict(d.component_size_histogram, _COMPONENT_SIZE_BUCKETS),
-        'gap_distance_histogram': ordered_string_dict(d.gap_distance_histogram, _GAP_DISTANCE_BUCKETS),
+        'component_size_histogram': ordered_bucket_dict(d.component_size_histogram, _COMPONENT_SIZE_BUCKETS),
+        'gap_distance_histogram': ordered_bucket_dict(d.gap_distance_histogram, _GAP_DISTANCE_BUCKETS),
         'isolated_edge_count': int(d.isolated_edge_count),
         'junction_count': int(d.junction_count),
         'mean_probability_in_seam': float(d.mean_probability_in_seam),
@@ -315,14 +315,6 @@ def increment_bucket(histogram: dict[str, int], bucket: str) -> None:
 
 
 def ordered_bucket_dict(histogram: dict[str, int], bucket_order: tuple[str, ...]) -> dict[str, int]:
-    return {
-        bucket: int(histogram[bucket])
-        for bucket in bucket_order
-        if histogram.get(bucket, 0) > 0
-    }
-
-
-def ordered_string_dict(histogram: dict[str, int], bucket_order: tuple[str, ...]) -> dict[str, int]:
     return {
         bucket: int(histogram[bucket])
         for bucket in bucket_order
