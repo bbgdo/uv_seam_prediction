@@ -9,6 +9,9 @@ import torch
 from models.meshcnn_full.mesh import MeshCNNSample
 
 
+ROW_NORMALIZE_EPS = 1e-8
+
+
 def _canonical_edge(a: int, b: int) -> tuple[int, int]:
     if a == b:
         raise ValueError(f'degenerate edge with repeated vertex id {a}')
@@ -29,19 +32,18 @@ def _selector_from_pairs(rows: list[int], cols: list[int], size: int) -> torch.T
     return torch.sparse_coo_tensor(indices, values, (size, size)).coalesce()
 
 
-def _binarize_sparse(matrix: torch.Tensor, *, zero_diagonal: bool = False) -> torch.Tensor:
+def _binarize_sparse_without_self_loops(matrix: torch.Tensor) -> torch.Tensor:
     matrix = matrix.coalesce()
     if matrix._nnz() == 0:
         return matrix
     indices = matrix.indices()
-    if zero_diagonal:
-        keep = indices[0] != indices[1]
-        indices = indices[:, keep]
+    keep = indices[0] != indices[1]
+    indices = indices[:, keep]
     values = torch.ones(indices.shape[1], dtype=torch.float32, device=indices.device)
     return torch.sparse_coo_tensor(indices, values, matrix.shape, device=matrix.device).coalesce()
 
 
-def _row_normalize_sparse(matrix: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+def _row_normalize_sparse(matrix: torch.Tensor) -> torch.Tensor:
     matrix = matrix.coalesce()
     if matrix._nnz() == 0:
         return matrix
@@ -49,7 +51,7 @@ def _row_normalize_sparse(matrix: torch.Tensor, eps: float = 1e-8) -> torch.Tens
     values = matrix.values().to(dtype=torch.float32)
     row_mass = torch.zeros(matrix.shape[0], dtype=values.dtype, device=values.device)
     row_mass.scatter_add_(0, indices[0], values)
-    values = values / row_mass.index_select(0, indices[0]).clamp_min(eps)
+    values = values / row_mass.index_select(0, indices[0]).clamp_min(ROW_NORMALIZE_EPS)
     return torch.sparse_coo_tensor(indices, values, matrix.shape, device=matrix.device).coalesce()
 
 
@@ -113,7 +115,7 @@ def build_line_adjacency(slot_mats: tuple[torch.Tensor, torch.Tensor, torch.Tens
     if edge_count == 0:
         return _empty_sparse((0, 0), device=slot_mats[0].device)
     merged = sum((slot.coalesce() for slot in slot_mats), _empty_sparse((edge_count, edge_count), device=slot_mats[0].device))
-    return _binarize_sparse(merged, zero_diagonal=True)
+    return _binarize_sparse_without_self_loops(merged)
 
 
 def _adjacency_sets(slot_mats: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> list[set[int]]:
@@ -221,7 +223,7 @@ def _coarse_slots(
         coarse_indices = torch.stack((rows[keep], cols[keep]), dim=0)
         values = torch.ones(coarse_indices.shape[1], dtype=torch.float32)
         coarse = torch.sparse_coo_tensor(coarse_indices, values, (coarse_count, coarse_count)).coalesce()
-        out.append(_row_normalize_sparse(_binarize_sparse(coarse, zero_diagonal=True)))
+        out.append(_row_normalize_sparse(_binarize_sparse_without_self_loops(coarse)))
     return tuple(out)  # type: ignore[return-value]
 
 

@@ -126,7 +126,7 @@ def is_meshcnn_model(model: str) -> bool:
     return model == SPARSE_MESHCNN_MODEL
 
 
-def validate_experiment_selection(experiment_names: list[str], model: str = 'graphsage') -> None:
+def validate_experiment_selection(experiment_names: list[str], model: str) -> None:
     if model not in ABLATION_MODELS:
         choices = ', '.join(ABLATION_MODELS)
         raise ValueError(f"unsupported ablation model {model!r}; choose one of: {choices}")

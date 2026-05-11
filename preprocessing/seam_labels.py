@@ -114,7 +114,6 @@ def _corner_to_dict(corner: ObjCorner) -> dict[str, int | None]:
         'normal_index': corner.normal_index,
     }
 
-
 def seam_truth_to_jsonable(truth: SeamTruth) -> dict[str, Any]:
     return {
         'audit': truth.audit.__dict__,
@@ -177,16 +176,18 @@ def main() -> None:
     topology = build_topology(mesh, weld_config)
     truth = extract_seam_truth(topology)
 
-    print(f'file: {mesh.file_path}')
+    print(f'file: {Path(args.obj_path)}')
     print(f'edges: {truth.audit.edge_count}')
-    print(f'seams: {truth.audit.seam_edges}')
+    print(f'seam edges: {truth.audit.seam_edges}')
     print(f'boundary edges: {truth.audit.boundary_edges}')
-    print(f'missing uv occurrences: {truth.audit.missing_uv_occurrences}')
+    print(f'nonmanifold edges: {truth.audit.non_manifold_edges}')
 
     if args.json_out:
         write_seam_truth_json(truth, args.json_out)
+        print(f'wrote {args.json_out}')
     if args.txt_out:
         write_seam_edges_txt(truth, args.txt_out)
+        print(f'wrote {args.txt_out}')
 
 
 if __name__ == '__main__':

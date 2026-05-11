@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from torch.nn import Module
 
+from models.common.gnn_config import GNNTrainConfig
 from models.dual_graphsage.model import DualGraphSAGE
 from models.gatv2.model import DualGATv2
 
@@ -10,24 +11,25 @@ from models.gatv2.model import DualGATv2
 class GNNModelDefinition:
     model_class: type[Module]
     display_name: str
-    gnn_config_overrides: dict
+    train_config: GNNTrainConfig
 
 
 GNN_MODEL_DEFINITIONS = {
     'graphsage': GNNModelDefinition(
         model_class=DualGraphSAGE,
         display_name='DualGraphSAGE',
-        gnn_config_overrides={},
+        train_config=GNNTrainConfig(model_name='graphsage'),
     ),
     'gatv2': GNNModelDefinition(
         model_class=DualGATv2,
         display_name='GATv2',
-        gnn_config_overrides={
-            'hidden_size': 64,
-            'heads': 4,
-            'num_layers': 4,
-            'dropout': 0.2,
-        },
+        train_config=GNNTrainConfig(
+            model_name='gatv2',
+            hidden_size=64,
+            heads=4,
+            num_layers=4,
+            dropout=0.2,
+        ),
     ),
 }
 

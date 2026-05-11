@@ -22,7 +22,7 @@ python tools/run_training.py --model sparsemeshcnn --dataset datasets/sparsemesh
 Run SparseMeshCNN ablations through `tools/run_feature_ablations.py`.
 
 ```bash
-python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --full-suite --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
+python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset datasets/sparsemeshcnn_custom_superset.pt --seeds 7 11 19 --epochs 100 --output-root runs/ablations/sparsemeshcnn --generate-splits
 ```
 
 The maintained model name is `sparsemeshcnn`. `models/meshcnn_full/` is only the internal module path.

@@ -52,13 +52,27 @@ def _skewed_density_mesh() -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
+def _flat_square_mesh() -> trimesh.Trimesh:
+    vertices = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    faces = np.array([
+        [0, 1, 2],
+        [0, 2, 3],
+    ])
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
 class GraphSeamBaselineTests(unittest.TestCase):
     def test_gnn_registry_exposes_supported_models(self):
         self.assertIs(get_gnn_model('graphsage').model_class, DualGraphSAGE)
         self.assertIs(get_gnn_model('gatv2').model_class, DualGATv2)
-        self.assertEqual(get_gnn_model('graphsage').gnn_config_overrides, {})
-        self.assertEqual(get_gnn_model('gatv2').gnn_config_overrides['hidden_size'], 64)
-        self.assertEqual(get_gnn_model('gatv2').gnn_config_overrides['heads'], 4)
+        self.assertEqual(get_gnn_model('graphsage').train_config.hidden_size, 128)
+        self.assertEqual(get_gnn_model('gatv2').train_config.hidden_size, 64)
+        self.assertEqual(get_gnn_model('gatv2').train_config.heads, 4)
 
     def test_unified_runner_defaults_graphsage_and_gatv2(self):
         graphsage_args = parse_training_args(['--epochs', '1'])
@@ -134,6 +148,13 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
         self.assertEqual(features.shape, (len(edges), 16))
         self.assertTrue(np.isfinite(features[:, -2:]).all())
+
+    def test_paper14_features_are_finite_on_flat_mesh(self):
+        mesh = _flat_square_mesh()
+
+        features, _, _ = compute_edge_features(mesh, feature_group='paper14')
+
+        self.assertTrue(np.isfinite(features).all())
 
     def test_density_features_are_bounded_after_normalization(self):
         mesh = _skewed_density_mesh()

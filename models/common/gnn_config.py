@@ -19,13 +19,6 @@ class GNNTrainConfig:
     skip_connections: str = 'hidden'
 
 
-def gnn_train_config(model_name: str, overrides: dict[str, Any] | None = None) -> GNNTrainConfig:
-    values = {'model_name': model_name}
-    if overrides:
-        values.update(overrides)
-    return replace(GNNTrainConfig(), **values)
-
-
 def replace_config(config: GNNTrainConfig, **overrides: Any) -> GNNTrainConfig:
     clean_overrides = {key: value for key, value in overrides.items() if value is not None}
     return replace(config, **clean_overrides)

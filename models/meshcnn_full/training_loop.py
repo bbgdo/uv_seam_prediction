@@ -13,8 +13,11 @@ from models.utils.losses import focal_bce_with_logits
 from models.utils.metrics import edge_f1
 
 
-def safe_div(num: float, den: float, eps: float = 1e-8) -> float:
-    return float(num) / float(den + eps)
+SAFE_DIV_EPS = 1e-8
+
+
+def safe_div(num: float, den: float) -> float:
+    return float(num) / float(den + SAFE_DIV_EPS)
 
 
 def mean_or_none(values):

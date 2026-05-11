@@ -474,7 +474,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description='Build PyG UV-seam dataset from .obj files.')
     parser.add_argument('mesh_dir', nargs='?', default='./meshes', help='Directory with .obj files (default: ./meshes)')
-    parser.add_argument('--max-meshes', type=int, default=5, help='Max meshes to process (default: 5)')
+    parser.add_argument('--max-meshes', type=int, default=None, help='Max meshes to process')
     parser.add_argument('--save', action='store_true', help='Save the dataset')
     parser.add_argument(
         '--output',
@@ -519,13 +519,16 @@ def main(argv: list[str] | None = None) -> None:
         f"features: {feature_selection.feature_group} "
         f"({feature_selection.feature_count}) [{', '.join(feature_selection.feature_names)}]"
     )
-    print(f"processing first {min(args.max_meshes, len(obj_files))} ...\n")
+    if args.max_meshes is not None and args.max_meshes < 1:
+        parser.error('--max-meshes must be positive')
+    selected_obj_files = obj_files[:args.max_meshes] if args.max_meshes is not None else obj_files
+    print(f"processing {len(selected_obj_files)} mesh(es) ...\n")
 
     dataset: list[Data] = []
     outliers: list[str] = []
     failed = 0
 
-    for obj_file in obj_files[:args.max_meshes]:
+    for obj_file in selected_obj_files:
         print(f"processing: {obj_file.name} ...", end=" ", flush=True)
         data = process_mesh(
             obj_file,

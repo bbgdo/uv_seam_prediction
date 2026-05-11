@@ -28,11 +28,16 @@ from preprocessing.feature_registry import (  # noqa: E402
 )
 
 ENDPOINT_ORDERS = ('fixed', 'random')
+NORMALIZE_EPS = 1e-8
+AO_RAY_COUNT = 32
+ZSCORE_CLIP_RANGE = 3.0
+DENSITY_EPS = DENSITY_CONFIG['eps']
+DENSITY_LOG_CLIP = DENSITY_CONFIG['density_log_clip']
 
 
-def _safe_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+def _safe_normalize(v: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(v, axis=-1, keepdims=True)
-    return v / np.where(norms < eps, eps, norms)
+    return v / np.where(norms < NORMALIZE_EPS, NORMALIZE_EPS, norms)
 
 
 def build_edge_topology(mesh: trimesh.Trimesh) -> tuple[np.ndarray, dict]:
@@ -128,12 +133,12 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
     return curvatures.astype(np.float32)
 
 
-def _zscore_clip_normalize(values: np.ndarray, clip_range: float = 3.0) -> np.ndarray:
+def _zscore_clip_normalize(values: np.ndarray) -> np.ndarray:
     mean = values.mean()
     std = values.std() + 1e-8
     z = (values - mean) / std
-    z = np.clip(z, -clip_range, clip_range)
-    return (z / clip_range).astype(np.float32)
+    z = np.clip(z, -ZSCORE_CLIP_RANGE, ZSCORE_CLIP_RANGE)
+    return (z / ZSCORE_CLIP_RANGE).astype(np.float32)
 
 
 
@@ -201,7 +206,7 @@ def _orthonormal_basis(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return t1, t2
 
 
-def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
+def compute_vertex_ao(mesh: trimesh.Trimesh) -> np.ndarray:
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
     n_verts = len(vertices)
@@ -210,7 +215,7 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
     epsilon = 1e-4 * bbox_diag
 
     rng = np.random.default_rng(42)
-    hemisphere_samples = _generate_hemisphere_samples(n_rays, rng)
+    hemisphere_samples = _generate_hemisphere_samples(AO_RAY_COUNT, rng)
     z_axis = np.array([0.0, 0.0, 1.0])
 
     intersector = None
@@ -259,7 +264,7 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
             hits = intersector.intersects_any(batch_origins, batch_directions)
         except Exception as exc:
             raise RuntimeError(f'AO raycasting failed at batch {batch_start}: {exc}') from exc
-        hits = hits.reshape(batch_end - batch_start, n_rays)
+        hits = hits.reshape(batch_end - batch_start, AO_RAY_COUNT)
         ao_values[batch_start:batch_end] = hits.mean(axis=1)
 
     return ao_values
@@ -467,37 +472,32 @@ def _two_ring_neighborhood(adjacency: list[set[int]], vertex_idx: int) -> set[in
     return neighborhood
 
 
-def compute_vertex_relative_density(mesh: trimesh.Trimesh, eps: float = DENSITY_CONFIG['eps']) -> np.ndarray:
+def compute_vertex_relative_density(mesh: trimesh.Trimesh) -> np.ndarray:
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(mesh.vertices)
     support_area = compute_vertex_support_area(mesh)
-    local_scale = np.sqrt(support_area + eps)
+    local_scale = np.sqrt(support_area + DENSITY_EPS)
     adjacency = _build_vertex_adjacency(faces, n_verts)
 
     density = np.zeros(n_verts, dtype=np.float64)
     for vertex_idx in range(n_verts):
         neighborhood = _two_ring_neighborhood(adjacency, vertex_idx)
         median_scale = float(np.median(local_scale[list(neighborhood)]))
-        density[vertex_idx] = np.log(median_scale + eps) - np.log(local_scale[vertex_idx] + eps)
+        density[vertex_idx] = np.log(median_scale + DENSITY_EPS) - np.log(local_scale[vertex_idx] + DENSITY_EPS)
     return density.astype(np.float32)
 
 
-def _normalize_vertex_relative_density(
-    vertex_density: np.ndarray,
-    density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
-) -> np.ndarray:
-    clipped = np.clip(vertex_density, -density_log_clip, density_log_clip)
-    return (clipped / density_log_clip).astype(np.float32)
+def _normalize_vertex_relative_density(vertex_density: np.ndarray) -> np.ndarray:
+    clipped = np.clip(vertex_density, -DENSITY_LOG_CLIP, DENSITY_LOG_CLIP)
+    return (clipped / DENSITY_LOG_CLIP).astype(np.float32)
 
 
 def compute_edge_relative_density(
     mesh: trimesh.Trimesh,
     unique_edges: np.ndarray,
-    eps: float = DENSITY_CONFIG['eps'],
-    density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
 ) -> tuple[np.ndarray, np.ndarray]:
-    vertex_density_raw = compute_vertex_relative_density(mesh, eps=eps)
-    vertex_density = _normalize_vertex_relative_density(vertex_density_raw, density_log_clip)
+    vertex_density_raw = compute_vertex_relative_density(mesh)
+    vertex_density = _normalize_vertex_relative_density(vertex_density_raw)
     vi = unique_edges[:, 0]
     vj = unique_edges[:, 1]
     density_i = vertex_density[vi]
@@ -511,7 +511,9 @@ def _normalized_vertex_basics(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.nda
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64).astype(np.float32)
 
-    com = mesh.center_mass if hasattr(mesh, 'center_mass') else verts.mean(axis=0)
+    com = mesh.center_mass if bool(getattr(mesh, 'is_volume', False)) else verts.mean(axis=0)
+    if not np.all(np.isfinite(com)):
+        com = verts.mean(axis=0)
     bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]) + 1e-8
     pos_norm = ((verts - com) / bbox_diag).astype(np.float32)
 
@@ -568,7 +570,7 @@ def _compute_atomic_edge_columns(
         columns[name] = vj_base[:, col_idx].astype(np.float32)
 
     if 'ao_i' in feature_names or 'ao_j' in feature_names:
-        ao = compute_vertex_ao(mesh, n_rays=32)[:, None]
+        ao = compute_vertex_ao(mesh)[:, None]
         vi_ao, vj_ao = _ordered_endpoint_features(ao, unique_edges, endpoint_order, rng_seed)
         columns['ao_i'] = vi_ao[:, 0].astype(np.float32)
         columns['ao_j'] = vj_ao[:, 0].astype(np.float32)
@@ -631,6 +633,7 @@ def compute_edge_features(
         enable_thickness_sdf=enable_thickness_sdf,
     )
     return compute_edge_features_for_selection(mesh, selection, endpoint_order=endpoint_order, rng_seed=rng_seed)
+
 
 FEATURE_NAMES = PAPER14_FEATURE_NAMES
 

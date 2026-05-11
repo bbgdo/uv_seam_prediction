@@ -12,7 +12,6 @@ from .ablation_splits import resolve_control14_run_dir, split_json_for_seed
 from .ablation_specs import (
     ABLATION_MODELS,
     BASELINE_EXPERIMENT,
-    DEFAULT_PATIENCE,
     ExperimentSpec,
     experiment_feature_label,
     is_meshcnn_model,
@@ -32,7 +31,7 @@ def build_train_command(
     seed: int,
     resolution_tag: str,
     epochs: int,
-    patience: int = DEFAULT_PATIENCE,
+    patience: int,
     model: str = 'graphsage',
 ) -> list[str]:
     if model not in ABLATION_MODELS:
@@ -153,7 +152,7 @@ def run_experiment(
             seed=seed,
             resolution_tag=args.resolution_tag,
             epochs=args.epochs,
-            patience=getattr(args, 'patience', DEFAULT_PATIENCE),
+            patience=args.patience,
             model=model,
         )
 

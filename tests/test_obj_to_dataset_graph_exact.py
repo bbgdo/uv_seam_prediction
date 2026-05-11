@@ -53,6 +53,16 @@ def _mesh_dir(text: str):
         yield mesh_dir
 
 
+@contextmanager
+def _mesh_dir_with_files(files: dict[str, str]):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mesh_dir = Path(temp_dir) / 'meshes'
+        mesh_dir.mkdir()
+        for name, text in files.items():
+            (mesh_dir / name).write_text(text, encoding='utf-8')
+        yield mesh_dir
+
+
 def _topology_and_truth(path: Path):
     topology = build_topology(parse_obj(path), WeldConfig.exact())
     return topology, extract_seam_truth(topology)
@@ -163,6 +173,27 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertEqual(dataset[0].label_source, 'exact_obj')
             self.assertEqual(dataset[0].graph_format, 'dual_edge_graph')
             self.assertEqual(dataset[0].x.shape[1], len(dataset[0].feature_names))
+
+    def test_builder_processes_all_meshes_by_default(self):
+        with _mesh_dir_with_files({
+            'a.obj': NON_SEAM_SHARED_EDGE,
+            'b.obj': NON_SEAM_SHARED_EDGE,
+        }) as mesh_dir:
+            output_path = mesh_dir.parent / 'dataset_v2_exact_labels.pt'
+
+            build_dataset_main([
+                str(mesh_dir),
+                '--feature-group', 'paper14',
+                '--endpoint-order', 'fixed',
+                '--save',
+                '--output', str(output_path),
+            ])
+
+            dataset = torch.load(output_path, weights_only=False)
+            manifest = json.loads(manifest_path_for_dataset(output_path).read_text(encoding='utf-8'))
+
+            self.assertEqual(len(dataset), 2)
+            self.assertEqual(manifest['mesh_count'], 2)
 
     def test_exact_obj_manifest_has_required_fields(self):
         required_top_level = {

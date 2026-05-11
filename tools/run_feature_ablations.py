@@ -163,11 +163,11 @@ def run_suite(args: argparse.Namespace, runner=subprocess.run) -> dict[str, dict
 
 def parser_epilog() -> str:
     return """Examples:
-  python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --full-suite --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset <custom_dataset.pt> --control14-run-dir <control14_dir> --full-suite --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --full-suite --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset <custom_dataset.pt> --control14-run-dir <control14_dir> --output-root <out_dir> --generate-splits
+  python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset <meshcnn_superset.pt> --output-root <out_dir> --generate-splits
   python tools/run_feature_ablations.py --model graphsage --gnn-dataset <custom_dataset.pt> --combinatorial-suite 1 2 3 4 5 --output-root <out_dir> --generate-splits
-  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset datasets/600_dual_gnn.pt --control14-run-dir runs/control14 --combinatorial-suite 2 --output-root runs/003_ablations_gatv2 --generate-splits --seeds 11 22 33 --exclude_case ao_dihedral ao_density
+  python tools/run_feature_ablations.py --model gatv2 --gnn-dataset datasets/600_dual_gnn.pt --control14-run-dir runs/control14 --combinatorial-suite 2 --output-root runs/003_ablations_gatv2 --generate-splits --seeds 11 22 33 --exclude-case ao_dihedral ao_density
 """
 
 
@@ -201,17 +201,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--keep-going', action='store_true', help='continue after failed seed runs')
     parser.add_argument(
         '--exclude-case',
-        '--exclude_case',
         dest='exclude_cases',
         nargs='+',
         choices=tuple(ALL_EXPERIMENT_SPECS),
         default=[],
         help='skip named experiment cases while preserving existing reports',
-    )
-    parser.add_argument(
-        '--full-suite',
-        action='store_true',
-        help='run the default 16-experiment Pairwise Feature Search suite',
     )
     parser.add_argument(
         '--combinatorial-suite',
@@ -225,8 +219,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.combinatorial_suite is not None:
         args.experiments = combinatorial_suite(args.combinatorial_suite)
-    elif args.full_suite:
-        args.experiments = list(FULL_ABLATION_SUITE)
     if args.exclude_cases:
         excluded = set(args.exclude_cases)
         args.experiments = [name for name in args.experiments if name not in excluded]

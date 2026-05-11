@@ -44,7 +44,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='auto')
     parser.add_argument('--report-grid', default=None, help='comma list or start:stop:step threshold grid')
     parser.add_argument('--reference-control-dir', default=None, help='previously reevaluated control experiment dir')
-    parser.add_argument('--write-json', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--dry-run', action='store_true', help='show matching runs without running inference')
     return parser.parse_args(argv)
 
@@ -73,11 +72,10 @@ def main(argv: list[str] | None = None) -> None:
             print(f"reevaluating {target.experiment or 'run'} seed {target.seed}: {target.run_dir}")
             payload = evaluate_saved_run(target, device=device, report_grid=report_grid)
             results.append(payload)
-            if args.write_json:
-                write_json(target.run_dir / REEVAL_FILENAME, payload)
-                print(f"  wrote {target.run_dir / REEVAL_FILENAME}")
+            write_json(target.run_dir / REEVAL_FILENAME, payload)
+            print(f"  wrote {target.run_dir / REEVAL_FILENAME}")
 
-        if args.write_json and (len(results) > 1 or reference_control is not None):
+        if len(results) > 1 or reference_control is not None:
             aggregate = aggregate_reevaluations(results, reference_control=reference_control)
             output_path = Path(args.runs_root) / AGGREGATE_FILENAME
             write_json(output_path, aggregate)

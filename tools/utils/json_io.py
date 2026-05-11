@@ -10,8 +10,8 @@ def read_json(path: Path) -> Any:
         return json.load(handle)
 
 
-def write_json(path: Path, payload: Any, *, sort_keys: bool = False) -> None:
+def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', encoding='utf-8') as handle:
-        json.dump(payload, handle, indent=2, sort_keys=sort_keys)
+        json.dump(payload, handle, indent=2)
         handle.write('\n')

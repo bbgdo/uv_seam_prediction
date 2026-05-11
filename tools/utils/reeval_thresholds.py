@@ -100,11 +100,11 @@ def compute_threshold_metrics_fast(probs: np.ndarray, labels: np.ndarray) -> dic
         tp = np.r_[np.int64(0), tp]
         fp = np.r_[np.int64(0), fp]
     elif thresholds.size == 0:
-        fallback_threshold = float(np.nextafter(np.float64(1.0), np.float64(0.0)))
-        positive_at_fallback = prob_arr >= fallback_threshold
-        thresholds = np.array([fallback_threshold], dtype=np.float64)
-        tp = np.array([np.count_nonzero(positive_at_fallback & labels_bool)], dtype=np.int64)
-        fp = np.array([np.count_nonzero(positive_at_fallback & ~labels_bool)], dtype=np.int64)
+        near_one_threshold = float(np.nextafter(np.float64(1.0), np.float64(0.0)))
+        positive_at_threshold = prob_arr >= near_one_threshold
+        thresholds = np.array([near_one_threshold], dtype=np.float64)
+        tp = np.array([np.count_nonzero(positive_at_threshold & labels_bool)], dtype=np.int64)
+        fp = np.array([np.count_nonzero(positive_at_threshold & ~labels_bool)], dtype=np.int64)
 
     total = int(prob_arr.size)
     total_pos = int(np.count_nonzero(labels_bool))

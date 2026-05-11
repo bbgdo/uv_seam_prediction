@@ -10,7 +10,6 @@ ensure_repo_root_on_path()
 
 from models.common.gnn_registry import SUPPORTED_GNN_MODELS, get_gnn_model  # noqa: E402
 from models.common.gnn_train import train_gnn  # noqa: E402
-from models.common.gnn_config import gnn_train_config  # noqa: E402
 from models.meshcnn_full.train import train_sparsemeshcnn  # noqa: E402
 from preprocessing.feature_registry import FEATURE_GROUP_NAMES  # noqa: E402
 
@@ -26,7 +25,7 @@ def _default_run_dir(model_name: str, timestamp: str) -> str:
 
 def _fill_gnn_defaults(args: argparse.Namespace) -> argparse.Namespace:
     definition = get_gnn_model(args.model)
-    config = gnn_train_config(args.model, definition.gnn_config_overrides)
+    config = definition.train_config
     defaults = {
         'epochs': config.epochs,
         'lr': config.lr,

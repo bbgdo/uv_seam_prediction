@@ -5,12 +5,12 @@ import argparse
 import torch
 
 from models.common.gnn_registry import get_gnn_model
-from models.common.gnn_config import GNNTrainConfig, gnn_train_config, replace_config
+from models.common.gnn_config import GNNTrainConfig, replace_config
 
 
 def build_runtime_config(args: argparse.Namespace) -> GNNTrainConfig:
     definition = get_gnn_model(args.model)
-    config = gnn_train_config(args.model, definition.gnn_config_overrides)
+    config = definition.train_config
     return replace_config(
         config,
         hidden_size=args.hidden,

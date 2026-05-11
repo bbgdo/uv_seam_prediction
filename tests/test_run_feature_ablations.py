@@ -247,7 +247,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             '--model', 'gatv2',
             '--gnn-dataset', 'custom.pt',
             '--combinatorial-suite', '2',
-            '--exclude_case', 'ao_dihedral', 'ao_density',
+            '--exclude-case', 'ao_dihedral', 'ao_density',
             '--control14-run-dir', 'runs/control14',
             '--output-root', 'out',
         ])
@@ -261,6 +261,22 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             parse_args([
                 '--model', 'graphsage',
                 '--custom-dataset', 'custom.pt',
+                '--output-root', 'out',
+            ])
+
+        with self.assertRaises(SystemExit):
+            parse_args([
+                '--model', 'graphsage',
+                '--gnn-dataset', 'custom.pt',
+                '--full-suite',
+                '--output-root', 'out',
+            ])
+
+        with self.assertRaises(SystemExit):
+            parse_args([
+                '--model', 'graphsage',
+                '--gnn-dataset', 'custom.pt',
+                '--exclude_case', 'ao_density',
                 '--output-root', 'out',
             ])
 
@@ -493,6 +509,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
         )
         gatv2_command = build_train_command(
             spec=EXPERIMENT_SPECS['control14'],
@@ -502,6 +519,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
             model='gatv2',
         )
         sdf_command = build_train_command(
@@ -512,6 +530,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
             model='gatv2',
         )
 
@@ -545,6 +564,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
             model='sparsemeshcnn',
         )
 
@@ -590,6 +610,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[1, 2],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='gatv2',
             )
@@ -632,6 +653,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[33],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='gatv2',
             )
@@ -666,6 +688,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[11, 22],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='gatv2',
             )
@@ -686,6 +709,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[33],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='graphsage',
             )
@@ -723,6 +747,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[1],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='sparsemeshcnn',
             )
