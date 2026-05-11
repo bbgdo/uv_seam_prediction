@@ -17,6 +17,7 @@ except ModuleNotFoundError:
 
 ensure_repo_root_on_path()
 
+from preprocessing.canonical_mesh import resolve_endpoint_order  # noqa: E402
 from preprocessing.topology import canonical_edge_key  # noqa: E402
 from preprocessing.feature_registry import (  # noqa: E402
     ALL_ATOMIC_FEATURE_NAMES,
@@ -537,12 +538,6 @@ def _ordered_endpoint_features(
     return vertex_features[vi], vertex_features[vj]
 
 
-def _resolve_endpoint_order_for_features(feature_group: str, endpoint_order: str) -> str:
-    if endpoint_order != 'auto':
-        return endpoint_order
-    return 'random' if feature_group == 'paper14' else 'fixed'
-
-
 def _compute_atomic_edge_columns(
     mesh: trimesh.Trimesh,
     unique_edges: np.ndarray,
@@ -600,7 +595,7 @@ def compute_edge_features_for_selection(
     endpoint_order: str = 'auto',
     rng_seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    endpoint_order = _resolve_endpoint_order_for_features(selection.feature_group, endpoint_order)
+    endpoint_order = resolve_endpoint_order(selection.feature_group, endpoint_order)
     unique_edges, edge_to_faces = build_edge_topology(mesh)
     columns = _compute_atomic_edge_columns(
         mesh,

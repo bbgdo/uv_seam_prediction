@@ -85,13 +85,13 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             resolve_feature_selection('extended18')
 
-    def test_feature_registry_scaffold_lists_existing_baselines(self):
+    def test_feature_registry_exposes_locked_paper14_bundle(self):
         self.assertEqual(get_feature_group('paper14').name, 'paper14')
-        self.assertEqual(get_feature_group('custom').name, 'custom')
+        with self.assertRaisesRegex(ValueError, 'custom requires'):
+            get_feature_group('custom')
 
     def test_feature_registry_resolves_custom_toggles(self):
         paper = resolve_feature_selection('paper14')
-        custom_base = resolve_feature_selection('custom')
         ao_only = resolve_feature_selection('custom', enable_ao=True)
         symmetry_only = resolve_feature_selection('custom', enable_symmetry=True)
         density_only = resolve_feature_selection('custom', enable_density=True)
@@ -103,12 +103,14 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
 
         self.assertEqual(paper.feature_count, 14)
-        self.assertEqual(custom_base.feature_group, 'paper14')
-        self.assertEqual(custom_base.feature_names, paper.feature_names)
         self.assertEqual(ao_only.feature_names[-1], 'ao_j')
         self.assertEqual(symmetry_only.feature_names[-1], 'symmetry_dist')
         self.assertEqual(density_only.feature_names[-2:], ('density_mean', 'density_diff'))
         self.assertEqual(combined.feature_count, 19)
+
+    def test_feature_registry_rejects_custom_without_optional_features(self):
+        with self.assertRaisesRegex(ValueError, "custom.*requires at least one optional feature"):
+            resolve_feature_selection('custom')
 
     def test_feature_registry_rejects_toggles_on_locked_bundle(self):
         with self.assertRaisesRegex(ValueError, 'require feature_group=.custom.'):

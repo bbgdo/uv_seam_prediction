@@ -218,32 +218,25 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertAlmostEqual(manifest['aggregate_seam_ratio'], 4 / 5)
             self.assertAlmostEqual(manifest['aggregate_pos_weight'], 1 / 4)
 
-    def test_custom_without_optional_flags_canonicalizes_to_paper14(self):
+    def test_custom_without_optional_flags_raises(self):
         with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
             output_path = mesh_dir.parent / 'custom_base.pt'
-            build_dataset_main([
-                str(mesh_dir),
-                '--max-meshes', '1',
-                '--feature-group', 'custom',
-                '--endpoint-order', 'fixed',
-                '--save',
-                '--output', str(output_path),
-            ])
-
-            dataset = torch.load(output_path, weights_only=False)
-            data = dataset[0]
-
-            self.assertEqual(data.graph_format, 'dual_edge_graph')
-            self.assertEqual(data.feature_group, 'paper14')
-            self.assertEqual(data.feature_names, list(PAPER14_FEATURE_NAMES))
-            self.assertEqual(data.x.shape[1], 14)
-            self.assertEqual(len(data.feature_names), data.x.shape[1])
+            with self.assertRaises(SystemExit) as caught:
+                build_dataset_main([
+                    str(mesh_dir),
+                    '--max-meshes', '1',
+                    '--feature-group', 'custom',
+                    '--endpoint-order', 'fixed',
+                    '--save',
+                    '--output', str(output_path),
+                ])
+            self.assertEqual(caught.exception.code, 2)
 
     def test_saved_gnn_feature_metadata_validation_rejects_x_mismatch(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             data = build_dual_data(process_mesh(
                 path,
-                feature_group='custom',
+                feature_group='paper14',
                 endpoint_order='fixed',
             ))
         data.feature_names = [*data.feature_names, 'extra_uncomputed_feature']

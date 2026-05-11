@@ -168,9 +168,9 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(manifest['label_source'], 'exact_obj')
         self.assertEqual(manifest['density_config'], selection.density_config)
 
-    def test_slice_meshcnn_dataset_to_control14(self):
+    def test_slice_meshcnn_dataset_to_paper14(self):
         sample = _sample_with_features()
-        selection = resolve_feature_selection('custom')
+        selection = resolve_feature_selection('paper14')
         _, metadata = slice_meshcnn_dataset_features([sample], selection)
 
         self.assertEqual(sample.edge_features.shape[1], 14)
@@ -220,14 +220,14 @@ class MeshCNNFullTests(unittest.TestCase):
         second.feature_names = list(reversed(second.feature_names))
 
         with self.assertRaisesRegex(ValueError, 'feature_names differ'):
-            slice_meshcnn_dataset_features([first, second], resolve_feature_selection('custom'))
+            slice_meshcnn_dataset_features([first, second], resolve_feature_selection('paper14'))
 
     def test_slice_meshcnn_dataset_feature_dim_mismatch_raises(self):
         source = _sample_with_features()
         source.edge_features = source.edge_features[:, :-1]
 
         with self.assertRaisesRegex(ValueError, 'edge_features dim'):
-            slice_meshcnn_dataset_features([source], resolve_feature_selection('custom'))
+            slice_meshcnn_dataset_features([source], resolve_feature_selection('paper14'))
 
     def test_saved_meshcnn_feature_metadata_validation_rejects_dim_mismatch(self):
         sample = _sample_with_features()

@@ -85,29 +85,25 @@ class ResolvedFeatureSet:
         return len(self.feature_names)
 
 
-FEATURE_GROUPS = {
-    'paper14': FeatureGroup(
-        name='paper14',
-        feature_names=PAPER14_FEATURE_NAMES,
-        feature_flags=FeatureFlags(),
-    ),
-    'custom': FeatureGroup(
-        name='custom',
-        feature_names=PAPER14_FEATURE_NAMES,
-        feature_flags=FeatureFlags(),
-    ),
-}
+PAPER14_FEATURE_GROUP = FeatureGroup(
+    name='paper14',
+    feature_names=PAPER14_FEATURE_NAMES,
+    feature_flags=FeatureFlags(),
+)
 
 
 def _normalize_group_name(name: str | None) -> str:
     group = name or 'paper14'
-    if group not in FEATURE_GROUPS:
+    if group not in FEATURE_GROUP_NAMES:
         raise ValueError(f"unknown feature group {group!r}; choose one of {FEATURE_GROUP_NAMES}")
     return group
 
 
 def get_feature_group(name: str) -> FeatureGroup:
-    return FEATURE_GROUPS[_normalize_group_name(name)]
+    group_name = _normalize_group_name(name)
+    if group_name != 'paper14':
+        raise ValueError("custom requires resolve_feature_selection with at least one optional feature")
+    return PAPER14_FEATURE_GROUP
 
 
 def _custom_feature_names(flags: FeatureFlags) -> tuple[str, ...]:
@@ -145,9 +141,6 @@ def resolve_feature_selection(
         density=bool(enable_density),
         thickness_sdf=bool(enable_thickness_sdf),
     )
-    if group_name == 'custom' and not requested_flags.any_enabled():
-        group_name = 'paper14'
-
     if group_name != 'custom':
         if requested_flags.any_enabled():
             enabled = ', '.join(name for name, value in requested_flags.as_dict().items() if value)
@@ -163,6 +156,9 @@ def resolve_feature_selection(
             feature_flags=group.feature_flags,
             density_config=density_config,
         )
+
+    if not requested_flags.any_enabled():
+        raise ValueError("feature_group='custom' requires at least one optional feature toggle")
 
     names = _custom_feature_names(requested_flags)
     return ResolvedFeatureSet(
