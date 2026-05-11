@@ -41,33 +41,29 @@ def resolve_model_type(requested: str, config: dict[str, Any], weights_path: Pat
 
 def resolve_model_kwargs(model_name: str, config: dict[str, Any]) -> dict[str, Any]:
     if model_name == 'sparsemeshcnn':
-        model_config = coerce_dict(config.get('model_config')) or {}
-        feature_metadata = coerce_dict(config.get('feature_metadata')) or {}
-        sources = (model_config, config, feature_metadata)
-        in_channels = required_config_value_from_sources(
-            sources,
-            ('in_channels', 'in_dim', 'feature_dim'),
-            'in_channels/in_dim/feature_dim',
-        )
-        hidden_channels = required_config_value_from_sources(
-            sources,
-            ('hidden_channels', 'hidden_size', 'hidden_dim', 'hidden'),
-            'hidden_channels/hidden_size/hidden_dim/hidden',
-        )
+        model_config = coerce_required_dict(config, 'model_config')
+        feature_metadata = coerce_optional_dict(config, 'feature_metadata')
+        in_channels = required_config_value(model_config, ('in_channels',), 'model_config.in_channels')
+        hidden_channels = required_config_value(model_config, ('hidden_channels',), 'model_config.hidden_channels')
         kwargs = {
             'in_channels': int(in_channels),
             'hidden_channels': int(hidden_channels),
-            'dropout': float(optional_config_value_from_sources(sources, ('dropout',), 0.2)),
+            'dropout': float(required_config_value(model_config, ('dropout',), 'model_config.dropout')),
             'pool_ratios': coerce_float_tuple(
-                optional_config_value_from_sources(sources, ('pool_ratios',), (0.85, 0.75)),
-                'pool_ratios',
+                required_config_value(model_config, ('pool_ratios',), 'model_config.pool_ratios'),
+                'model_config.pool_ratios',
             ),
-            'min_edges': int(optional_config_value_from_sources(sources, ('min_edges',), 32)),
+            'min_edges': int(required_config_value(model_config, ('min_edges',), 'model_config.min_edges')),
         }
+        if 'feature_dim' in feature_metadata and int(feature_metadata['feature_dim']) != kwargs['in_channels']:
+            raise PredictionError(
+                'feature_metadata.feature_dim does not match model_config.in_channels',
+                'InvalidConfig',
+            )
         return kwargs
 
     in_dim = required_config_value(config, ('in_dim',), 'in_dim')
-    hidden_dim = required_config_value(config, ('hidden_size', 'hidden_dim', 'hidden'), 'hidden_size/hidden_dim/hidden')
+    hidden_dim = required_config_value(config, ('hidden_dim',), 'hidden_dim')
     kwargs = {
         'in_dim': int(in_dim),
         'hidden_dim': int(hidden_dim),
@@ -92,28 +88,18 @@ def required_config_value(config: dict[str, Any], keys: tuple[str, ...], label: 
     raise PredictionError(f'config metadata is missing required model key: {label}', 'InvalidConfig')
 
 
-def required_config_value_from_sources(
-    sources: tuple[dict[str, Any], ...],
-    keys: tuple[str, ...],
-    label: str,
-) -> Any:
-    value = optional_config_value_from_sources(sources, keys, None)
+def coerce_required_dict(config: dict[str, Any], key: str) -> dict[str, Any]:
+    value = coerce_dict(config.get(key))
     if value is None:
-        raise PredictionError(f'config metadata is missing required model key: {label}', 'InvalidConfig')
+        raise PredictionError(f'config metadata key {key} must be a JSON object', 'InvalidConfig')
     return value
 
 
-def optional_config_value_from_sources(
-    sources: tuple[dict[str, Any], ...],
-    keys: tuple[str, ...],
-    default: Any,
-) -> Any:
-    for source in sources:
-        for key in keys:
-            value = source.get(key)
-            if value not in (None, ''):
-                return value
-    return default
+def coerce_optional_dict(config: dict[str, Any], key: str) -> dict[str, Any]:
+    value = coerce_dict(config.get(key))
+    if key in config and config.get(key) not in (None, '') and value is None:
+        raise PredictionError(f'config metadata key {key} must be a JSON object', 'InvalidConfig')
+    return value or {}
 
 
 def coerce_float_tuple(value: Any, label: str) -> tuple[float, ...]:
@@ -155,14 +141,13 @@ def load_weights_payload(weights_path: Path, device: torch.device) -> Any:
 
 def extract_state_dict(payload: Any) -> dict[str, torch.Tensor]:
     if isinstance(payload, dict):
-        for key in ('state_dict', 'model_state_dict', 'model_state'):
-            nested = payload.get(key)
-            if isinstance(nested, dict):
-                return nested
+        nested = payload.get('model_state')
+        if isinstance(nested, dict):
+            return nested
         if all(torch.is_tensor(value) for value in payload.values()):
             return payload
     raise PredictionError(
-        'model weights must be a state_dict or contain state_dict/model_state_dict',
+        'model weights must be a raw state_dict or contain model_state',
         'InvalidWeights',
     )
 

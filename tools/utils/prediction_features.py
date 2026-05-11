@@ -137,6 +137,8 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
 def feature_metadata_sources(config: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
     sources = [config, summary]
     feature_metadata = coerce_dict(config.get('feature_metadata'))
+    if 'feature_metadata' in config and config.get('feature_metadata') not in (None, '') and feature_metadata is None:
+        raise PredictionError('config feature_metadata must be a JSON object', 'FeatureMetadataMismatch')
     if feature_metadata is not None:
         sources.append(feature_metadata)
     dataset_summary = summary.get('dataset_metadata_summary')
@@ -146,8 +148,14 @@ def feature_metadata_sources(config: dict[str, Any], summary: dict[str, Any]) ->
 
 
 def infer_feature_flags(metadata: dict[str, Any]) -> dict[str, bool]:
-    flags = coerce_dict(metadata.get('feature_flags')) or {}
-    names = set(coerce_list(metadata.get('feature_names')) or ())
+    flags = coerce_dict(metadata.get('feature_flags'))
+    if 'feature_flags' in metadata and metadata.get('feature_flags') not in (None, '') and flags is None:
+        raise PredictionError('feature_flags must be a JSON object', 'FeatureMetadataMismatch')
+    feature_names = coerce_list(metadata.get('feature_names'))
+    if 'feature_names' in metadata and metadata.get('feature_names') not in (None, '') and feature_names is None:
+        raise PredictionError('feature_names must be a JSON list', 'FeatureMetadataMismatch')
+    flags = flags or {}
+    names = set(feature_names or ())
     return {
         'ao': bool(flags.get('ao')) or 'ao_i' in names or 'ao_j' in names,
         'signed_dihedral': (
@@ -171,6 +179,8 @@ def validate_feature_metadata(
         ('summary', summary),
     ]
     feature_metadata = coerce_dict(config.get('feature_metadata'))
+    if 'feature_metadata' in config and config.get('feature_metadata') not in (None, '') and feature_metadata is None:
+        raise PredictionError('config feature_metadata must be a JSON object', 'FeatureMetadataMismatch')
     if feature_metadata is not None:
         sources.append(('config.feature_metadata', feature_metadata))
     dataset_summary = summary.get('dataset_metadata_summary')
@@ -182,6 +192,11 @@ def validate_feature_metadata(
         validate_feature_metadata_name(source_name, metadata, selection)
 
         feature_names = coerce_list(metadata.get('feature_names'))
+        if 'feature_names' in metadata and metadata.get('feature_names') not in (None, '') and feature_names is None:
+            raise PredictionError(
+                f'{source_name} feature_names must be a JSON list',
+                'FeatureMetadataMismatch',
+            )
         if feature_names is not None and feature_names != list(selection.feature_names):
             raise PredictionError(
                 f'{source_name} feature_names mismatch: expected {list(selection.feature_names)}, got {feature_names}',
@@ -189,6 +204,11 @@ def validate_feature_metadata(
             )
 
         flags = coerce_dict(metadata.get('feature_flags'))
+        if 'feature_flags' in metadata and metadata.get('feature_flags') not in (None, '') and flags is None:
+            raise PredictionError(
+                f'{source_name} feature_flags must be a JSON object',
+                'FeatureMetadataMismatch',
+            )
         if flags is not None:
             unknown_flags = sorted(set(flags) - set(expected_flags))
             if unknown_flags:

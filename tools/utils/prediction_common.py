@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import json
 import math
 from pathlib import Path
@@ -96,12 +95,6 @@ def normalize_metadata_name(value: Any) -> str | None:
 def coerce_list(value: Any) -> list[str] | None:
     if value in (None, ''):
         return None
-    if isinstance(value, str):
-        try:
-            parsed = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            return None
-        value = parsed
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
     return None
@@ -110,12 +103,6 @@ def coerce_list(value: Any) -> list[str] | None:
 def coerce_dict(value: Any) -> dict[str, Any] | None:
     if value in (None, ''):
         return None
-    if isinstance(value, str):
-        try:
-            parsed = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            return None
-        value = parsed
     if isinstance(value, dict):
         return {str(key): item for key, item in value.items()}
     return None

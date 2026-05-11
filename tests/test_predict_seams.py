@@ -230,6 +230,95 @@ class PredictSeamsTests(unittest.TestCase):
             with self.assertRaisesRegex(predict_seams.PredictionError, 'CUDA is unavailable'):
                 predict_seams.resolve_device('cuda')
 
+    def test_prediction_model_kwargs_require_maintained_gnn_keys(self):
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'hidden_dim'):
+            predict_seams.resolve_model_kwargs('gatv2', {
+                'in_dim': 14,
+                'hidden': 8,
+                'num_layers': 1,
+                'dropout': 0.0,
+                'heads': 1,
+            })
+
+    def test_prediction_model_kwargs_require_sparsemeshcnn_model_config(self):
+        kwargs = predict_seams.resolve_model_kwargs('sparsemeshcnn', {
+            'model_config': {
+                'in_channels': 14,
+                'hidden_channels': 16,
+                'dropout': 0.2,
+                'pool_ratios': [0.85, 0.75],
+                'min_edges': 32,
+            },
+            'feature_metadata': {'feature_dim': 14},
+        })
+        self.assertEqual(kwargs['in_channels'], 14)
+        self.assertEqual(kwargs['hidden_channels'], 16)
+
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'model_config.*JSON object'):
+            predict_seams.resolve_model_kwargs('sparsemeshcnn', {
+                'in_channels': 14,
+                'hidden_channels': 16,
+                'dropout': 0.2,
+            })
+
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'model_config.*JSON object'):
+            predict_seams.resolve_model_kwargs('sparsemeshcnn', {
+                'model_config': "{'in_channels': 14, 'hidden_channels': 16}",
+            })
+
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_metadata.*JSON object'):
+            predict_seams.resolve_model_kwargs('sparsemeshcnn', {
+                'model_config': {
+                    'in_channels': 14,
+                    'hidden_channels': 16,
+                    'dropout': 0.2,
+                    'pool_ratios': [0.85, 0.75],
+                    'min_edges': 32,
+                },
+                'feature_metadata': "{'feature_dim': 14}",
+            })
+
+    def test_extract_state_dict_rejects_stale_wrapper_keys(self):
+        state = {'layer.weight': torch.zeros(1)}
+        self.assertIs(predict_seams.extract_state_dict(state), state)
+        self.assertEqual(predict_seams.extract_state_dict({'model_state': state}), state)
+        for stale_key in ('state_dict', 'model_state_dict'):
+            with self.subTest(stale_key=stale_key):
+                with self.assertRaisesRegex(predict_seams.PredictionError, 'model_state'):
+                    predict_seams.extract_state_dict({stale_key: state})
+
+    def test_feature_metadata_rejects_stringified_feature_names(self):
+        selection = predict_seams.resolve_feature_selection('paper14')
+        config = {
+            'feature_group': 'paper14',
+            'feature_names': str(list(selection.feature_names)),
+            'in_dim': selection.feature_count,
+        }
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_names'):
+            predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
+
+    def test_feature_metadata_rejects_stringified_nested_metadata(self):
+        selection = predict_seams.resolve_feature_selection('paper14')
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_metadata.*JSON object'):
+            predict_seams.validate_feature_metadata(
+                {'feature_metadata': "{'feature_group': 'paper14'}"},
+                {},
+                selection,
+                {'in_dim': selection.feature_count},
+            )
+
+    def test_auto_feature_inference_rejects_stringified_metadata(self):
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_flags must be a JSON object'):
+            predict_seams.infer_feature_bundle(
+                {'feature_group': 'custom', 'feature_flags': "{'ao': True}"},
+                {},
+            )
+        with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_names must be a JSON list'):
+            predict_seams.infer_feature_bundle(
+                {'feature_names': "['pos_x_i']"},
+                {},
+            )
+
     def test_postprocess_kwargs_from_args(self):
         args = Namespace(
             postprocess_tau_low=0.25,

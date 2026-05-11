@@ -171,11 +171,7 @@ def load_state_dict(path: Path, device: torch.device) -> dict:
         checkpoint = torch.load(path, map_location=device, weights_only=True)
     except TypeError:
         checkpoint = torch.load(path, map_location=device)
-    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        return checkpoint['model_state_dict']
-    if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-        return checkpoint['state_dict']
-    if not isinstance(checkpoint, dict):
+    if not isinstance(checkpoint, dict) or not all(torch.is_tensor(value) for value in checkpoint.values()):
         raise ValueError(f'checkpoint must contain a state dict: {path}')
     return checkpoint
 

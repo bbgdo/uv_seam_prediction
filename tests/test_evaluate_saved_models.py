@@ -15,7 +15,7 @@ from tools.evaluate_saved_models import (
     exact_validation_threshold,
     load_reference_control_reevaluations,
 )
-from tools.utils.reeval_runs import feature_selection_from_config
+from tools.utils.reeval_runs import feature_selection_from_config, load_state_dict
 from tools.utils.reeval_thresholds import best_threshold_index
 
 
@@ -177,6 +177,16 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertEqual(selection.feature_group, 'custom')
         self.assertTrue(selection.feature_flags.thickness_sdf)
         self.assertIn('thickness_sdf', selection.feature_names)
+
+    def test_load_state_dict_rejects_wrapper_checkpoints(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'best_model.pth'
+            torch.save({'weight': torch.zeros(1)}, path)
+            self.assertIn('weight', load_state_dict(path, torch.device('cpu')))
+
+            torch.save({'state_dict': {'weight': torch.zeros(1)}}, path)
+            with self.assertRaisesRegex(ValueError, 'state dict'):
+                load_state_dict(path, torch.device('cpu'))
 
     def test_fast_threshold_matches_bruteforce_on_synthetic_example(self):
         probs = np.array([0.91, 0.83, 0.76, 0.65, 0.42, 0.21])
