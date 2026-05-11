@@ -32,14 +32,6 @@ from models.utils.experiment_log import ExperimentLogger
 from models.utils.metrics import threshold_sweep
 
 
-_collect_logits_labels = collect_logits_labels
-_confusion_counts = confusion_counts
-_metric_line = metric_line
-_model_kwargs = model_kwargs
-_print_threshold_sweep = print_threshold_sweep
-_run_epoch = run_epoch
-
-
 def train_baseline(args: argparse.Namespace) -> None:
     feature_selection = resolve_runtime_feature_selection(args)
     args.feature_group = feature_selection.feature_group

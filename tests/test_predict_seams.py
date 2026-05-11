@@ -105,6 +105,14 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(endpoint_order, 'random')
 
         selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(
+            _args('paper14'),
+            {'endpoint_order': 'fixed'},
+            {},
+        )
+        self.assertEqual(selection.feature_group, 'paper14')
+        self.assertEqual(endpoint_order, 'fixed')
+
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(
             _args('custom', enable_ao=True, enable_density=True),
             {},
             {},

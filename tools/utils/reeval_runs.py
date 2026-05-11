@@ -5,7 +5,9 @@ from pathlib import Path
 import torch
 
 from models.baselines.registry import get_baseline
-from models.common.baseline_train import _collect_logits_labels, _model_kwargs, apply_runtime_feature_selection
+from models.common.baseline_train_data import apply_runtime_feature_selection
+from models.common.baseline_train_loop import collect_logits_labels
+from models.common.baseline_train_runtime import model_kwargs
 from models.common.config import baseline_config, replace_config
 from models.utils.dataset import filter_dataset_by_resolution, load_dataset, load_split_json_metadata, split_dataset
 from preprocessing.feature_registry import resolve_feature_selection
@@ -211,12 +213,12 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
         resolution_tag=resolution_tag,
     )
 
-    model = definition.model_class(**_model_kwargs(runtime_config)).to(device)
+    model = definition.model_class(**model_kwargs(runtime_config)).to(device)
     model.load_state_dict(load_state_dict(target.checkpoint_path, device))
     model.eval()
 
-    val_logits, val_labels = _collect_logits_labels(model, val, device)
-    test_logits, test_labels = _collect_logits_labels(model, test, device)
+    val_logits, val_labels = collect_logits_labels(model, val, device)
+    test_logits, test_labels = collect_logits_labels(model, test, device)
     val_probs = torch.sigmoid(val_logits)
     test_probs = torch.sigmoid(test_logits)
 

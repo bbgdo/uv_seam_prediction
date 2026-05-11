@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection
+from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection
 
 
 METADATA_KEYS = (
@@ -104,24 +104,13 @@ def coerce_feature_names(value) -> list[str] | None:
     return None
 
 
-def feature_names_from_saved_paper14_dim(data: Data) -> list[str] | None:
-    group = metadata_value(data, 'feature_group')
-    if group == 'paper14' and getattr(data.x, 'shape', (0, 0))[1] == 14:
-        return list(PAPER14_FEATURE_NAMES)
-    return None
-
-
 def apply_runtime_feature_selection(dataset: list[Data], selection: ResolvedFeatureSet) -> list[Data]:
     requested = list(selection.feature_names)
     for graph_idx, data in enumerate(dataset):
         feature_names = coerce_feature_names(metadata_value(data, 'feature_names'))
-        if feature_names is None:
-            feature_names = feature_names_from_saved_paper14_dim(data)
 
         current_dim = int(data.x.shape[1])
         if feature_names is None:
-            if current_dim == selection.feature_count and selection.feature_group == 'paper14':
-                continue
             raise ValueError(
                 f"dataset graph {graph_idx} is missing feature_names metadata; "
                 f"cannot select requested features {requested}"

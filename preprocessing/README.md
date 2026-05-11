@@ -11,7 +11,7 @@ Use `preprocessing/build_gnn_dataset.py` for `paper14` and custom-superset PyG d
 
 ```bash
 python preprocessing/build_gnn_dataset.py data/objs --feature-group paper14 --endpoint-order random --save --output datasets/gnn_paper14.pt
-python preprocessing/build_gnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --save --output datasets/gnn_custom.pt
+python preprocessing/build_gnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order fixed --save --output datasets/gnn_custom.pt
 ```
 
 `paper14` is the base bundle. `custom` is reserved for `paper14` plus at least one optional feature toggle.
@@ -21,7 +21,7 @@ python preprocessing/build_gnn_dataset.py data/objs --feature-group custom --ena
 Use `preprocessing/build_meshcnn_dataset.py` for SparseMeshCNN. Build one custom superset dataset with all optional custom features enabled:
 
 ```bash
-python preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order random --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
+python preprocessing/build_meshcnn_dataset.py data/objs --feature-group custom --enable-ao --enable-dihedral --enable-symmetry --enable-density --enable-thickness-sdf --endpoint-order fixed --output datasets/sparsemeshcnn_custom_superset.pt --overwrite
 ```
 
 `tools/run_feature_ablations.py --model sparsemeshcnn` slices this superset at runtime. No per-ablation SparseMeshCNN datasets are required.

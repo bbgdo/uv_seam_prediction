@@ -10,7 +10,8 @@ from torch_geometric.data import Data
 
 from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
-from models.common.baseline_train import _model_kwargs, apply_runtime_feature_selection, build_runtime_config
+from models.common.baseline_train_data import apply_runtime_feature_selection
+from models.common.baseline_train_runtime import build_runtime_config, model_kwargs
 from models.baselines.registry import get_baseline
 from tools.run_training import parse_args as parse_training_args
 from models.utils.experiment_log import ExperimentLogger
@@ -186,14 +187,13 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
             apply_runtime_feature_selection([data], requested)
 
-    def test_runtime_feature_selection_accepts_paper14_shape(self):
+    def test_runtime_feature_selection_requires_paper14_feature_names(self):
         requested = resolve_feature_selection('paper14')
         data = Data(x=torch.zeros(2, 14))
         data.feature_group = 'paper14'
 
-        apply_runtime_feature_selection([data], requested)
-
-        self.assertEqual(data.x.shape, (2, 14))
+        with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
+            apply_runtime_feature_selection([data], requested)
 
     def test_gatv2_forward_returns_one_logit_per_dual_node(self):
         model = DualGATv2(in_dim=14, hidden_dim=32, heads=4, num_layers=3, dropout=0.1)
@@ -220,7 +220,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         config = build_runtime_config(args)
         definition = get_baseline(config.model_name)
 
-        model = definition.model_class(**_model_kwargs(config))
+        model = definition.model_class(**model_kwargs(config))
         x = torch.randn(4, selection.feature_count)
         edge_index = torch.tensor([
             [0, 1, 2, 3],

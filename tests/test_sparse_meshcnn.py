@@ -144,6 +144,14 @@ class SparsePrecomputeTests(unittest.TestCase):
         self.assertIs(cache, sample.sparse_cache)
         _assert_persistent_cache_cpu_only(self, sample)
 
+    def test_persistent_sparse_cache_rejects_device_cache_entries(self):
+        sample = _toy_sample()
+        cache = build_sparse_cache(sample, pool_ratios=(0.6, 0.4), min_edges_per_level=1)
+        cache['_device_caches'] = {}
+
+        with self.assertRaisesRegex(AssertionError, 'persistent sparse cache must not contain'):
+            get_or_build_sparse_cache(sample, pool_ratios=(0.6, 0.4), min_edges_per_level=1)
+
     def test_materialized_step_cache_is_not_stored_back_into_sample(self):
         sample = _toy_sample()
         cpu_cache = get_or_build_sparse_cache(sample, pool_ratios=(0.6, 0.4), min_edges_per_level=1)

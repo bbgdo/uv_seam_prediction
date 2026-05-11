@@ -9,7 +9,6 @@ from typing import Any
 
 MODEL_TYPES = ('auto', 'gatv2', 'graphsage', 'sparsemeshcnn')
 FEATURE_BUNDLES = ('auto', 'paper14', 'custom')
-_MODEL_TYPE_ALIASES: dict[str, str] = {}
 
 
 class PredictionError(RuntimeError):
@@ -30,7 +29,6 @@ def normalize_feature_bundle_arg(value: str) -> str:
 
 def normalize_cli_model_type(value: str) -> str:
     normalized = str(value).strip().lower().replace('-', '_')
-    normalized = _MODEL_TYPE_ALIASES.get(normalized, normalized)
     if normalized not in MODEL_TYPES:
         raise SystemExit(
             f"error: argument --model-type: invalid choice: {value!r} "

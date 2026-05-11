@@ -8,7 +8,6 @@ import numpy as np
 import torch
 
 from tools.evaluate_saved_models import (
-    _best_threshold_index,
     aggregate_reevaluations,
     build_report_grid,
     compute_threshold_metrics_fast,
@@ -17,6 +16,7 @@ from tools.evaluate_saved_models import (
     load_reference_control_reevaluations,
 )
 from tools.utils.reeval_runs import feature_selection_from_config
+from tools.utils.reeval_thresholds import best_threshold_index
 
 
 def _metrics(
@@ -202,7 +202,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertAlmostEqual(result['metrics']['f1'], expected['f1'])
 
     def test_threshold_tie_break_selector_order(self):
-        best_index = _best_threshold_index(
+        best_index = best_threshold_index(
             f1=np.array([0.7, 0.7, 0.7, 0.7]),
             fpr=np.array([0.2, 0.1, 0.1, 0.1]),
             precision=np.array([0.9, 0.8, 0.85, 0.85]),

@@ -254,11 +254,6 @@ def _iter_tensors(value: Any, path: str = 'cache') -> Iterator[tuple[str, torch.
             yield from _iter_tensors(item, f'{path}[{idx}]')
 
 
-def _drop_legacy_device_cache_entries(cache: dict[str, Any]) -> None:
-    cache.pop('_device_caches', None)
-    cache.pop('device_caches', None)
-
-
 def assert_sparse_cache_cpu_only(cpu_cache: dict[str, Any]) -> None:
     for forbidden_key in ('_device_caches', 'device_caches'):
         if forbidden_key in cpu_cache:
@@ -348,8 +343,6 @@ def get_or_build_sparse_cache(
     cache = getattr(sample, 'sparse_cache', None)
     if not isinstance(cache, dict) or cache.get('config') != expected:
         cache = build_sparse_cache(sample, pool_ratios=pool_ratios, min_edges_per_level=min_edges_per_level)
-    else:
-        _drop_legacy_device_cache_entries(cache)
 
     assert_sparse_cache_cpu_only(cache)
     return cache

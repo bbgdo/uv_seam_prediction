@@ -47,6 +47,18 @@ def resolved_endpoint_order_from_metadata(
     return default_endpoint_order_for_selection(selection)
 
 
+def endpoint_order_from_metadata_sources(
+    config: dict[str, Any],
+    summary: dict[str, Any],
+    selection: ResolvedFeatureSet,
+) -> str:
+    for metadata in feature_metadata_sources(config, summary):
+        endpoint_order = normalize_metadata_name(metadata.get('endpoint_order'))
+        if endpoint_order in ('fixed', 'random'):
+            return endpoint_order
+    return default_endpoint_order_for_selection(selection)
+
+
 def resolve_feature_bundle(
     args: argparse.Namespace,
     config: dict[str, Any],
@@ -72,7 +84,7 @@ def resolve_feature_bundle(
 
     if args.feature_bundle == 'paper14':
         selection = resolve_feature_selection('paper14')
-        return selection, default_endpoint_order_for_selection(selection), args.feature_bundle
+        return selection, endpoint_order_from_metadata_sources(config, summary, selection), args.feature_bundle
 
     if not any_toggle:
         raise PredictionError(
@@ -80,7 +92,7 @@ def resolve_feature_bundle(
             'InvalidFeatureBundle',
         )
     selection = selection_from_feature_flags(flags)
-    return selection, default_endpoint_order_for_selection(selection), args.feature_bundle
+    return selection, endpoint_order_from_metadata_sources(config, summary, selection), args.feature_bundle
 
 
 def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tuple[ResolvedFeatureSet, str, str]:

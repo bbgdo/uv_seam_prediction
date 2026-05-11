@@ -16,18 +16,15 @@ from tools.utils.reeval_common import AGGREGATE_FILENAME, REEVAL_FILENAME  # noq
 from tools.utils.reeval_reporting import aggregate_reevaluations, load_reference_control_reevaluations  # noqa: E402
 from tools.utils.reeval_runs import discover_saved_runs, evaluate_saved_run, resolve_device  # noqa: E402
 from tools.utils.reeval_thresholds import (  # noqa: E402
-    best_threshold_index,
     build_report_grid,
     compute_threshold_metrics_fast,
     exact_validation_threshold,
 )
 
 
-_best_threshold_index = best_threshold_index
 __all__ = [
     'AGGREGATE_FILENAME',
     'REEVAL_FILENAME',
-    '_best_threshold_index',
     'aggregate_reevaluations',
     'build_report_grid',
     'compute_threshold_metrics_fast',
