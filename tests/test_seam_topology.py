@@ -1838,11 +1838,7 @@ class PipelineTests(unittest.TestCase):
                 'l_min',
                 'anchor_boundary',
                 'max_bridge_euclidean_ratio',
-                'max_debug_candidates',
-                'max_endpoint_candidates',
                 'min_loop_size_to_allow',
-                'require_mutual_pairing',
-                'tangent_alignment_weight',
             },
         )
         self.assertIn('component_reports', payload['bridging'])

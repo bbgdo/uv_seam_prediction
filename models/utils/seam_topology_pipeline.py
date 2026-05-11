@@ -12,6 +12,11 @@ from models.utils.seam_topology_diagnostics import SeamMaskDiagnostics, compute_
 from models.utils.seam_topology_view import SeamGraphView
 from preprocessing.topology import CanonicalTopology
 
+BRIDGE_MAX_ENDPOINT_CANDIDATES = 4
+BRIDGE_REQUIRE_MUTUAL_PAIRING = True
+BRIDGE_TANGENT_ALIGNMENT_WEIGHT = 0.25
+BRIDGE_MAX_DEBUG_CANDIDATES = 64
+
 
 @dataclass(frozen=True)
 class SkeletonResult:
@@ -278,13 +283,9 @@ class BridgingResult:
     endpoint_to_skeleton_candidates_total: int = 0
     near_junction_gap_candidates: tuple[dict, ...] = tuple()
     near_junction_gap_candidates_total: int = 0
-    max_debug_candidates: int = 64
     max_bridge_edges: int = 6
     max_bridge_euclidean_ratio: float = 0.03
-    max_endpoint_candidates: int = 4
-    require_mutual_pairing: bool = True
     min_loop_size_to_allow: int = 8
-    tangent_alignment_weight: float = 0.25
     component_reports: tuple[dict, ...] = tuple()
     r_bridge: int = 6
 
@@ -315,11 +316,7 @@ class TopologyPipelineResult:
     l_min: int
     anchor_boundary: bool
     max_bridge_euclidean_ratio: float = 0.03
-    max_endpoint_candidates: int = 4
-    require_mutual_pairing: bool = True
     min_loop_size_to_allow: int = 8
-    tangent_alignment_weight: float = 0.25
-    max_debug_candidates: int = 64
 
 
 def build_skeleton_subgraph(
@@ -517,8 +514,8 @@ def _report_sort_key(report: dict) -> tuple:
     )
 
 
-def _bounded_sorted_reports(reports: list[dict], max_debug_candidates: int) -> tuple[dict, ...]:
-    return tuple(sorted(reports, key=_report_sort_key)[:max_debug_candidates])
+def _bounded_sorted_reports(reports: list[dict]) -> tuple[dict, ...]:
+    return tuple(sorted(reports, key=_report_sort_key)[:BRIDGE_MAX_DEBUG_CANDIDATES])
 
 
 def _path_edge_ids_between(
@@ -571,8 +568,6 @@ def _build_local_missing_edge_continuity_reports(
     skeleton_graph: nx.Graph,
     skeleton_mask: np.ndarray,
     component_id_of: dict[int, int],
-    *,
-    max_debug_candidates: int,
 ) -> tuple[tuple[dict, ...], int]:
     reports: list[dict] = []
     for edge_index in range(view.edge_count):
@@ -604,7 +599,7 @@ def _build_local_missing_edge_continuity_reports(
             'path_edge_count': 1,
             'euclidean_distance': _vertex_distance(view, left, right),
         })
-    return _bounded_sorted_reports(reports, max_debug_candidates), len(reports)
+    return _bounded_sorted_reports(reports), len(reports)
 
 
 def _build_unmatched_endpoint_reports(
@@ -616,10 +611,9 @@ def _build_unmatched_endpoint_reports(
     generated_candidate_pairs: set[tuple[int, int]],
     *,
     max_bridge_edges: int,
-    max_debug_candidates: int,
 ) -> tuple[dict, ...]:
     reports: list[dict] = []
-    per_endpoint_limit = max(1, max_debug_candidates // max(1, len(unmatched_endpoints)))
+    per_endpoint_limit = max(1, BRIDGE_MAX_DEBUG_CANDIDATES // max(1, len(unmatched_endpoints)))
     for endpoint in unmatched_endpoints:
         local_candidates: list[dict] = []
         for candidate in endpoints:
@@ -650,7 +644,7 @@ def _build_unmatched_endpoint_reports(
             'component_id': component_id_of.get(int(endpoint)),
             'nearest_endpoint_candidates': local_candidates[:per_endpoint_limit],
         })
-    return tuple(reports[:max_debug_candidates])
+    return tuple(reports[:BRIDGE_MAX_DEBUG_CANDIDATES])
 
 
 def _build_endpoint_to_skeleton_reports(
@@ -660,7 +654,6 @@ def _build_endpoint_to_skeleton_reports(
     component_id_of: dict[int, int],
     *,
     max_bridge_edges: int,
-    max_debug_candidates: int,
 ) -> tuple[tuple[dict, ...], int]:
     endpoint_set = set(endpoints)
     reports: list[dict] = []
@@ -690,7 +683,7 @@ def _build_endpoint_to_skeleton_reports(
                 'reason_not_covered': 'target_is_not_degree_1_endpoint',
                 'euclidean_distance': _vertex_distance(view, endpoint, target),
             })
-    return _bounded_sorted_reports(reports, max_debug_candidates), len(reports)
+    return _bounded_sorted_reports(reports), len(reports)
 
 
 def _build_near_junction_gap_reports(
@@ -699,7 +692,6 @@ def _build_near_junction_gap_reports(
     component_id_of: dict[int, int],
     *,
     max_bridge_edges: int,
-    max_debug_candidates: int,
 ) -> tuple[tuple[dict, ...], int]:
     junctions = sorted(int(vertex) for vertex, degree in skeleton_graph.degree() if int(degree) >= 3)
     if not junctions:
@@ -735,7 +727,7 @@ def _build_near_junction_gap_reports(
                 'original_applyable_if_traceable': None,
                 'euclidean_distance': _vertex_distance(view, source, junction),
             })
-    return _bounded_sorted_reports(reports, max_debug_candidates), len(reports)
+    return _bounded_sorted_reports(reports), len(reports)
 
 
 def compute_endpoint_bridging(
@@ -744,22 +736,13 @@ def compute_endpoint_bridging(
     *,
     max_bridge_edges: int = 6,
     max_bridge_euclidean_ratio: float = 0.03,
-    max_endpoint_candidates: int = 4,
-    require_mutual_pairing: bool = True,
     min_loop_size_to_allow: int = 8,
-    tangent_alignment_weight: float = 0.25,
-    max_debug_candidates: int = 64,
 ) -> BridgingResult:
     max_bridge_edges_value = _validated_nonnegative_int('max_bridge_edges', max_bridge_edges)
-    max_endpoint_candidates_value = _validated_positive_int('max_endpoint_candidates', max_endpoint_candidates)
     min_loop_size_value = _validated_positive_int('min_loop_size_to_allow', min_loop_size_to_allow)
     max_ratio_value = float(max_bridge_euclidean_ratio)
     if not np.isfinite(max_ratio_value) or max_ratio_value < 0.0:
         raise ValueError('max_bridge_euclidean_ratio must be finite and non-negative')
-    tangent_weight_value = float(tangent_alignment_weight)
-    if not np.isfinite(tangent_weight_value) or tangent_weight_value < 0.0:
-        raise ValueError('tangent_alignment_weight must be finite and non-negative')
-    max_debug_candidates_value = _validated_positive_int('max_debug_candidates', max_debug_candidates)
     if skel_result.skeleton_edge_mask.shape != (view.edge_count,):
         raise ValueError(
             f'skeleton_edge_mask must have shape ({view.edge_count}), '
@@ -973,7 +956,7 @@ def compute_endpoint_bridging(
                 path_vertices,
                 endpoint_tangents,
             )
-            weighted_tangent_penalty = tangent_weight_value * tangent_penalty
+            weighted_tangent_penalty = BRIDGE_TANGENT_ALIGNMENT_WEIGHT * tangent_penalty
             score = (
                 edge_count,
                 path_length,
@@ -1003,7 +986,7 @@ def compute_endpoint_bridging(
         ranked = sorted(
             candidate_reports_by_endpoint[endpoint],
             key=lambda report: tuple(report['score_tuple']),
-        )[:max_endpoint_candidates_value]
+        )[:BRIDGE_MAX_ENDPOINT_CANDIDATES]
         if ranked:
             best_by_endpoint[endpoint] = ranked[0]
         for report in ranked:
@@ -1019,7 +1002,7 @@ def compute_endpoint_bridging(
             best_by_endpoint.get(left, {}).get('endpoint_vertex_ids') == [left, right]
             and best_by_endpoint.get(right, {}).get('endpoint_vertex_ids') == [left, right]
         )
-        if require_mutual_pairing and not is_mutual:
+        if BRIDGE_REQUIRE_MUTUAL_PAIRING and not is_mutual:
             counters['bridges_rejected_by_non_mutual'] += 1
             rejected_reason_by_pair[tuple(sorted((left, right)))] = 'non_mutual'
             rejected_reports.append({**report, 'rejection_reason': 'non_mutual'})
@@ -1074,14 +1057,12 @@ def compute_endpoint_bridging(
         rejected_reason_by_pair,
         generated_candidate_pairs,
         max_bridge_edges=max_bridge_edges_value,
-        max_debug_candidates=max_debug_candidates_value,
     )
     local_missing_edge_reports, local_missing_edge_total = _build_local_missing_edge_continuity_reports(
         view,
         skeleton_graph,
         skeleton_mask,
         component_id_of,
-        max_debug_candidates=max_debug_candidates_value,
     )
     endpoint_to_skeleton_reports, endpoint_to_skeleton_total = _build_endpoint_to_skeleton_reports(
         view,
@@ -1089,14 +1070,12 @@ def compute_endpoint_bridging(
         endpoints,
         component_id_of,
         max_bridge_edges=max_bridge_edges_value,
-        max_debug_candidates=max_debug_candidates_value,
     )
     near_junction_reports, near_junction_total = _build_near_junction_gap_reports(
         view,
         skeleton_graph,
         component_id_of,
         max_bridge_edges=max_bridge_edges_value,
-        max_debug_candidates=max_debug_candidates_value,
     )
     component_reports = tuple(
         {
@@ -1138,23 +1117,16 @@ def compute_endpoint_bridging(
             same_component_bridges_rejected_by_already_connected
         ),
         unmatched_endpoint_local_candidates=unmatched_endpoint_local_candidates,
-        same_component_rejected_candidate_reports=_bounded_sorted_reports(
-            same_component_rejected_reports,
-            max_debug_candidates_value,
-        ),
+        same_component_rejected_candidate_reports=_bounded_sorted_reports(same_component_rejected_reports),
         local_missing_edge_continuity_candidates=local_missing_edge_reports,
         local_missing_edge_continuity_candidates_total=int(local_missing_edge_total),
         endpoint_to_skeleton_candidates=endpoint_to_skeleton_reports,
         endpoint_to_skeleton_candidates_total=int(endpoint_to_skeleton_total),
         near_junction_gap_candidates=near_junction_reports,
         near_junction_gap_candidates_total=int(near_junction_total),
-        max_debug_candidates=max_debug_candidates_value,
         max_bridge_edges=max_bridge_edges_value,
         max_bridge_euclidean_ratio=max_ratio_value,
-        max_endpoint_candidates=max_endpoint_candidates_value,
-        require_mutual_pairing=bool(require_mutual_pairing),
         min_loop_size_to_allow=min_loop_size_value,
-        tangent_alignment_weight=tangent_weight_value,
         component_reports=component_reports,
         **counters,
     )
@@ -1349,11 +1321,7 @@ def apply_topology_pipeline(
     r_bridge: int = 6,
     l_min: int = 4,
     max_bridge_euclidean_ratio: float = 0.03,
-    max_endpoint_candidates: int = 4,
-    require_mutual_pairing: bool = True,
     min_loop_size_to_allow: int = 8,
-    tangent_alignment_weight: float = 0.25,
-    max_debug_candidates: int = 64,
     anchor_boundary: bool = True,
     extra_anchor_vertices: frozenset[int] | None = None,
     topology: Any = None,
@@ -1375,11 +1343,7 @@ def apply_topology_pipeline(
         skel,
         max_bridge_edges=r_bridge,
         max_bridge_euclidean_ratio=max_bridge_euclidean_ratio,
-        max_endpoint_candidates=max_endpoint_candidates,
-        require_mutual_pairing=require_mutual_pairing,
         min_loop_size_to_allow=min_loop_size_to_allow,
-        tangent_alignment_weight=tangent_alignment_weight,
-        max_debug_candidates=max_debug_candidates,
     )
     prune = compute_spur_pruning(
         view,
@@ -1400,11 +1364,7 @@ def apply_topology_pipeline(
         l_min=int(l_min),
         anchor_boundary=bool(anchor_boundary),
         max_bridge_euclidean_ratio=float(max_bridge_euclidean_ratio),
-        max_endpoint_candidates=int(max_endpoint_candidates),
-        require_mutual_pairing=bool(require_mutual_pairing),
         min_loop_size_to_allow=int(min_loop_size_to_allow),
-        tangent_alignment_weight=float(tangent_alignment_weight),
-        max_debug_candidates=int(max_debug_candidates),
     )
 
 
@@ -1489,11 +1449,7 @@ def topology_pipeline_result_to_json_dict(
             'parameters': {
                 'max_bridge_edges': int(bridging.max_bridge_edges),
                 'max_bridge_euclidean_ratio': float(bridging.max_bridge_euclidean_ratio),
-                'max_debug_candidates': int(bridging.max_debug_candidates),
-                'max_endpoint_candidates': int(bridging.max_endpoint_candidates),
                 'min_loop_size_to_allow': int(bridging.min_loop_size_to_allow),
-                'require_mutual_pairing': bool(bridging.require_mutual_pairing),
-                'tangent_alignment_weight': float(bridging.tangent_alignment_weight),
             },
             'rejected_bridge_reports': [dict(report) for report in bridging.rejected_bridge_reports],
             'same_component_bridges_accepted': int(bridging.same_component_bridges_accepted),
@@ -1533,12 +1489,8 @@ def topology_pipeline_result_to_json_dict(
             'd_max': int(result.d_max),
             'l_min': int(result.l_min),
             'max_bridge_euclidean_ratio': float(result.max_bridge_euclidean_ratio),
-            'max_debug_candidates': int(result.max_debug_candidates),
-            'max_endpoint_candidates': int(result.max_endpoint_candidates),
             'min_loop_size_to_allow': int(result.min_loop_size_to_allow),
-            'require_mutual_pairing': bool(result.require_mutual_pairing),
             'r_bridge': int(result.r_bridge),
-            'tangent_alignment_weight': float(result.tangent_alignment_weight),
             'tau_low': float(result.tau_low),
         },
         'pruning': {
