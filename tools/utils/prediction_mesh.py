@@ -13,6 +13,7 @@ from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
 from models.utils.seam_topology import build_seam_graph_view, compute_seam_mask_diagnostics, diagnostics_to_json_dict
 from preprocessing.build_gnn_dataset import build_dual_edge_index_from_unique_edges
 from preprocessing.feature_registry import ResolvedFeatureSet
+from preprocessing.label_sources import INFERENCE_LABEL_SOURCE
 from preprocessing.topology import CanonicalTopology
 from tools.utils.prediction_common import PredictionError
 
@@ -79,7 +80,7 @@ def build_meshcnn_inference_sample(
         feature_flags=selection.feature_flags.as_dict(),
         density_config=dict(selection.density_config) if selection.density_config else None,
         endpoint_order=endpoint_order,
-        label_source='inference_unlabeled',
+        label_source=INFERENCE_LABEL_SOURCE,
         weld_mode=topology.weld_audit.mode,
         seam_edge_count=0,
         boundary_edge_count=int(np.count_nonzero(boundary_mask)),

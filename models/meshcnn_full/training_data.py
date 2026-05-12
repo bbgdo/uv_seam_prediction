@@ -10,6 +10,7 @@ import torch
 
 from models.meshcnn_full.mesh import SPARSE_MESHCNN_SAMPLE_FORMAT, MeshCNNSample
 from preprocessing.feature_registry import ResolvedFeatureSet, resolve_feature_selection
+from preprocessing.label_sources import EXACT_OBJ_LABEL_SOURCE
 
 
 def set_global_seed(seed: int) -> None:
@@ -93,7 +94,7 @@ def selected_feature_metadata(
         'feature_dim': len(selection.feature_names),
         'endpoint_order': manifest.get('endpoint_order', sample.endpoint_order),
         'density_config': selection.density_config,
-        'label_source': manifest.get('label_source', sample.label_source),
+        'label_source': manifest.get('label_source', getattr(sample, 'label_source', EXACT_OBJ_LABEL_SOURCE)),
         'sample_format': SPARSE_MESHCNN_SAMPLE_FORMAT,
         'source_feature_names': list(source_feature_names),
         'original_feature_names': list(source_feature_names),

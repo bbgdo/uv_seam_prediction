@@ -289,6 +289,18 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(loaded[0].feature_names, sample.feature_names)
         self.assertEqual(loaded[0].edge_features.device.type, 'cpu')
 
+    def test_load_meshcnn_dataset_defaults_missing_legacy_label_source(self):
+        sample = _sample_with_features()
+        del sample.label_source
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_path = Path(tmp) / 'legacy_meshcnn.pt'
+            torch.save([sample], dataset_path)
+
+            loaded = load_meshcnn_dataset(dataset_path)
+
+        self.assertEqual(loaded[0].label_source, 'exact_obj')
+
     def test_meshcnn_sample_to_ignores_legacy_feature_preset_attribute(self):
         sample = _sample_with_features()
         sample.feature_preset = 'custom'

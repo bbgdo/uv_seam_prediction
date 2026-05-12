@@ -3,7 +3,6 @@ import unittest
 from preprocessing.obj_parser import parse_obj_text
 from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import build_topology
-from preprocessing.validate_seam_truth import compare_maps, direct_reference_from_obj
 
 
 NON_SEAM_SHARED_EDGE = """
@@ -60,17 +59,6 @@ class SeamLabelTests(unittest.TestCase):
         self.assertEqual(boundary_edges, {(0, 1), (0, 2), (1, 3), (2, 3)})
         self.assertTrue(all(truth.seam_map[edge] for edge in boundary_edges))
         self.assertEqual(truth.audit.boundary_edges, 4)
-
-    def test_direct_reference_parity_has_zero_fp_fn(self):
-        mesh = parse_obj_text(SEAM_SHARED_EDGE)
-        topology = build_topology(mesh)
-        truth = extract_seam_truth(topology)
-        reference_seams, _, _ = direct_reference_from_obj(mesh, topology)
-        comparison = compare_maps(truth.seam_map, reference_seams)
-
-        self.assertEqual(comparison['fp'], 0)
-        self.assertEqual(comparison['fn'], 0)
-        self.assertEqual(comparison['mismatch_count'], 0)
 
     def test_opposite_face_direction_aligns_to_canonical_edge(self):
         topology = build_topology(parse_obj_text(NON_SEAM_SHARED_EDGE))

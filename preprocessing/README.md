@@ -37,10 +37,6 @@ Serialized datasets and manifests should expose the same maintained metadata sur
 - `label_source='exact_obj'`
 - family split compatibility
 
-## Seam Truth Validation
-
-Use `python preprocessing/validate_seam_truth.py --mesh-dir <obj_dir>` to parity-check exact OBJ seam extraction against direct face-corner UV signatures before building datasets.
-
 ## Autodesk Character Generator FBX
 
 Use Blender to extract body meshes from Autodesk Character Generator FBX exports. The script selects meshes matching `H_DDS_(MidRes|HighRes|LowRes)`, clears parenting while keeping transforms, and exports OBJ files with UVs preserved.

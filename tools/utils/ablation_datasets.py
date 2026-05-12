@@ -4,6 +4,7 @@ import argparse
 
 from models.meshcnn_full.mesh import load_meshcnn_dataset
 from models.utils.dataset import filter_dataset_by_resolution, load_dataset
+from preprocessing.label_sources import EXACT_OBJ_LABEL_SOURCE
 
 from .ablation_specs import experiment_feature_selection, is_meshcnn_model
 
@@ -110,11 +111,13 @@ def validate_meshcnn_dataset_metadata(dataset: list, experiment_names: list[str]
     _require_uniform_metadata_choice(dataset, role='MeshCNN', key='endpoint_order', expected=('fixed', 'random'))
 
     label_sources, missing_label_source = _unique_string_values(dataset, 'label_source')
-    if label_sources and label_sources != ['exact_obj']:
+    if label_sources and label_sources != [EXACT_OBJ_LABEL_SOURCE]:
         detail = f"observed={label_sources}"
         if missing_label_source:
             detail += f", missing={missing_label_source}"
-        raise ValueError(f"MeshCNN dataset label_source must be 'exact_obj' when present ({detail})")
+        raise ValueError(
+            f"MeshCNN dataset label_source must be {EXACT_OBJ_LABEL_SOURCE!r} when present ({detail})"
+        )
 
     available_names = _coerce_feature_names(_metadata_value(dataset[0], 'feature_names'))
     if available_names is None:

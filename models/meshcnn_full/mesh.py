@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from preprocessing.label_sources import EXACT_OBJ_LABEL_SOURCE
+
 
 SPARSE_MESHCNN_SAMPLE_FORMAT = 'sparsemeshcnn_v2'
 
@@ -27,7 +29,7 @@ class MeshCNNSample:
     feature_names: list[str]
     feature_flags: dict[str, bool]
     endpoint_order: str
-    label_source: str = 'exact_obj'
+    label_source: str = EXACT_OBJ_LABEL_SOURCE
     weld_mode: str = 'exact'
     density_config: dict[str, Any] | None = None
     seam_edge_count: int = 0

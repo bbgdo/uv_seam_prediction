@@ -10,15 +10,8 @@ Maintained entrypoints:
 - `tools/run_feature_ablations.py` for GraphSAGE, GATv2, and SparseMeshCNN ablations
 - `tools/predict_seams.py` for inference
 - `tools/evaluate_saved_models.py` for reevaluating saved GraphSAGE/GATv2 checkpoints
-- `preprocessing/validate_seam_truth.py` for exact OBJ seam truth validation
 
 ## Reproducibility Workflow
-
-Validate exact OBJ seam truth before building datasets:
-
-```bash
-python preprocessing/validate_seam_truth.py --mesh-dir data/objs
-```
 
 Build the maintained PyG datasets:
 
