@@ -66,22 +66,26 @@ def normalize_objects():
     if not vertices_found:
         return False
 
-    center = (min_v + max_v) / 2
     dimensions = max_v - min_v
     diagonal = dimensions.length
 
     if diagonal == 0:
         return False
 
-    for obj in selected_objects:
-        obj.location -= center
-
+    bottom_center = mathutils.Vector((
+        (min_v.x + max_v.x) / 2,
+        (min_v.y + max_v.y) / 2,
+        min_v.z,
+    ))
     scale_factor = 1.0 / diagonal
-    for obj in selected_objects:
-        obj.scale *= scale_factor
 
-    bpy.context.view_layer.objects.active = selected_objects[0]
-    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    for obj in selected_objects:
+        mesh = obj.data
+        matrix_world = obj.matrix_world.copy()
+        for vertex in mesh.vertices:
+            vertex.co = (matrix_world @ vertex.co - bottom_center) * scale_factor
+        obj.matrix_world = mathutils.Matrix.Identity(4)
+        mesh.update()
 
     return True
 
