@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import trimesh
 
-from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
+from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency, load_meshcnn_dataset
 from models.meshcnn_full.model import MeshCNNSegmenter
 from models.meshcnn_full.train import train_sparsemeshcnn
 from models.meshcnn_full.training_data import slice_meshcnn_dataset_features
@@ -273,6 +273,30 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(metadata['endpoint_order'], 'random')
         self.assertEqual(metadata['label_source'], 'exact_obj')
         self.assertEqual(metadata['sample_format'], 'sparsemeshcnn_v2')
+
+    def test_load_meshcnn_dataset_ignores_legacy_feature_preset_attribute(self):
+        sample = _sample_with_features()
+        sample.feature_preset = 'custom'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_path = Path(tmp) / 'legacy_meshcnn.pt'
+            torch.save([sample], dataset_path)
+
+            loaded = load_meshcnn_dataset(dataset_path)
+
+        self.assertEqual(len(loaded), 1)
+        self.assertFalse(hasattr(loaded[0], 'feature_preset'))
+        self.assertEqual(loaded[0].feature_names, sample.feature_names)
+        self.assertEqual(loaded[0].edge_features.device.type, 'cpu')
+
+    def test_meshcnn_sample_to_ignores_legacy_feature_preset_attribute(self):
+        sample = _sample_with_features()
+        sample.feature_preset = 'custom'
+
+        moved = sample.to('cpu')
+
+        self.assertFalse(hasattr(moved, 'feature_preset'))
+        self.assertEqual(moved.feature_names, sample.feature_names)
 
 
 class TrainConfigMetadataTests(unittest.TestCase):

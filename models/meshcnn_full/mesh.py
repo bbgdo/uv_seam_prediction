@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +65,16 @@ class MeshCNNSample:
         values = self.__dict__.copy()
         for name in tensor_names:
             values[name] = values[name].to(device)
-        return MeshCNNSample(**values)
+        return MeshCNNSample(**_sample_constructor_values(values))
+
+
+def _sample_field_names() -> frozenset[str]:
+    return frozenset(field.name for field in fields(MeshCNNSample))
+
+
+def _sample_constructor_values(values: dict[str, Any]) -> dict[str, Any]:
+    field_names = _sample_field_names()
+    return {key: value for key, value in values.items() if key in field_names}
 
 
 def _sample_tensor_names() -> tuple[str, ...]:
@@ -89,7 +98,7 @@ def _ensure_sample_cpu(sample: MeshCNNSample) -> MeshCNNSample:
         if not isinstance(tensor, torch.Tensor):
             raise TypeError(f'{name} is not a tensor: {type(tensor)}')
         values[name] = tensor.detach().to(device='cpu', copy=False).contiguous()
-    return MeshCNNSample(**values)
+    return MeshCNNSample(**_sample_constructor_values(values))
 
 
 def _edge_search_indices(unique_edges: np.ndarray, query_edges: np.ndarray) -> np.ndarray:
