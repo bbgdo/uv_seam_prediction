@@ -219,6 +219,9 @@ def train_gnn(args: argparse.Namespace) -> None:
     }
     if config.model_name == 'gatv2':
         final_summary['heads'] = config.heads
+    if config.model_name == 'graphsage':
+        final_summary['skip_connections'] = config.skip_connections
+        final_summary['aggr'] = config.aggr
 
     logger.finalize(
         test_metrics=test_m,

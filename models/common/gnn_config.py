@@ -17,6 +17,7 @@ class GNNTrainConfig:
     weight_decay: float = 1e-4
     heads: int = 8
     skip_connections: str = 'hidden'
+    aggr: str = 'lstm'
 
 
 def replace_config(config: GNNTrainConfig, **overrides: Any) -> GNNTrainConfig:

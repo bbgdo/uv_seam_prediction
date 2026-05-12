@@ -15,7 +15,7 @@ from tools.evaluate_saved_models import (
     exact_validation_threshold,
     load_reference_control_reevaluations,
 )
-from tools.utils.reeval_runs import feature_selection_from_config, load_state_dict
+from tools.utils.reeval_runs import feature_selection_from_config, load_state_dict, runtime_config_from_saved
 from tools.utils.reeval_thresholds import best_threshold_index
 
 
@@ -177,6 +177,19 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertEqual(selection.feature_group, 'custom')
         self.assertTrue(selection.feature_flags.thickness_sdf)
         self.assertIn('thickness_sdf', selection.feature_names)
+
+    def test_runtime_config_from_saved_preserves_graphsage_aggregation_when_present(self):
+        config = runtime_config_from_saved({
+            'model_name': 'graphsage',
+            'hidden_dim': 8,
+            'num_layers': 1,
+            'in_dim': 14,
+            'dropout': 0.1,
+            'skip_connections': 'hidden',
+            'aggr': 'mean',
+        })
+
+        self.assertEqual(config.aggr, 'mean')
 
     def test_load_state_dict_rejects_wrapper_checkpoints(self):
         with TemporaryDirectory() as tmp:

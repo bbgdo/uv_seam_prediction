@@ -11,6 +11,7 @@ from models.common.gnn_config import GNNTrainConfig, replace_config
 def build_runtime_config(args: argparse.Namespace) -> GNNTrainConfig:
     definition = get_gnn_model(args.model)
     config = definition.train_config
+    aggr = 'mean' if args.model == 'graphsage' and getattr(args, 'mean_debug', False) else None
     return replace_config(
         config,
         hidden_size=args.hidden,
@@ -25,6 +26,7 @@ def build_runtime_config(args: argparse.Namespace) -> GNNTrainConfig:
         weight_decay=getattr(args, 'weight_decay', None),
         heads=getattr(args, 'heads', None),
         skip_connections=getattr(args, 'skip_connections', None),
+        aggr=aggr,
     )
 
 
@@ -38,6 +40,7 @@ def model_kwargs(config: GNNTrainConfig) -> dict:
     if config.model_name == 'graphsage':
         kwargs.update({
             'skip_connections': config.skip_connections,
+            'aggr': config.aggr,
         })
     elif config.model_name == 'gatv2':
         kwargs['heads'] = config.heads
@@ -90,6 +93,7 @@ def logger_config(
     if config.model_name == 'graphsage':
         payload.update({
             'skip_connections': config.skip_connections,
+            'aggr': config.aggr,
         })
     elif config.model_name == 'gatv2':
         payload['heads'] = config.heads

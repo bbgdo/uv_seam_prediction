@@ -162,6 +162,7 @@ def runtime_config_from_saved(config: dict):
         patience=config.get('patience'),
         heads=config.get('heads'),
         skip_connections=config.get('skip_connections'),
+        aggr=config.get('aggr'),
     )
 
 

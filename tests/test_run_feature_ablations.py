@@ -554,6 +554,19 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertNotIn('--enable-ao', sdf_command)
         self.assertNotIn('--pos-weight', sdf_command)
 
+        debug_command = build_train_command(
+            spec=EXPERIMENT_SPECS['control14'],
+            dataset='custom.pt',
+            run_dir=Path('runs') / 'debug',
+            split_json=Path('splits') / 'seed_7.json',
+            seed=7,
+            resolution_tag='all',
+            epochs=3,
+            patience=15,
+            mean_debug=True,
+        )
+        self.assertIn('--mean_debug', debug_command)
+
     def test_meshcnn_subprocess_command_construction(self):
         command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_sdf'],

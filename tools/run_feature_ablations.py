@@ -199,6 +199,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--val-ratio', type=float, default=0.15)
     parser.add_argument('--test-ratio', type=float, default=0.10)
     parser.add_argument('--keep-going', action='store_true', help='continue after failed seed runs')
+    parser.add_argument('--mean_debug', action='store_true', help='use GraphSAGE mean aggregation for debug-speed runs')
     parser.add_argument(
         '--exclude-case',
         dest='exclude_cases',

@@ -33,6 +33,7 @@ def build_train_command(
     epochs: int,
     patience: int,
     model: str = 'graphsage',
+    mean_debug: bool = False,
 ) -> list[str]:
     if model not in ABLATION_MODELS:
         choices = ', '.join(ABLATION_MODELS)
@@ -72,6 +73,8 @@ def build_train_command(
             command.append('--enable-density')
         if spec.enable_thickness_sdf:
             command.append('--enable-thickness-sdf')
+        if mean_debug:
+            command.append('--mean_debug')
         return command
 
     if not dataset:
@@ -109,6 +112,8 @@ def build_train_command(
         command.append('--enable-density')
     if spec.enable_thickness_sdf:
         command.append('--enable-thickness-sdf')
+    if mean_debug:
+        command.append('--mean_debug')
     return command
 
 
@@ -154,6 +159,7 @@ def run_experiment(
             epochs=args.epochs,
             patience=args.patience,
             model=model,
+            mean_debug=getattr(args, 'mean_debug', False),
         )
 
         print(

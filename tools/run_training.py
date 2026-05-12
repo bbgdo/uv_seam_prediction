@@ -92,6 +92,7 @@ def fill_training_defaults(args: argparse.Namespace) -> argparse.Namespace:
         'enable_symmetry': False,
         'enable_density': False,
         'enable_thickness_sdf': False,
+        'mean_debug': False,
     }
     for key, value in shared_defaults.items():
         if not hasattr(args, key) or getattr(args, key) is None:
@@ -141,6 +142,7 @@ def build_parser(
     parser.add_argument('--enable-symmetry', action='store_true')
     parser.add_argument('--enable-density', action='store_true')
     parser.add_argument('--enable-thickness-sdf', action='store_true')
+    parser.add_argument('--mean_debug', action='store_true')
 
     if include_gnn_options:
         parser.add_argument('--num-layers', type=int, default=None)
