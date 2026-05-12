@@ -77,12 +77,9 @@ def _assert_prediction_artifact_loads(test_case, config, payload):
 
 class PredictSeamsTests(unittest.TestCase):
     def test_threshold_resolution_precedence(self):
-        summary = {'best_validation_threshold': 0.7}
-
-        self.assertEqual(predict_seams.resolve_threshold(0.8, summary), 0.8)
-        self.assertEqual(predict_seams.resolve_threshold(None, summary), 0.7)
+        self.assertEqual(predict_seams.resolve_threshold(0.8), 0.8)
         with self.assertRaisesRegex(predict_seams.PredictionError, 'threshold is required'):
-            predict_seams.resolve_threshold(None, {})
+            predict_seams.resolve_threshold(None)
 
     def test_parser_rejects_threshold_policy_toggle(self):
         with self.assertRaises(SystemExit):
@@ -127,7 +124,7 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(predict_seams._normalize_cli_model_type('graphsage'), 'graphsage')
 
     def test_feature_bundle_resolution(self):
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {})
         self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(selection.feature_count, 14)
         self.assertEqual(endpoint_order, 'random')
@@ -135,14 +132,12 @@ class PredictSeamsTests(unittest.TestCase):
         selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(
             _args('paper14'),
             {'endpoint_order': 'fixed'},
-            {},
         )
         self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(endpoint_order, 'fixed')
 
         selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(
             _args('custom', enable_ao=True, enable_density=True),
-            {},
             {},
         )
         self.assertEqual(selection.feature_group, 'custom')
@@ -151,7 +146,7 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(endpoint_order, 'fixed')
 
         with self.assertRaisesRegex(predict_seams.PredictionError, 'requires at least one'):
-            predict_seams.resolve_feature_bundle(_args('custom'), {}, {})
+            predict_seams.resolve_feature_bundle(_args('custom'), {})
 
     def test_canonical_edge_order_mismatch_raises(self):
         topology = _square_topology()
@@ -165,14 +160,13 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {})
 
         payload = predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
             output_json=Path('out.json'),
             weights_path=Path('best_model.pth'),
             config_path=Path('config.json'),
-            summary_path=Path('summary.json'),
             model_type='gatv2',
             feature_bundle='paper14',
             selection=selection,
@@ -196,7 +190,7 @@ class PredictSeamsTests(unittest.TestCase):
     def test_meshcnn_inference_sample_is_unlabeled(self):
         topology = _square_topology()
         feature_mesh = predict_seams.build_feature_mesh_from_canonical_topology(topology)
-        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
+        selection, endpoint_order, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {})
         edge_features = np.zeros((len(topology.canonical_edges), selection.feature_count), dtype=np.float32)
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
 
@@ -386,46 +380,25 @@ class PredictSeamsTests(unittest.TestCase):
             'in_dim': selection.feature_count,
         }
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_names'):
-            predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
+            predict_seams.validate_feature_metadata(config, selection, {'in_dim': selection.feature_count})
 
     def test_feature_metadata_rejects_stringified_nested_metadata(self):
         selection = predict_seams.resolve_feature_selection('paper14')
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_metadata.*JSON object'):
             predict_seams.validate_feature_metadata(
                 {'feature_metadata': "{'feature_group': 'paper14'}"},
-                {},
                 selection,
                 {'in_dim': selection.feature_count},
             )
-
-    def test_feature_metadata_accepts_legacy_stringified_dataset_summary(self):
-        selection = predict_seams.resolve_feature_selection('paper14')
-        summary = {
-            'dataset_metadata_summary': {
-                'feature_group': 'paper14',
-                'feature_names': str(list(selection.feature_names)),
-                'feature_flags': str(selection.feature_flags.as_dict()),
-                'x_feature_dim': selection.feature_count,
-            },
-        }
-
-        predict_seams.validate_feature_metadata(
-            {'feature_group': 'paper14', 'in_dim': selection.feature_count},
-            summary,
-            selection,
-            {'in_dim': selection.feature_count},
-        )
 
     def test_auto_feature_inference_rejects_stringified_metadata(self):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_flags must be a JSON object'):
             predict_seams.infer_feature_bundle(
                 {'feature_group': 'custom', 'feature_flags': "{'ao': True}"},
-                {},
             )
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_names must be a JSON list'):
             predict_seams.infer_feature_bundle(
                 {'feature_names': "['pos_x_i']"},
-                {},
             )
 
     def test_postprocess_kwargs_from_args(self):
@@ -516,6 +489,25 @@ class PredictSeamsTests(unittest.TestCase):
         self.assertEqual(payload['seam_edge_indices'], [1, 2, 4])
         self.assertNotIn('postprocess', payload.get('diagnostics', {}))
 
+    def test_prediction_does_not_read_summary_json(self):
+        with self._patched_prediction_env(), tempfile.TemporaryDirectory() as tmp:
+            args = self._run_args(tmp)
+
+            payload = predict_seams.run_prediction(args)
+
+        self.assertEqual(payload['model']['threshold'], 0.5)
+        self.assertEqual(payload['status'], 'ok')
+
+    def test_parser_rejects_summary_json_argument(self):
+        with self.assertRaises(SystemExit):
+            predict_seams.parse_args([
+                '--mesh-path', 'mesh.obj',
+                '--model-weights', 'weights.pt',
+                '--output-json', 'out.json',
+                '--threshold', '0.5',
+                '--summary-json', 'summary.json',
+            ])
+
     def test_postprocess_failure_raises_clear_error(self):
         def fake_pipeline(**kwargs):
             del kwargs
@@ -561,7 +553,6 @@ class PredictSeamsTests(unittest.TestCase):
         mesh_path = tmp_path / 'mesh.obj'
         weights_path = tmp_path / 'best_model.pth'
         config_path = tmp_path / 'config.json'
-        summary_path = tmp_path / 'summary.json'
         output_path = tmp_path / 'out.json'
         mesh_path.write_text(SQUARE_OBJ, encoding='utf-8')
         weights_path.write_bytes(b'placeholder')
@@ -573,18 +564,17 @@ class PredictSeamsTests(unittest.TestCase):
             'dropout': 0.0,
             'heads': 1,
         }), encoding='utf-8')
-        summary_path.write_text('{}', encoding='utf-8')
-        args = predict_seams.parse_args([
+        argv = [
             '--mesh-path', str(mesh_path),
             '--model-weights', str(weights_path),
             '--config-json', str(config_path),
-            '--summary-json', str(summary_path),
             '--output-json', str(output_path),
             '--threshold', '0.5',
             '--device', 'cpu',
             '--model-type', 'gatv2',
             '--feature-bundle', 'paper14',
-        ])
+        ]
+        args = predict_seams.parse_args(argv)
         args.postprocess = postprocess
         return args
 
@@ -593,13 +583,12 @@ class PredictSeamsTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {})
         return predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
             output_json=Path('out.json'),
             weights_path=Path('best_model.pth'),
             config_path=Path('config.json'),
-            summary_path=Path('summary.json'),
             model_type='gatv2',
             feature_bundle='paper14',
             selection=selection,
@@ -619,13 +608,12 @@ class OutputPayloadModelTypeTests(unittest.TestCase):
         unique_edges = np.asarray(topology.canonical_edges, dtype=np.int64)
         probabilities = np.asarray([0.1, 0.9, 0.2, 0.8, 0.3], dtype=np.float32)
         seam_mask = probabilities >= 0.75
-        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(_args('paper14'), {})
         return predict_seams.build_output_payload(
             mesh_path=Path('mesh.obj'),
             output_json=Path('out.json'),
             weights_path=Path('best_model.pth'),
             config_path=Path('config.json'),
-            summary_path=Path('summary.json'),
             model_type=model_type,
             feature_bundle='paper14',
             selection=selection,
@@ -666,6 +654,7 @@ class ThicknessSdfFlagTests(unittest.TestCase):
                 '--mesh-path', str(mesh),
                 '--model-weights', str(weights),
                 '--output-json', str(out),
+                '--threshold', '0.5',
                 '--feature-bundle', 'custom',
                 '--enable-ao',
                 '--enable-thickness-sdf',
@@ -689,40 +678,38 @@ class ThicknessSdfFlagTests(unittest.TestCase):
 
     def test_custom_bundle_with_sdf_flag_includes_sdf_feature(self):
         args = _args('custom', enable_ao=True, enable_thickness_sdf=True)
-        selection, _, _ = predict_seams.resolve_feature_bundle(args, {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(args, {})
         self.assertTrue(any('sdf' in name or 'thickness' in name for name in selection.feature_names))
 
     def test_custom_bundle_without_sdf_flag_excludes_sdf_feature(self):
         args = _args('custom', enable_ao=True)
-        selection, _, _ = predict_seams.resolve_feature_bundle(args, {}, {})
+        selection, _, _ = predict_seams.resolve_feature_bundle(args, {})
         self.assertFalse(any('sdf' in name or 'thickness' in name for name in selection.feature_names))
 
     def test_sdf_toggle_blocked_outside_custom_bundle(self):
         args = _args('paper14', enable_thickness_sdf=True)
         with self.assertRaises(predict_seams.PredictionError):
-            predict_seams.resolve_feature_bundle(args, {}, {})
+            predict_seams.resolve_feature_bundle(args, {})
 
     def test_sdf_toggle_blocked_in_auto_bundle(self):
         args = _args('auto', enable_thickness_sdf=True)
         with self.assertRaises(predict_seams.PredictionError):
-            predict_seams.resolve_feature_bundle(args, {}, {})
+            predict_seams.resolve_feature_bundle(args, {})
 
     def test_infer_feature_bundle_requires_metadata_in_auto_mode(self):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'could not be inferred'):
-            predict_seams.infer_feature_bundle({}, {})
+            predict_seams.infer_feature_bundle({})
 
     def test_infer_feature_bundle_rejects_custom_metadata_without_optional_flags(self):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'does not specify any optional custom feature flags'):
             predict_seams.infer_feature_bundle(
                 {'feature_group': 'custom', 'feature_flags': {}},
-                {},
             )
 
     def test_infer_feature_bundle_rejects_legacy_paper_alias(self):
         with self.assertRaisesRegex(predict_seams.PredictionError, 'could not be inferred'):
             predict_seams.infer_feature_bundle(
                 {'feature_group': 'paper'},
-                {},
             )
 
     def test_validate_feature_metadata_rejects_legacy_custom_base_metadata(self):
@@ -734,7 +721,7 @@ class ThicknessSdfFlagTests(unittest.TestCase):
             'in_dim': selection.feature_count,
         }
         with self.assertRaisesRegex(predict_seams.PredictionError, 'feature_group mismatch'):
-            predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
+            predict_seams.validate_feature_metadata(config, selection, {'in_dim': selection.feature_count})
 
     def test_validate_feature_metadata_rejects_legacy_dihedral_flag_alias(self):
         selection = predict_seams.resolve_feature_selection('custom', enable_dihedral=True)
@@ -745,7 +732,7 @@ class ThicknessSdfFlagTests(unittest.TestCase):
             'in_dim': selection.feature_count,
         }
         with self.assertRaisesRegex(predict_seams.PredictionError, 'unsupported key'):
-            predict_seams.validate_feature_metadata(config, {}, selection, {'in_dim': selection.feature_count})
+            predict_seams.validate_feature_metadata(config, selection, {'in_dim': selection.feature_count})
 
 
 if __name__ == '__main__':

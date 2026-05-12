@@ -75,20 +75,10 @@ def load_json_object(path: Path, label: str) -> dict[str, Any]:
     return payload
 
 
-def resolve_threshold(
-    explicit_threshold: float | None,
-    summary: dict[str, Any],
-) -> float:
-    if explicit_threshold is not None:
-        return validate_threshold(explicit_threshold)
-
-    if 'best_validation_threshold' in summary:
-        return validate_threshold(summary['best_validation_threshold'])
-
-    raise PredictionError(
-        'threshold is required: pass --threshold or provide summary.json["best_validation_threshold"]',
-        'MissingThreshold',
-    )
+def resolve_threshold(explicit_threshold: float | None) -> float:
+    if explicit_threshold is None:
+        raise PredictionError('threshold is required: pass --threshold', 'MissingThreshold')
+    return validate_threshold(explicit_threshold)
 
 
 def validate_threshold(value: Any) -> float:

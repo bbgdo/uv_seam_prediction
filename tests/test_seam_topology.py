@@ -1129,7 +1129,6 @@ class EndpointBridgingTests(unittest.TestCase):
             output_json=Path('prediction.json'),
             weights_path=Path('weights.pt'),
             config_path=Path('config.json'),
-            summary_path=Path('summary.json'),
             model_type='graphsage',
             feature_bundle='paper14',
             selection=SimpleNamespace(feature_group='paper14', feature_names=(), feature_count=0),

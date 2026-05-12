@@ -107,21 +107,18 @@ def run_prediction(args) -> dict[str, Any]:
     weights_path = Path(args.model_weights)
     output_json = Path(args.output_json)
     config_path = Path(args.config_json) if args.config_json else weights_path.with_name('config.json')
-    summary_path = Path(args.summary_json) if args.summary_json else weights_path.with_name('summary.json')
 
     require_file(mesh_path, 'input OBJ')
     require_file(weights_path, 'model weights')
     require_file(config_path, 'config JSON')
-    require_file(summary_path, 'summary JSON')
 
     config = load_json_object(config_path, 'config JSON')
-    summary = load_json_object(summary_path, 'summary JSON')
     model_type = resolve_model_type(args.model_type, config, weights_path)
-    threshold = resolve_threshold(args.threshold, summary)
-    selection, endpoint_order, resolved_feature_bundle = resolve_feature_bundle(args, config, summary)
+    threshold = resolve_threshold(args.threshold)
+    selection, endpoint_order, resolved_feature_bundle = resolve_feature_bundle(args, config)
     device = resolve_device(args.device)
     model_kwargs = resolve_model_kwargs(model_type, config)
-    validate_feature_metadata(config, summary, selection, model_kwargs)
+    validate_feature_metadata(config, selection, model_kwargs)
 
     obj_mesh = parse_obj(mesh_path)
     topology = build_topology(obj_mesh, WeldConfig.exact())
@@ -199,7 +196,6 @@ def run_prediction(args) -> dict[str, Any]:
         output_json=output_json,
         weights_path=weights_path,
         config_path=config_path,
-        summary_path=summary_path,
         model_type=model_type,
         feature_bundle=resolved_feature_bundle,
         selection=selection,

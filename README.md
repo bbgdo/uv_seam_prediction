@@ -57,19 +57,18 @@ python tools/run_feature_ablations.py --model sparsemeshcnn --meshcnn-dataset da
 Run inference with the maintained bridge:
 
 ```bash
-python tools/predict_seams.py --mesh-path data/objs/example.obj --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --output-json outputs/predictions/example.json
+python tools/predict_seams.py --mesh-path data/objs/example.obj --model-weights runs/models/graphsage_paper14/best_model.pth --feature-bundle paper14 --threshold 0.5 --output-json outputs/predictions/example.json
 ```
 
 ## Artifact Compatibility
 
-The maintained CLI names are `graphsage`, `gatv2`, and `sparsemeshcnn`. Older run artifacts remain loadable when their adjacent `config.json` and `summary.json` are kept with `best_model.pth`.
+The maintained CLI names are `graphsage`, `gatv2`, and `sparsemeshcnn`. Prediction requires `best_model.pth`, adjacent `config.json`, and an explicit `--threshold`.
 
 Prediction accepts these legacy artifact metadata shapes:
 
 - SparseMeshCNN configs with old model names `meshcnn_full`, `meshcnn`, or `sparse_meshcnn`; outputs still report `sparsemeshcnn`.
 - GraphSAGE configs with `aggr: mean`; new GraphSAGE training still defaults to LSTM aggregation.
 - GNN configs that stored hidden width as `hidden` or `hidden_size` instead of `hidden_dim`.
-- GNN run summaries that serialized `dataset_metadata_summary.feature_names` or `feature_flags` as Python-literal strings instead of JSON arrays/objects.
 - Checkpoints wrapped as `state_dict` or `model_state_dict`, plus current raw state dicts and `model_state`.
 
 These compatibility paths are for artifact loading only. New commands and docs should use the maintained names and metadata.

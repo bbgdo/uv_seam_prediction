@@ -15,7 +15,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='feature bundle: auto, paper14, or custom',
     )
     parser.add_argument('--output-json', required=True)
-    parser.add_argument('--threshold', type=float, default=None)
+    parser.add_argument('--threshold', type=float, required=True)
     parser.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
     parser.add_argument(
         '--model-type',
@@ -23,7 +23,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='model family: auto, graphsage, gatv2, or sparsemeshcnn',
     )
     parser.add_argument('--config-json', default=None)
-    parser.add_argument('--summary-json', default=None)
     parser.add_argument('--enable-ao', action='store_true')
     parser.add_argument('--enable-dihedral', action='store_true')
     parser.add_argument('--enable-symmetry', action='store_true')

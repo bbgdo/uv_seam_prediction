@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import ast
 from typing import Any
 
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, ResolvedFeatureSet, resolve_feature_selection
 from tools.utils.prediction_common import PredictionError, coerce_dict, coerce_list, normalize_metadata_name
-
-
-LEGACY_STRINGIFIED_METADATA_SOURCES = {
-    'config.dataset_metadata_summary',
-    'summary.dataset_metadata_summary',
-}
 
 
 def requested_feature_flags(args: argparse.Namespace) -> dict[str, bool]:
@@ -56,10 +49,9 @@ def resolved_endpoint_order_from_metadata(
 
 def endpoint_order_from_metadata_sources(
     config: dict[str, Any],
-    summary: dict[str, Any],
     selection: ResolvedFeatureSet,
 ) -> str:
-    for metadata in feature_metadata_sources(config, summary):
+    for metadata in feature_metadata_sources(config):
         endpoint_order = normalize_metadata_name(metadata.get('endpoint_order'))
         if endpoint_order in ('fixed', 'random'):
             return endpoint_order
@@ -69,7 +61,6 @@ def endpoint_order_from_metadata_sources(
 def resolve_feature_bundle(
     args: argparse.Namespace,
     config: dict[str, Any],
-    summary: dict[str, Any],
 ) -> tuple[ResolvedFeatureSet, str, str]:
     flags = requested_feature_flags(args)
     any_toggle = any(flags.values())
@@ -80,7 +71,7 @@ def resolve_feature_bundle(
                 'feature toggles require an explicit --feature-bundle custom',
                 'InvalidFeatureBundle',
             )
-        return infer_feature_bundle(config, summary)
+        return infer_feature_bundle(config)
 
     if args.feature_bundle != 'custom' and any_toggle:
         enabled = ', '.join(name for name, value in flags.items() if value)
@@ -91,7 +82,7 @@ def resolve_feature_bundle(
 
     if args.feature_bundle == 'paper14':
         selection = resolve_feature_selection('paper14')
-        return selection, endpoint_order_from_metadata_sources(config, summary, selection), args.feature_bundle
+        return selection, endpoint_order_from_metadata_sources(config, selection), args.feature_bundle
 
     if not any_toggle:
         raise PredictionError(
@@ -99,11 +90,11 @@ def resolve_feature_bundle(
             'InvalidFeatureBundle',
         )
     selection = selection_from_feature_flags(flags)
-    return selection, endpoint_order_from_metadata_sources(config, summary, selection), args.feature_bundle
+    return selection, endpoint_order_from_metadata_sources(config, selection), args.feature_bundle
 
 
-def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tuple[ResolvedFeatureSet, str, str]:
-    for metadata in feature_metadata_sources(config, summary):
+def infer_feature_bundle(config: dict[str, Any]) -> tuple[ResolvedFeatureSet, str, str]:
+    for metadata in feature_metadata_sources(config):
         group = normalize_metadata_name(metadata.get('feature_group'))
         flags = infer_feature_flags(metadata)
 
@@ -119,7 +110,7 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
             selection = selection_from_feature_flags(flags)
             return selection, resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
 
-    for metadata in feature_metadata_sources(config, summary):
+    for metadata in feature_metadata_sources(config):
         feature_names = coerce_list(metadata.get('feature_names'))
         if feature_names:
             names = tuple(feature_names)
@@ -136,21 +127,18 @@ def infer_feature_bundle(config: dict[str, Any], summary: dict[str, Any]) -> tup
             return selection, resolved_endpoint_order_from_metadata(metadata, selection), 'auto'
 
     raise PredictionError(
-        'feature bundle could not be inferred from config or summary metadata; pass --feature-bundle explicitly',
+        'feature bundle could not be inferred from config metadata; pass --feature-bundle explicitly',
         'MissingFeatureMetadata',
     )
 
 
-def feature_metadata_sources(config: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
-    sources = [config, summary]
+def feature_metadata_sources(config: dict[str, Any]) -> list[dict[str, Any]]:
+    sources = [config]
     feature_metadata = coerce_dict(config.get('feature_metadata'))
     if 'feature_metadata' in config and config.get('feature_metadata') not in (None, '') and feature_metadata is None:
         raise PredictionError('config feature_metadata must be a JSON object', 'FeatureMetadataMismatch')
     if feature_metadata is not None:
         sources.append(feature_metadata)
-    dataset_summary = summary.get('dataset_metadata_summary')
-    if isinstance(dataset_summary, dict):
-        sources.append(dataset_summary)
     return sources
 
 
@@ -177,29 +165,23 @@ def infer_feature_flags(metadata: dict[str, Any]) -> dict[str, bool]:
 
 def validate_feature_metadata(
     config: dict[str, Any],
-    summary: dict[str, Any],
     selection: ResolvedFeatureSet,
     model_kwargs: dict[str, Any],
 ) -> None:
     sources = [
         ('config', config),
-        ('summary', summary),
     ]
     feature_metadata = coerce_dict(config.get('feature_metadata'))
     if 'feature_metadata' in config and config.get('feature_metadata') not in (None, '') and feature_metadata is None:
         raise PredictionError('config feature_metadata must be a JSON object', 'FeatureMetadataMismatch')
     if feature_metadata is not None:
         sources.append(('config.feature_metadata', feature_metadata))
-    dataset_summary = summary.get('dataset_metadata_summary')
-    if isinstance(dataset_summary, dict):
-        sources.append(('summary.dataset_metadata_summary', dataset_summary))
 
     expected_flags = selection.feature_flags.as_dict()
     for source_name, metadata in sources:
         validate_feature_metadata_name(source_name, metadata, selection)
 
-        allow_legacy_strings = source_name in LEGACY_STRINGIFIED_METADATA_SOURCES
-        feature_names = coerce_metadata_list(metadata.get('feature_names'), allow_legacy_strings=allow_legacy_strings)
+        feature_names = coerce_list(metadata.get('feature_names'))
         if 'feature_names' in metadata and metadata.get('feature_names') not in (None, '') and feature_names is None:
             raise PredictionError(
                 f'{source_name} feature_names must be a JSON list',
@@ -211,7 +193,7 @@ def validate_feature_metadata(
                 'FeatureMetadataMismatch',
             )
 
-        flags = coerce_metadata_dict(metadata.get('feature_flags'), allow_legacy_strings=allow_legacy_strings)
+        flags = coerce_dict(metadata.get('feature_flags'))
         if 'feature_flags' in metadata and metadata.get('feature_flags') not in (None, '') and flags is None:
             raise PredictionError(
                 f'{source_name} feature_flags must be a JSON object',
@@ -274,25 +256,3 @@ def metadata_name_matches_expected(value: Any, expected: str) -> bool:
         values = {normalize_metadata_name(item) for item in value if item not in (None, '')}
         return normalize_metadata_name(expected) in values
     return normalize_metadata_name(value) == normalize_metadata_name(expected)
-
-
-def coerce_metadata_list(value: Any, *, allow_legacy_strings: bool = False) -> list[str] | None:
-    parsed = coerce_list(value)
-    if parsed is not None or not allow_legacy_strings or not isinstance(value, str):
-        return parsed
-    try:
-        literal = ast.literal_eval(value)
-    except (SyntaxError, ValueError):
-        return None
-    return coerce_list(literal)
-
-
-def coerce_metadata_dict(value: Any, *, allow_legacy_strings: bool = False) -> dict[str, Any] | None:
-    parsed = coerce_dict(value)
-    if parsed is not None or not allow_legacy_strings or not isinstance(value, str):
-        return parsed
-    try:
-        literal = ast.literal_eval(value)
-    except (SyntaxError, ValueError):
-        return None
-    return coerce_dict(literal)
