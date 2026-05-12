@@ -24,10 +24,10 @@ def reset_scene():
 
     for collection in [bpy.data.meshes, bpy.data.materials, bpy.data.textures, bpy.data.images, bpy.data.armatures,
                        bpy.data.libraries, bpy.data.lights, bpy.data.cameras]:
-        for item in collection:
+        for item in list(collection):
             try:
                 collection.remove(item)
-            except:
+            except Exception:
                 pass
 
 
@@ -119,7 +119,7 @@ def process_directory(input_path_arg):
     valid_extensions = {'.fbx', '.dae', '.glb', '.gltf', '.blend', '.obj'}
     files = [f for f in os.listdir(input_dir) if os.path.splitext(f)[1].lower() in valid_extensions]
 
-    print(f"\n=== Starting ===")
+    print("\n=== Starting ===")
     print(f"Input dir: {input_dir}")
     print(f"Export dir: {output_dir}")
     print(f"Found files: {len(files)}")
@@ -176,7 +176,7 @@ def process_directory(input_path_arg):
             print("FAIL (Import)")
             fail_count += 1
 
-    print(f"\n=== Finished ===")
+    print("\n=== Finished ===")
     print(f"Converted: {success_count}")
     print(f"Copied (already OBJ): {copied_count}")
     print(f"Failed: {fail_count}")

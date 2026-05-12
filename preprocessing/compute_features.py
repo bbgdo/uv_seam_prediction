@@ -8,45 +8,39 @@ try:
 except ImportError:
     cKDTree = None
 
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning)
-import trimesh  # noqa: E402
+import trimesh
 
 try:
-    from preprocessing.topology import canonical_edge_key
-    from preprocessing.feature_registry import (
-        ALL_ATOMIC_FEATURE_NAMES,
-        DENSITY_CONFIG,
-        PAPER14_FEATURE_NAMES,
-        ResolvedFeatureSet,
-        resolve_feature_selection,
-    )
-except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/compute_features.py`
-    from topology import canonical_edge_key
-    from feature_registry import (
-        ALL_ATOMIC_FEATURE_NAMES,
-        DENSITY_CONFIG,
-        PAPER14_FEATURE_NAMES,
-        ResolvedFeatureSet,
-        resolve_feature_selection,
-    )
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
 
-FEATURE_PRESETS = ('paper14',)
+ensure_repo_root_on_path()
+
+from preprocessing.canonical_mesh import resolve_endpoint_order  # noqa: E402
+from preprocessing.topology import canonical_edge_key  # noqa: E402
+from preprocessing.feature_registry import (  # noqa: E402
+    ALL_ATOMIC_FEATURE_NAMES,
+    DENSITY_CONFIG,
+    PAPER14_FEATURE_NAMES,
+    ResolvedFeatureSet,
+    resolve_feature_selection,
+)
+
 ENDPOINT_ORDERS = ('fixed', 'random')
+NORMALIZE_EPS = 1e-8
+AO_RAY_COUNT = 32
+ZSCORE_CLIP_RANGE = 3.0
+DENSITY_EPS = DENSITY_CONFIG['eps']
+DENSITY_LOG_CLIP = DENSITY_CONFIG['density_log_clip']
 
 
-def _safe_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+def _safe_normalize(v: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(v, axis=-1, keepdims=True)
-    return v / np.where(norms < eps, eps, norms)
+    return v / np.where(norms < NORMALIZE_EPS, NORMALIZE_EPS, norms)
 
 
 def build_edge_topology(mesh: trimesh.Trimesh) -> tuple[np.ndarray, dict]:
-    """Build sorted unique edges and edge-to-faces mapping.
-
-    Returns:
-        unique_edges: [E, 2] int64, sorted with vi < vj
-        edge_to_faces: dict mapping (vi, vj) -> [face_idx, ...]
-    """
     faces = np.asarray(mesh.faces, dtype=np.int64)
     edge_to_faces: dict[tuple, list] = {}
 
@@ -67,8 +61,6 @@ def compute_signed_dihedral(
     unique_edges: np.ndarray,
     edge_to_faces: dict,
 ) -> np.ndarray:
-    """Feature 1: signed dihedral angle, normalized to [-1, 1].
-    Positive = convex, negative = concave. Boundary edges = 0."""
     face_normals = mesh.face_normals
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     angles = np.zeros(len(unique_edges), dtype=np.float32)
@@ -94,23 +86,16 @@ def compute_signed_dihedral(
         else:
             angles[idx] = float(unsigned_angle)
 
-    # normalize to [-1, 1]
     return (angles / np.pi).astype(np.float32)
 
 
 
 
 def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
-    """Discrete Gaussian curvature via angle defect method (vectorized).
-
-    K_v = 2pi - sum(incident face angles at v) for interior vertices
-    K_v = pi - sum(incident face angles at v) for boundary vertices
-    """
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(vertices)
 
-    # vectorized angle computation: one entry per (face, corner)
     v0, v1, v2 = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
 
     def _corner_angles(ea: np.ndarray, eb: np.ndarray) -> np.ndarray:
@@ -119,9 +104,9 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
         cos_a = np.einsum('ij,ij->i', ea, eb) / (na * nb + 1e-12)
         return np.arccos(np.clip(cos_a, -1.0, 1.0))
 
-    angles_v0 = _corner_angles(v1 - v0, v2 - v0)  # [F]
-    angles_v1 = _corner_angles(v0 - v1, v2 - v1)  # [F]
-    angles_v2 = _corner_angles(v0 - v2, v1 - v2)  # [F]
+    angles_v0 = _corner_angles(v1 - v0, v2 - v0)
+    angles_v1 = _corner_angles(v0 - v1, v2 - v1)
+    angles_v2 = _corner_angles(v0 - v2, v1 - v2)
 
     angle_sum = (
         np.bincount(faces[:, 0], weights=angles_v0, minlength=n_verts)
@@ -129,12 +114,11 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
         + np.bincount(faces[:, 2], weights=angles_v2, minlength=n_verts)
     )
 
-    # detect boundary vertices via edge face count
     edges_all = np.concatenate([
         faces[:, [0, 1]],
         faces[:, [1, 2]],
         faces[:, [2, 0]],
-    ], axis=0)  # [3F, 2]
+    ], axis=0)
     edges_sorted = np.sort(edges_all, axis=1)
     encoded = edges_sorted[:, 0] * n_verts + edges_sorted[:, 1]
     unique_enc, counts = np.unique(encoded, return_counts=True)
@@ -149,24 +133,22 @@ def compute_vertex_gaussian_curvature(mesh: trimesh.Trimesh) -> np.ndarray:
     return curvatures.astype(np.float32)
 
 
-def _zscore_clip_normalize(values: np.ndarray, clip_range: float = 3.0) -> np.ndarray:
+def _zscore_clip_normalize(values: np.ndarray) -> np.ndarray:
     mean = values.mean()
     std = values.std() + 1e-8
     z = (values - mean) / std
-    z = np.clip(z, -clip_range, clip_range)
-    return (z / clip_range).astype(np.float32)
+    z = np.clip(z, -ZSCORE_CLIP_RANGE, ZSCORE_CLIP_RANGE)
+    return (z / ZSCORE_CLIP_RANGE).astype(np.float32)
 
 
 
 
 def _generate_hemisphere_samples(n_samples: int, rng: np.random.Generator) -> np.ndarray:
-    """Generate uniformly distributed points on the upper hemisphere (z >= 0)."""
-    # Fibonacci hemisphere sampling for deterministic, well-distributed points
     samples = np.zeros((n_samples, 3), dtype=np.float64)
     golden_ratio = (1 + np.sqrt(5)) / 2
 
     for i in range(n_samples):
-        theta = np.arccos(1 - (i + 0.5) / n_samples)  # [0, pi/2] for hemisphere
+        theta = np.arccos(1 - (i + 0.5) / n_samples)
         phi = 2 * np.pi * i / golden_ratio
         samples[i] = [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
 
@@ -174,7 +156,6 @@ def _generate_hemisphere_samples(n_samples: int, rng: np.random.Generator) -> np
 
 
 def _rotation_matrix_to_align(from_vec: np.ndarray, to_vec: np.ndarray) -> np.ndarray:
-    """Rotation matrix that aligns from_vec to to_vec using Rodrigues' formula."""
     from_vec = from_vec / (np.linalg.norm(from_vec) + 1e-12)
     to_vec = to_vec / (np.linalg.norm(to_vec) + 1e-12)
 
@@ -184,7 +165,6 @@ def _rotation_matrix_to_align(from_vec: np.ndarray, to_vec: np.ndarray) -> np.nd
     if dot > 0.9999:
         return np.eye(3)
     if dot < -0.9999:
-        # 180-degree rotation — find perpendicular axis
         perp = np.array([1, 0, 0]) if abs(from_vec[0]) < 0.9 else np.array([0, 1, 0])
         perp = perp - np.dot(perp, from_vec) * from_vec
         perp /= np.linalg.norm(perp) + 1e-12
@@ -226,12 +206,7 @@ def _orthonormal_basis(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return t1, t2
 
 
-def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
-    """Ambient occlusion per vertex via raycasting.
-
-    AO = fraction of hemisphere rays that hit other geometry.
-    Raises RuntimeError if no working ray intersector is available.
-    """
+def compute_vertex_ao(mesh: trimesh.Trimesh) -> np.ndarray:
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64)
     n_verts = len(vertices)
@@ -240,10 +215,9 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
     epsilon = 1e-4 * bbox_diag
 
     rng = np.random.default_rng(42)
-    hemisphere_samples = _generate_hemisphere_samples(n_rays, rng)
+    hemisphere_samples = _generate_hemisphere_samples(AO_RAY_COUNT, rng)
     z_axis = np.array([0.0, 0.0, 1.0])
 
-    # try ray intersection — validate with a test ray before committing
     intersector = None
     for loader in [
         lambda: __import__('trimesh.ray.ray_pyembree', fromlist=['RayMeshIntersector']).RayMeshIntersector,
@@ -252,7 +226,6 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
         try:
             cls = loader()
             candidate = cls(mesh)
-            # smoke test: single ray to verify dependencies are working
             test_origin = vertices[0:1] + normals[0:1] * epsilon
             test_dir = normals[0:1]
             candidate.intersects_any(test_origin, test_dir)
@@ -291,7 +264,7 @@ def compute_vertex_ao(mesh: trimesh.Trimesh, n_rays: int = 32) -> np.ndarray:
             hits = intersector.intersects_any(batch_origins, batch_directions)
         except Exception as exc:
             raise RuntimeError(f'AO raycasting failed at batch {batch_start}: {exc}') from exc
-        hits = hits.reshape(batch_end - batch_start, n_rays)
+        hits = hits.reshape(batch_end - batch_start, AO_RAY_COUNT)
         ao_values[batch_start:batch_end] = hits.mean(axis=1)
 
     return ao_values
@@ -304,7 +277,6 @@ def compute_edge_sdf(
     unique_edges: np.ndarray,
     edge_to_faces: dict,
 ) -> np.ndarray:
-    """Inward ray thickness proxy per edge, normalized by bounding-box diagonal."""
     n_edges = len(unique_edges)
     if n_edges == 0:
         return np.zeros(0, dtype=np.float32)
@@ -380,8 +352,10 @@ def compute_edge_sdf(
         flat_directions[first_valid_ray:first_valid_ray + 1],
     )
     if intersector is None:
-        print('  [thickness_sdf] raycasting unavailable, using fallback distance')
-        return np.ones(n_edges, dtype=np.float32)
+        raise RuntimeError(
+            'thickness_sdf raycasting requires pyembree or trimesh ray_triangle; '
+            'install pyembree or ensure trimesh ray_triangle is functional.'
+        )
 
     try:
         hit_faces, hit_rays, hit_locations = intersector.intersects_id(
@@ -390,9 +364,8 @@ def compute_edge_sdf(
             multiple_hits=True,
             return_locations=True,
         )
-    except Exception:
-        print('  [thickness_sdf] raycasting failed, using fallback distance')
-        return np.ones(n_edges, dtype=np.float32)
+    except Exception as exc:
+        raise RuntimeError(f'thickness_sdf raycasting failed: {exc}') from exc
 
     nearest_by_ray = np.full(len(flat_origins), np.inf, dtype=np.float64)
     for face_idx, ray_idx, location in zip(hit_faces, hit_rays, hit_locations):
@@ -425,8 +398,6 @@ def compute_edge_sdf(
 def detect_symmetry_axis(
     mesh: trimesh.Trimesh, threshold_ratio: float = 0.8
 ) -> int | None:
-    """Detect dominant mirror symmetry axis (0=X, 1=Y, 2=Z).
-    Returns None if no axis has a match ratio above threshold."""
     if cKDTree is None:
         return None
 
@@ -457,7 +428,6 @@ def detect_symmetry_axis(
 def compute_symmetry_distance(
     mesh: trimesh.Trimesh, unique_edges: np.ndarray
 ) -> np.ndarray:
-    """Feature 10: distance from edge midpoint to nearest symmetry plane, normalized to [0, 1]."""
     axis = detect_symmetry_axis(mesh)
     if axis is None:
         return np.full(len(unique_edges), 0.5, dtype=np.float32)
@@ -470,7 +440,6 @@ def compute_symmetry_distance(
 
 
 def compute_vertex_support_area(mesh: trimesh.Trimesh) -> np.ndarray:
-    """One-third incident face area per vertex on the feature mesh topology."""
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(mesh.vertices)
     support = np.zeros(n_verts, dtype=np.float64)
@@ -503,39 +472,32 @@ def _two_ring_neighborhood(adjacency: list[set[int]], vertex_idx: int) -> set[in
     return neighborhood
 
 
-def compute_vertex_relative_density(mesh: trimesh.Trimesh, eps: float = DENSITY_CONFIG['eps']) -> np.ndarray:
-    """Topology-local relative density from 2-ring median scale versus local scale."""
+def compute_vertex_relative_density(mesh: trimesh.Trimesh) -> np.ndarray:
     faces = np.asarray(mesh.faces, dtype=np.int64)
     n_verts = len(mesh.vertices)
     support_area = compute_vertex_support_area(mesh)
-    local_scale = np.sqrt(support_area + eps)
+    local_scale = np.sqrt(support_area + DENSITY_EPS)
     adjacency = _build_vertex_adjacency(faces, n_verts)
 
     density = np.zeros(n_verts, dtype=np.float64)
     for vertex_idx in range(n_verts):
         neighborhood = _two_ring_neighborhood(adjacency, vertex_idx)
         median_scale = float(np.median(local_scale[list(neighborhood)]))
-        density[vertex_idx] = np.log(median_scale + eps) - np.log(local_scale[vertex_idx] + eps)
+        density[vertex_idx] = np.log(median_scale + DENSITY_EPS) - np.log(local_scale[vertex_idx] + DENSITY_EPS)
     return density.astype(np.float32)
 
 
-def _normalize_vertex_relative_density(
-    vertex_density: np.ndarray,
-    density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
-) -> np.ndarray:
-    """Bound raw log-ratio density before edge-level aggregation."""
-    clipped = np.clip(vertex_density, -density_log_clip, density_log_clip)
-    return (clipped / density_log_clip).astype(np.float32)
+def _normalize_vertex_relative_density(vertex_density: np.ndarray) -> np.ndarray:
+    clipped = np.clip(vertex_density, -DENSITY_LOG_CLIP, DENSITY_LOG_CLIP)
+    return (clipped / DENSITY_LOG_CLIP).astype(np.float32)
 
 
 def compute_edge_relative_density(
     mesh: trimesh.Trimesh,
     unique_edges: np.ndarray,
-    eps: float = DENSITY_CONFIG['eps'],
-    density_log_clip: float = DENSITY_CONFIG['density_log_clip'],
 ) -> tuple[np.ndarray, np.ndarray]:
-    vertex_density_raw = compute_vertex_relative_density(mesh, eps=eps)
-    vertex_density = _normalize_vertex_relative_density(vertex_density_raw, density_log_clip)
+    vertex_density_raw = compute_vertex_relative_density(mesh)
+    vertex_density = _normalize_vertex_relative_density(vertex_density_raw)
     vi = unique_edges[:, 0]
     vj = unique_edges[:, 1]
     density_i = vertex_density[vi]
@@ -549,7 +511,9 @@ def _normalized_vertex_basics(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.nda
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     normals = np.asarray(mesh.vertex_normals, dtype=np.float64).astype(np.float32)
 
-    com = mesh.center_mass if hasattr(mesh, 'center_mass') else verts.mean(axis=0)
+    com = mesh.center_mass if bool(getattr(mesh, 'is_volume', False)) else verts.mean(axis=0)
+    if not np.all(np.isfinite(com)):
+        com = verts.mean(axis=0)
     bbox_diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]) + 1e-8
     pos_norm = ((verts - com) / bbox_diag).astype(np.float32)
 
@@ -575,12 +539,6 @@ def _ordered_endpoint_features(
         vi[swap], vj[swap] = vj[swap], vi[swap]
 
     return vertex_features[vi], vertex_features[vj]
-
-
-def _resolve_endpoint_order_for_features(feature_group: str, endpoint_order: str) -> str:
-    if endpoint_order != 'auto':
-        return endpoint_order
-    return 'random' if feature_group == 'paper14' else 'fixed'
 
 
 def _compute_atomic_edge_columns(
@@ -612,7 +570,7 @@ def _compute_atomic_edge_columns(
         columns[name] = vj_base[:, col_idx].astype(np.float32)
 
     if 'ao_i' in feature_names or 'ao_j' in feature_names:
-        ao = compute_vertex_ao(mesh, n_rays=32)[:, None]
+        ao = compute_vertex_ao(mesh)[:, None]
         vi_ao, vj_ao = _ordered_endpoint_features(ao, unique_edges, endpoint_order, rng_seed)
         columns['ao_i'] = vi_ao[:, 0].astype(np.float32)
         columns['ao_j'] = vj_ao[:, 0].astype(np.float32)
@@ -640,7 +598,7 @@ def compute_edge_features_for_selection(
     endpoint_order: str = 'auto',
     rng_seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    endpoint_order = _resolve_endpoint_order_for_features(selection.feature_group, endpoint_order)
+    endpoint_order = resolve_endpoint_order(selection.feature_group, endpoint_order)
     unique_edges, edge_to_faces = build_edge_topology(mesh)
     columns = _compute_atomic_edge_columns(
         mesh,
@@ -656,21 +614,18 @@ def compute_edge_features_for_selection(
 
 def compute_edge_features(
     mesh: trimesh.Trimesh,
-    feature_preset: str = 'paper14',
+    feature_group: str = 'paper14',
     endpoint_order: str = 'auto',
     rng_seed: int = 42,
     *,
-    feature_group: str | None = None,
     enable_ao: bool = False,
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
     enable_density: bool = False,
     enable_thickness_sdf: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Backward-compatible wrapper for resolved edge feature computation."""
-    group = feature_group if feature_group is not None else feature_preset
     selection = resolve_feature_selection(
-        group,
+        feature_group,
         enable_ao=enable_ao,
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,
@@ -678,6 +633,7 @@ def compute_edge_features(
         enable_thickness_sdf=enable_thickness_sdf,
     )
     return compute_edge_features_for_selection(mesh, selection, endpoint_order=endpoint_order, rng_seed=rng_seed)
+
 
 FEATURE_NAMES = PAPER14_FEATURE_NAMES
 

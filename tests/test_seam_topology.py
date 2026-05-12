@@ -15,13 +15,11 @@ from models.utils.seam_topology import (
     TopologyPipelineResult,
     apply_topology_pipeline,
     build_seam_graph_view,
-    build_skeleton_subgraph,
     boundary_vertices_from_topology,
     compute_endpoint_bridging,
     compute_spur_pruning,
     compute_topology_preserving_skeleton,
     compute_seam_mask_diagnostics,
-    diagnose_bridging_application,
     diagnose_pruning_application,
     diagnose_skeleton_application,
     diagnostics_to_json_dict,
@@ -705,13 +703,6 @@ class SkeletonTests(unittest.TestCase):
         self.assertGreater(saturated_result.removals_committed, 0)
 
     def test_skeleton_thins_saturated_thick_band(self):
-        """
-        REGRESSION GUARD for the saturated-probability anchor bug.
-        Under the original implementation, a thick band with all
-        probabilities >= 0.95 was frozen because every vertex was an anchor.
-        Under the corrected implementation, anchors are structural, so the
-        band is thinned regardless of probability magnitude.
-        """
         coords = [
             (0.0, 1.0, 0.0),
             (1.0, 1.0, 0.0),
@@ -1138,7 +1129,6 @@ class EndpointBridgingTests(unittest.TestCase):
             output_json=Path('prediction.json'),
             weights_path=Path('weights.pt'),
             config_path=Path('config.json'),
-            summary_path=Path('summary.json'),
             model_type='graphsage',
             feature_bundle='paper14',
             selection=SimpleNamespace(feature_group='paper14', feature_names=(), feature_count=0),
@@ -1557,7 +1547,6 @@ class PruningTests(unittest.TestCase):
         self.assertEqual([report['branches_pruned'] for report in result.iteration_reports], [3, 0])
 
     def test_pruning_protects_boundary_anchor_leaf(self):
-        """A short stick ending at a boundary anchor is still pruned from the unanchored leaf."""
         view, topology = self._grid_view()
         seam_edges = {(1, 5), (5, 6)}
         bridging = self._bridging_result(view, seam_edges)
@@ -1847,13 +1836,8 @@ class PipelineTests(unittest.TestCase):
                 'r_bridge',
                 'l_min',
                 'anchor_boundary',
-                'max_bridge_edges',
                 'max_bridge_euclidean_ratio',
-                'max_debug_candidates',
-                'max_endpoint_candidates',
                 'min_loop_size_to_allow',
-                'require_mutual_pairing',
-                'tangent_alignment_weight',
             },
         )
         self.assertIn('component_reports', payload['bridging'])

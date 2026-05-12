@@ -4,9 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh, parse_obj
-except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/topology.py`
-    from obj_parser import ObjCorner, ObjFace, ObjMesh, parse_obj
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
+from preprocessing.obj_parser import ObjCorner, ObjFace, ObjMesh, parse_obj  # noqa: E402
 
 
 class TopologyError(ValueError):

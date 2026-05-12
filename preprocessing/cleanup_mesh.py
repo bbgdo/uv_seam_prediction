@@ -21,10 +21,10 @@ def reset_scene():
     bpy.ops.object.delete()
 
     for collection in [bpy.data.meshes, bpy.data.materials, bpy.data.textures, bpy.data.images, bpy.data.libraries]:
-        for item in collection:
+        for item in list(collection):
             try:
                 collection.remove(item)
-            except:
+            except Exception:
                 pass
 
 
@@ -56,6 +56,7 @@ def robust_cleanup_and_triangulate():
     bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
 
     bpy.ops.object.mode_set(mode='OBJECT')
+    return True
 
 
 def export_obj_modern(out_path):
@@ -94,7 +95,7 @@ def process_directory(input_path_arg):
 
     files = [f for f in os.listdir(input_dir) if f.lower().endswith('.obj')]
 
-    print(f"\n=== Geometry Cleanup Pipeline (Native) ===")
+    print("\n=== Geometry Cleanup Pipeline (Native) ===")
     print(f"Input: {input_dir}")
     print(f"Output: {output_dir}")
     print(f"Files: {len(files)}")
@@ -116,8 +117,8 @@ def process_directory(input_path_arg):
                 bpy.ops.wm.obj_import(filepath=full_path)
             else:
                 bpy.ops.import_scene.obj(filepath=full_path)
-        except Exception as e:
-            print(f"FAIL (Import Error)")
+        except Exception:
+            print("FAIL (Import Error)")
             fail_count += 1
             continue
 
@@ -135,7 +136,7 @@ def process_directory(input_path_arg):
             print(f"FAIL (Processing Error: {e})")
             fail_count += 1
 
-    print(f"\n=== Done ===")
+    print("\n=== Done ===")
     print(f"Processed: {success_count}")
     print(f"Failed: {fail_count}")
 

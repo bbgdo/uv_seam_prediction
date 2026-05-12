@@ -10,13 +10,13 @@ import torch
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.obj_parser import parse_obj
 from preprocessing.build_gnn_dataset import (
-    _build_feature_mesh_from_topology,
     build_dual_data,
     main as build_dataset_main,
     manifest_path_for_dataset,
     process_mesh,
     validate_saved_gnn_feature_metadata,
 )
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES
 from preprocessing.seam_labels import extract_seam_truth
 from preprocessing.topology import WeldConfig, build_topology
@@ -53,6 +53,16 @@ def _mesh_dir(text: str):
         yield mesh_dir
 
 
+@contextmanager
+def _mesh_dir_with_files(files: dict[str, str]):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mesh_dir = Path(temp_dir) / 'meshes'
+        mesh_dir.mkdir()
+        for name, text in files.items():
+            (mesh_dir / name).write_text(text, encoding='utf-8')
+        yield mesh_dir
+
+
 def _topology_and_truth(path: Path):
     topology = build_topology(parse_obj(path), WeldConfig.exact())
     return topology, extract_seam_truth(topology)
@@ -65,7 +75,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
 
             data = process_mesh(
                 path,
-                feature_preset='paper14',
+                feature_group='paper14',
                 endpoint_order='fixed',
             )
 
@@ -83,7 +93,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
 
             data = process_mesh(
                 path,
-                feature_preset='paper14',
+                feature_group='paper14',
                 endpoint_order='fixed',
             )
 
@@ -103,14 +113,14 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             data = process_mesh(
                 path,
-                feature_preset='paper14',
+                feature_group='paper14',
                 endpoint_order='fixed',
             )
             edge_count = len(data.unique_edges)
 
             self.assertEqual(data.file_path, str(path))
             self.assertEqual(data.label_source, 'exact_obj')
-            self.assertEqual(data.feature_preset, 'paper14')
+            self.assertEqual(data.feature_group, 'paper14')
             self.assertEqual(data.endpoint_order, 'fixed')
             self.assertEqual(data.weld_mode, 'exact')
             self.assertEqual(data.unique_edges.shape, (edge_count, 2))
@@ -121,7 +131,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             data = process_mesh(
                 path,
-                feature_preset='paper14',
+                feature_group='paper14',
                 endpoint_order='fixed',
             )
 
@@ -130,11 +140,11 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
     def test_feature_mesh_from_canonical_topology_preserves_edge_order(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             topology, _ = _topology_and_truth(path)
-            feature_mesh = _build_feature_mesh_from_topology(topology)
+            feature_mesh = build_feature_mesh_from_topology(topology)
 
             _, unique_edges, _ = compute_edge_features(
                 feature_mesh,
-                feature_preset='paper14',
+                feature_group='paper14',
                 endpoint_order='fixed',
             )
 
@@ -148,7 +158,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             build_dataset_main([
                 str(mesh_dir),
                 '--max-meshes', '1',
-                '--feature-preset', 'paper14',
+                '--feature-group', 'paper14',
                 '--endpoint-order', 'fixed',
                 '--save',
                 '--output', str(output_path),
@@ -164,11 +174,32 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertEqual(dataset[0].graph_format, 'dual_edge_graph')
             self.assertEqual(dataset[0].x.shape[1], len(dataset[0].feature_names))
 
+    def test_builder_processes_all_meshes_by_default(self):
+        with _mesh_dir_with_files({
+            'a.obj': NON_SEAM_SHARED_EDGE,
+            'b.obj': NON_SEAM_SHARED_EDGE,
+        }) as mesh_dir:
+            output_path = mesh_dir.parent / 'dataset_v2_exact_labels.pt'
+
+            build_dataset_main([
+                str(mesh_dir),
+                '--feature-group', 'paper14',
+                '--endpoint-order', 'fixed',
+                '--save',
+                '--output', str(output_path),
+            ])
+
+            dataset = torch.load(output_path, weights_only=False)
+            manifest = json.loads(manifest_path_for_dataset(output_path).read_text(encoding='utf-8'))
+
+            self.assertEqual(len(dataset), 2)
+            self.assertEqual(manifest['mesh_count'], 2)
+
     def test_exact_obj_manifest_has_required_fields(self):
         required_top_level = {
             'dataset_path',
             'label_source',
-            'feature_preset',
+            'feature_group',
             'endpoint_order',
             'weld_mode',
             'mesh_count',
@@ -195,7 +226,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             build_dataset_main([
                 str(mesh_dir),
                 '--max-meshes', '1',
-                '--feature-preset', 'paper14',
+                '--feature-group', 'paper14',
                 '--endpoint-order', 'fixed',
                 '--save',
                 '--output', str(output_path),
@@ -206,7 +237,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertTrue(required_top_level.issubset(manifest.keys()))
             self.assertTrue(required_mesh_fields.issubset(manifest['meshes'][0].keys()))
             self.assertEqual(manifest['label_source'], 'exact_obj')
-            self.assertEqual(manifest['feature_preset'], 'paper14')
+            self.assertEqual(manifest['feature_group'], 'paper14')
             self.assertEqual(manifest['endpoint_order'], 'fixed')
             self.assertEqual(manifest['weld_mode'], 'exact')
             self.assertEqual(manifest['graph_format'], 'dual_edge_graph')
@@ -218,32 +249,25 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
             self.assertAlmostEqual(manifest['aggregate_seam_ratio'], 4 / 5)
             self.assertAlmostEqual(manifest['aggregate_pos_weight'], 1 / 4)
 
-    def test_custom_without_optional_flags_saves_only_base_dual_features(self):
+    def test_custom_without_optional_flags_raises(self):
         with _mesh_dir(NON_SEAM_SHARED_EDGE) as mesh_dir:
             output_path = mesh_dir.parent / 'custom_base.pt'
-            build_dataset_main([
-                str(mesh_dir),
-                '--max-meshes', '1',
-                '--feature-group', 'custom',
-                '--endpoint-order', 'fixed',
-                '--save',
-                '--output', str(output_path),
-            ])
-
-            dataset = torch.load(output_path, weights_only=False)
-            data = dataset[0]
-
-            self.assertEqual(data.graph_format, 'dual_edge_graph')
-            self.assertEqual(data.feature_group, 'custom')
-            self.assertEqual(data.feature_names, list(PAPER14_FEATURE_NAMES))
-            self.assertEqual(data.x.shape[1], 14)
-            self.assertEqual(len(data.feature_names), data.x.shape[1])
+            with self.assertRaises(SystemExit) as caught:
+                build_dataset_main([
+                    str(mesh_dir),
+                    '--max-meshes', '1',
+                    '--feature-group', 'custom',
+                    '--endpoint-order', 'fixed',
+                    '--save',
+                    '--output', str(output_path),
+                ])
+            self.assertEqual(caught.exception.code, 2)
 
     def test_saved_gnn_feature_metadata_validation_rejects_x_mismatch(self):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             data = build_dual_data(process_mesh(
                 path,
-                feature_group='custom',
+                feature_group='paper14',
                 endpoint_order='fixed',
             ))
         data.feature_names = [*data.feature_names, 'extra_uncomputed_feature']
@@ -255,7 +279,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
         with _obj_file(NON_SEAM_SHARED_EDGE) as path:
             data = process_mesh(
                 path,
-                feature_preset='paper14',
+                feature_group='paper14',
                 endpoint_order='fixed',
             )
 
@@ -263,7 +287,7 @@ class ExactObjDatasetGraphTests(unittest.TestCase):
 
             self.assertEqual(dual.file_path, str(path))
             self.assertEqual(dual.label_source, 'exact_obj')
-            self.assertEqual(dual.feature_preset, 'paper14')
+            self.assertEqual(dual.feature_group, 'paper14')
             self.assertEqual(dual.endpoint_order, 'fixed')
             self.assertEqual(dual.weld_mode, 'exact')
             self.assertEqual(dual.seam_edge_count, data.seam_edge_count)

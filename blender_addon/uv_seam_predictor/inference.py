@@ -6,6 +6,9 @@ import time
 from dataclasses import dataclass
 
 
+LOG_TAIL_CHARS = 4000
+
+
 @dataclass
 class InferenceJob:
     temp_dir: str
@@ -55,7 +58,6 @@ def build_cli_args(prefs, settings, obj_path, json_path):
         '--postprocess-l-min',
         str(settings.postprocess_l_min),
     ])
-    # BooleanOptionalAction: emit a single token, no separate value.
     if settings.postprocess_anchor_boundary:
         args.append('--postprocess-anchor-boundary')
     else:
@@ -109,12 +111,9 @@ def has_timed_out(job):
     return time.monotonic() - job.start_time > job.timeout_sec
 
 
-def terminate_job(job, kill=False):
+def terminate_job(job):
     if job.process.poll() is None:
-        if kill:
-            job.process.kill()
-        else:
-            job.process.terminate()
+        job.process.terminate()
         try:
             job.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -135,9 +134,9 @@ def cleanup_job(job, keep_temp_files=False):
         shutil.rmtree(job.temp_dir)
 
 
-def read_text_tail(path, max_chars=4000):
+def read_text_tail(path):
     if not os.path.exists(path):
         return ''
-    with open(path, 'r', encoding='utf-8', errors='replace') as file:
+    with open(path, encoding='utf-8', errors='replace') as file:
         data = file.read()
-    return data[-max_chars:].strip()
+    return data[-LOG_TAIL_CHARS:].strip()

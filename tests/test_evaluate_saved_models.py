@@ -8,7 +8,6 @@ import numpy as np
 import torch
 
 from tools.evaluate_saved_models import (
-    _best_threshold_index,
     aggregate_reevaluations,
     build_report_grid,
     compute_threshold_metrics_fast,
@@ -16,6 +15,8 @@ from tools.evaluate_saved_models import (
     exact_validation_threshold,
     load_reference_control_reevaluations,
 )
+from tools.utils.reeval_runs import feature_selection_from_config, load_state_dict, runtime_config_from_saved
+from tools.utils.reeval_thresholds import best_threshold_index
 
 
 def _metrics(
@@ -165,6 +166,41 @@ def _bruteforce_exact_threshold(probs: np.ndarray, labels: np.ndarray) -> dict:
 
 
 class EvaluateSavedModelsTests(unittest.TestCase):
+    def test_feature_selection_from_config_includes_thickness_sdf(self):
+        selection = feature_selection_from_config({
+            'feature_group': 'custom',
+            'feature_flags': {
+                'thickness_sdf': True,
+            },
+        })
+
+        self.assertEqual(selection.feature_group, 'custom')
+        self.assertTrue(selection.feature_flags.thickness_sdf)
+        self.assertIn('thickness_sdf', selection.feature_names)
+
+    def test_runtime_config_from_saved_preserves_graphsage_aggregation_when_present(self):
+        config = runtime_config_from_saved({
+            'model_name': 'graphsage',
+            'hidden_dim': 8,
+            'num_layers': 1,
+            'in_dim': 14,
+            'dropout': 0.1,
+            'skip_connections': 'hidden',
+            'aggr': 'mean',
+        })
+
+        self.assertEqual(config.aggr, 'mean')
+
+    def test_load_state_dict_rejects_wrapper_checkpoints(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'best_model.pth'
+            torch.save({'weight': torch.zeros(1)}, path)
+            self.assertIn('weight', load_state_dict(path, torch.device('cpu')))
+
+            torch.save({'state_dict': {'weight': torch.zeros(1)}}, path)
+            with self.assertRaisesRegex(ValueError, 'state dict'):
+                load_state_dict(path, torch.device('cpu'))
+
     def test_fast_threshold_matches_bruteforce_on_synthetic_example(self):
         probs = np.array([0.91, 0.83, 0.76, 0.65, 0.42, 0.21])
         labels = np.array([1, 0, 1, 1, 0, 0])
@@ -189,7 +225,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertAlmostEqual(result['metrics']['f1'], expected['f1'])
 
     def test_threshold_tie_break_selector_order(self):
-        best_index = _best_threshold_index(
+        best_index = best_threshold_index(
             f1=np.array([0.7, 0.7, 0.7, 0.7]),
             fpr=np.array([0.2, 0.1, 0.1, 0.1]),
             precision=np.array([0.9, 0.8, 0.85, 0.85]),
@@ -250,7 +286,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertEqual(grid[-2:], [0.995, 0.999])
         self.assertEqual(len(grid), 12)
 
-    def test_discover_saved_run_uses_custom_dataset_override(self):
+    def test_discover_saved_run_uses_gnn_dataset_override(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = root / 'experiments' / 'control14' / 'seed_7'
@@ -268,7 +304,6 @@ class EvaluateSavedModelsTests(unittest.TestCase):
                 'feature_group': 'custom',
                 'feature_flags': {},
                 'resolution_tag': 'all',
-                'aggr': 'lstm',
                 'skip_connections': 'all',
             }))
             (run_dir / 'summary.json').write_text(json.dumps({'best_validation_threshold': 0.95}))
@@ -279,7 +314,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             targets = discover_saved_runs(Namespace(
                 runs_root=str(root),
                 splits_dir=str(splits_dir),
-                custom_dataset='custom_override.pt',
+                gnn_dataset='custom_override.pt',
                 experiments=['control14'],
                 seeds=[7],
             ))

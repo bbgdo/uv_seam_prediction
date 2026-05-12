@@ -1,6 +1,5 @@
 import json
 import unittest
-from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -11,9 +10,10 @@ from torch_geometric.data import Data
 
 from models.gatv2.model import DualGATv2
 from models.dual_graphsage.model import DualGraphSAGE
-from models.common.baseline_train import _model_kwargs, apply_runtime_feature_selection, build_runtime_config
-from models.baselines.registry import get_baseline
-from tools.run_baseline import parse_args as parse_baseline_args
+from models.common.gnn_train_data import apply_runtime_feature_selection
+from models.common.gnn_train_runtime import build_runtime_config, logger_config, model_kwargs
+from models.common.gnn_registry import get_gnn_model
+from tools.run_training import parse_args as parse_training_args
 from models.utils.experiment_log import ExperimentLogger
 from preprocessing.compute_features import compute_edge_features
 from preprocessing.feature_registry import get_feature_group, resolve_feature_selection
@@ -52,29 +52,51 @@ def _skewed_density_mesh() -> trimesh.Trimesh:
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
+def _flat_square_mesh() -> trimesh.Trimesh:
+    vertices = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    faces = np.array([
+        [0, 1, 2],
+        [0, 2, 3],
+    ])
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
 class GraphSeamBaselineTests(unittest.TestCase):
-    def test_baseline_registry_exposes_supported_models(self):
-        self.assertIs(get_baseline('graphsage').model_class, DualGraphSAGE)
-        self.assertIs(get_baseline('gatv2').model_class, DualGATv2)
-        self.assertEqual(get_baseline('gatv2').default_config_overrides['hidden_size'], 64)
-        self.assertEqual(get_baseline('gatv2').default_config_overrides['heads'], 4)
+    def test_gnn_registry_exposes_supported_models(self):
+        self.assertIs(get_gnn_model('graphsage').model_class, DualGraphSAGE)
+        self.assertIs(get_gnn_model('gatv2').model_class, DualGATv2)
+        self.assertEqual(get_gnn_model('graphsage').train_config.hidden_size, 128)
+        self.assertEqual(get_gnn_model('gatv2').train_config.hidden_size, 64)
+        self.assertEqual(get_gnn_model('gatv2').train_config.heads, 4)
 
     def test_unified_runner_defaults_graphsage_and_gatv2(self):
-        graphsage_args = parse_baseline_args(['--epochs', '1'])
-        gatv2_args = parse_baseline_args(['--model', 'gatv2', '--epochs', '1'])
+        graphsage_args = parse_training_args(['--epochs', '1'])
+        gatv2_args = parse_training_args(['--model', 'gatv2', '--epochs', '1'])
 
         self.assertEqual(graphsage_args.model, 'graphsage')
         self.assertEqual(graphsage_args.hidden, 128)
-        self.assertEqual(graphsage_args.lr, 1e-3)
+        self.assertEqual(graphsage_args.lr, 3e-4)
         self.assertEqual(gatv2_args.model, 'gatv2')
         self.assertEqual(gatv2_args.hidden, 64)
         self.assertEqual(gatv2_args.heads, 4)
         self.assertEqual(gatv2_args.lr, 3e-4)
 
-    def test_feature_preset_shapes(self):
+    def test_graphsage_default_aggregation_is_lstm_but_mean_artifacts_can_load(self):
+        lstm_model = DualGraphSAGE(in_dim=14, hidden_dim=8, num_layers=1)
+        mean_model = DualGraphSAGE(in_dim=14, hidden_dim=8, num_layers=1, aggr='mean')
+
+        self.assertTrue(any('aggr_module' in key for key in lstm_model.state_dict()))
+        self.assertFalse(any('aggr_module' in key for key in mean_model.state_dict()))
+
+    def test_feature_group_shapes(self):
         mesh = _tiny_mesh()
 
-        paper, edges, _ = compute_edge_features(mesh, feature_preset='paper14', endpoint_order='random')
+        paper, edges, _ = compute_edge_features(mesh, feature_group='paper14', endpoint_order='random')
 
         self.assertEqual(paper.shape, (len(edges), 14))
 
@@ -84,9 +106,10 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             resolve_feature_selection('extended18')
 
-    def test_feature_registry_scaffold_lists_existing_baselines(self):
-        self.assertEqual(get_feature_group('paper14').feature_preset, 'paper14')
-        self.assertEqual(get_feature_group('custom').feature_preset, 'custom')
+    def test_feature_registry_exposes_locked_paper14_bundle(self):
+        self.assertEqual(get_feature_group('paper14').name, 'paper14')
+        with self.assertRaisesRegex(ValueError, 'custom requires'):
+            get_feature_group('custom')
 
     def test_feature_registry_resolves_custom_toggles(self):
         paper = resolve_feature_selection('paper14')
@@ -106,6 +129,10 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(density_only.feature_names[-2:], ('density_mean', 'density_diff'))
         self.assertEqual(combined.feature_count, 19)
 
+    def test_feature_registry_rejects_custom_without_optional_features(self):
+        with self.assertRaisesRegex(ValueError, "custom.*requires at least one optional feature"):
+            resolve_feature_selection('custom')
+
     def test_feature_registry_rejects_toggles_on_locked_bundle(self):
         with self.assertRaisesRegex(ValueError, 'require feature_group=.custom.'):
             resolve_feature_selection('paper14', enable_density=True)
@@ -121,6 +148,13 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
         self.assertEqual(features.shape, (len(edges), 16))
         self.assertTrue(np.isfinite(features[:, -2:]).all())
+
+    def test_paper14_features_are_finite_on_flat_mesh(self):
+        mesh = _flat_square_mesh()
+
+        features, _, _ = compute_edge_features(mesh, feature_group='paper14')
+
+        self.assertTrue(np.isfinite(features).all())
 
     def test_density_features_are_bounded_after_normalization(self):
         mesh = _skewed_density_mesh()
@@ -149,7 +183,6 @@ class GraphSeamBaselineTests(unittest.TestCase):
         )
         data.feature_names = list(resolve_feature_selection('custom', enable_density=True).feature_names)
         data.feature_group = 'custom'
-        data.feature_preset = 'custom'
         data.feature_flags = {'ao': False, 'signed_dihedral': False, 'symmetry': False, 'density': True}
         data.density_config = {'neighborhood': '2-ring'}
 
@@ -185,14 +218,13 @@ class GraphSeamBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
             apply_runtime_feature_selection([data], requested)
 
-    def test_runtime_feature_selection_accepts_paper14_shape(self):
+    def test_runtime_feature_selection_requires_paper14_feature_names(self):
         requested = resolve_feature_selection('paper14')
         data = Data(x=torch.zeros(2, 14))
-        data.feature_preset = 'paper14'
+        data.feature_group = 'paper14'
 
-        apply_runtime_feature_selection([data], requested)
-
-        self.assertEqual(data.x.shape, (2, 14))
+        with self.assertRaisesRegex(ValueError, 'missing feature_names metadata'):
+            apply_runtime_feature_selection([data], requested)
 
     def test_gatv2_forward_returns_one_logit_per_dual_node(self):
         model = DualGATv2(in_dim=14, hidden_dim=32, heads=4, num_layers=3, dropout=0.1)
@@ -207,7 +239,7 @@ class GraphSeamBaselineTests(unittest.TestCase):
         self.assertEqual(out.shape, (5,))
 
     def test_shared_trainer_instantiates_gatv2_with_runtime_dims(self):
-        args = parse_baseline_args([
+        args = parse_training_args([
             '--model', 'gatv2',
             '--epochs', '1',
             '--feature-group', 'custom',
@@ -217,9 +249,9 @@ class GraphSeamBaselineTests(unittest.TestCase):
         selection = resolve_feature_selection('custom', enable_ao=True, enable_density=True)
         args.in_dim = selection.feature_count
         config = build_runtime_config(args)
-        definition = get_baseline(config.model_name)
+        definition = get_gnn_model(config.model_name)
 
-        model = definition.model_class(**_model_kwargs(config))
+        model = definition.model_class(**model_kwargs(config))
         x = torch.randn(4, selection.feature_count)
         edge_index = torch.tensor([
             [0, 1, 2, 3],
@@ -228,12 +260,36 @@ class GraphSeamBaselineTests(unittest.TestCase):
 
         self.assertEqual(model(x, edge_index).shape, (4,))
 
+    def test_gnn_logger_config_uses_canonical_metadata_fields(self):
+        args = parse_training_args([
+            '--model', 'gatv2',
+            '--feature-group', 'custom',
+            '--enable-ao',
+            '--resolution-tag', 'all',
+        ])
+        config = build_runtime_config(args)
+        payload = logger_config(
+            args,
+            config,
+            'GATv2',
+            torch.tensor([1.0]),
+            {'train': [], 'val': [], 'test': []},
+            {'graph_count': 0},
+            0,
+            33,
+            (0, 0, 0),
+        )
+
+        self.assertEqual(payload['hidden_dim'], config.hidden_size)
+        self.assertEqual(payload['resolution_tag'], 'all')
+        self.assertNotIn('hidden', payload)
+        self.assertNotIn('resolution_selector', payload)
+
     def test_lstm_graphsage_forward(self):
         model = DualGraphSAGE(
             in_dim=14,
             hidden_dim=64,
             num_layers=3,
-            aggr='lstm',
             skip_connections='all',
         )
         x = torch.randn(5, 14)

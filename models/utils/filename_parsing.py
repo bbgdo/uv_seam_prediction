@@ -17,12 +17,6 @@ DEFAULT_RESOLUTION_PATTERNS = (
 
 
 @dataclass(frozen=True)
-class FilenameParseConfig:
-    augmentation_pattern: str = DEFAULT_AUGMENTATION_PATTERN
-    resolution_patterns: tuple[str, ...] = DEFAULT_RESOLUTION_PATTERNS
-
-
-@dataclass(frozen=True)
 class MeshNameInfo:
     stem: str
     family_id: str
@@ -44,16 +38,14 @@ def _stem_from_path_or_name(path_or_name: str | Path) -> str:
     return Path(name).stem
 
 
-def parse_mesh_name(path_or_name: str | Path, config: FilenameParseConfig | None = None) -> MeshNameInfo:
-    """Parse mesh names for family-level dataset grouping."""
-    config = config or FilenameParseConfig()
+def parse_mesh_name(path_or_name: str | Path) -> MeshNameInfo:
     stem = _stem_from_path_or_name(path_or_name)
     family_id = stem
     resolution_tag = None
     is_augmented = False
 
-    aug_re = re.compile(config.augmentation_pattern, flags=re.IGNORECASE)
-    resolution_res = [re.compile(pattern, flags=re.IGNORECASE) for pattern in config.resolution_patterns]
+    aug_re = re.compile(DEFAULT_AUGMENTATION_PATTERN, flags=re.IGNORECASE)
+    resolution_res = [re.compile(pattern, flags=re.IGNORECASE) for pattern in DEFAULT_RESOLUTION_PATTERNS]
 
     previous = None
     while family_id and family_id != previous:

@@ -30,8 +30,6 @@ def export_object_to_obj_with_hidden_triangulation(obj, output_path):
             file.write(f'o {obj.name}\n')
 
             for vertex in sorted(bm.verts, key=lambda item: item.index):
-                # Keep model input in the mesh's authored coordinate basis. Object
-                # location, rotation, and scale are viewport transforms here.
                 co = vertex.co
                 file.write(f'v {co.x:.9g} {co.y:.9g} {co.z:.9g}\n')
 

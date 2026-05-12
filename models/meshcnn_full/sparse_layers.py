@@ -13,7 +13,6 @@ def _norm(channels: int, norm: str | None) -> nn.Module:
 
 
 class SparseMeshConv(nn.Module):
-    """MeshCNN symmetric edge patch implemented with sparse slot selectors."""
 
     def __init__(
         self,
@@ -73,9 +72,9 @@ class SparseMeshConvBlock(nn.Module):
 
 
 class SparseMeshPool(nn.Module):
-    """Learned gated averaging over a fixed sparse fine-to-coarse assignment."""
+    EPS = 1e-8
 
-    def __init__(self, channels: int, eps: float = 1e-8):
+    def __init__(self, channels: int):
         super().__init__()
         hidden = max(int(channels) // 2, 1)
         self.gate = nn.Sequential(
@@ -83,7 +82,6 @@ class SparseMeshPool(nn.Module):
             nn.GELU(),
             nn.Linear(hidden, 1),
         )
-        self.eps = float(eps)
         self._last_debug: dict[str, int] = {}
 
     def forward(self, x: torch.Tensor, pool_map: torch.Tensor) -> torch.Tensor:
@@ -99,7 +97,7 @@ class SparseMeshPool(nn.Module):
             dtype=x.dtype,
         ).coalesce()
         mass = torch.sparse.mm(gated_pool, torch.ones((x.shape[0], 1), dtype=x.dtype, device=x.device))
-        pooled = torch.sparse.mm(gated_pool, x) / mass.clamp_min(self.eps)
+        pooled = torch.sparse.mm(gated_pool, x) / mass.clamp_min(self.EPS)
         self._last_debug = {
             'input_edges': int(x.shape[0]),
             'output_edges': int(pooled.shape[0]),

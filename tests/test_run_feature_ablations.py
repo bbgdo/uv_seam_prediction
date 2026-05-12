@@ -31,20 +31,10 @@ from tools.run_feature_ablations import (
     split_path_for_seed,
     validate_dataset_roles,
     validate_experiment_selection,
-    validate_custom_dataset_metadata,
+    validate_gnn_dataset_metadata,
     validate_meshcnn_dataset_metadata,
     validate_split_files,
 )
-
-
-def _paper_data(endpoint_order: str = 'random', feature_group: str = 'paper14') -> Data:
-    data = Data(x=torch.zeros(2, len(PAPER14_FEATURE_NAMES)))
-    data.file_path = 'mesh_0.obj'
-    data.feature_group = feature_group
-    data.feature_preset = 'paper14'
-    data.feature_names = list(PAPER14_FEATURE_NAMES)
-    data.endpoint_order = endpoint_order
-    return data
 
 
 def _custom_data(feature_names: list[str] | None = None, endpoint_order: str = 'random') -> Data:
@@ -59,7 +49,6 @@ def _custom_data(feature_names: list[str] | None = None, endpoint_order: str = '
     data = Data(x=torch.zeros(2, len(names)))
     data.file_path = 'mesh_0.obj'
     data.feature_group = 'custom'
-    data.feature_preset = 'custom'
     data.feature_names = names
     data.endpoint_order = endpoint_order
     return data
@@ -88,7 +77,6 @@ def _meshcnn_sample(feature_names: list[str] | None = None, endpoint_order: str 
         boundary_mask=torch.ones(edge_count, dtype=torch.bool),
         file_path='mesh_0.obj',
         feature_group='custom',
-        feature_preset='custom',
         feature_names=names,
         feature_flags={},
         endpoint_order=endpoint_order,
@@ -100,7 +88,7 @@ def _summary(seed: int, fpr_best: float, f1_best: float, fpr_05: float, f1_05: f
     return {
         'best_epoch': seed + 1,
         'best_validation_threshold': 0.6,
-        'resolution_selector': 'all',
+        'resolution_tag': 'all',
         'filtered_graph_count': 4,
         'test_metrics_threshold_0_5': {
             'f1': f1_05,
@@ -177,16 +165,16 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertEqual(sdf_density.feature_names[-3:], ('density_mean', 'density_diff', 'thickness_sdf'))
 
     def test_endpoint_order_safety_checks(self):
-        validate_custom_dataset_metadata([_custom_data()], ['ao_dihedral'])
-        validate_custom_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
+        validate_gnn_dataset_metadata([_custom_data()], ['ao_dihedral'])
+        validate_gnn_dataset_metadata([_custom_data(endpoint_order='fixed')], ['control14'])
         validate_meshcnn_dataset_metadata([_meshcnn_sample(endpoint_order='fixed')], ['control14'])
 
         with self.assertRaisesRegex(ValueError, "endpoint_order must be one of"):
-            validate_custom_dataset_metadata([_custom_data(endpoint_order='invalid')], ['control14'])
+            validate_gnn_dataset_metadata([_custom_data(endpoint_order='invalid')], ['control14'])
 
     def test_failure_on_missing_features_or_wrong_dataset_metadata(self):
         with self.assertRaisesRegex(ValueError, 'missing requested feature'):
-            validate_custom_dataset_metadata(
+            validate_gnn_dataset_metadata(
                 [_custom_data(list(PAPER14_FEATURE_NAMES))],
                 ['ao_density'],
             )
@@ -198,7 +186,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             enable_density=True,
         ).feature_names
         with self.assertRaisesRegex(ValueError, 'thickness_sdf'):
-            validate_custom_dataset_metadata(
+            validate_gnn_dataset_metadata(
                 [_custom_data(list(without_sdf))],
                 ['ao_sdf'],
             )
@@ -259,7 +247,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             '--model', 'gatv2',
             '--gnn-dataset', 'custom.pt',
             '--combinatorial-suite', '2',
-            '--exclude_case', 'ao_dihedral', 'ao_density',
+            '--exclude-case', 'ao_dihedral', 'ao_density',
             '--control14-run-dir', 'runs/control14',
             '--output-root', 'out',
         ])
@@ -273,6 +261,30 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             parse_args([
                 '--model', 'graphsage',
                 '--custom-dataset', 'custom.pt',
+                '--output-root', 'out',
+            ])
+
+        with self.assertRaises(SystemExit):
+            parse_args([
+                '--model', 'graphsage',
+                '--gnn-dataset', 'custom.pt',
+                '--full-suite',
+                '--output-root', 'out',
+            ])
+
+        with self.assertRaises(SystemExit):
+            parse_args([
+                '--model', 'graphsage',
+                '--gnn-dataset', 'custom.pt',
+                '--exclude_case', 'ao_density',
+                '--output-root', 'out',
+            ])
+
+        with self.assertRaises(SystemExit):
+            parse_args([
+                '--model', 'graphsage',
+                '--gnn-dataset', 'custom.pt',
+                '--baseline-run-dir', 'runs/control14',
                 '--output-root', 'out',
             ])
 
@@ -497,6 +509,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
         )
         gatv2_command = build_train_command(
             spec=EXPERIMENT_SPECS['control14'],
@@ -506,6 +519,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
             model='gatv2',
         )
         sdf_command = build_train_command(
@@ -516,11 +530,12 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
             model='gatv2',
         )
 
         self.assertEqual(custom_command[0], sys.executable)
-        self.assertIn(str(Path('tools') / 'run_baseline.py'), custom_command)
+        self.assertIn(str(Path('tools') / 'run_training.py'), custom_command)
         self.assertIn('--split-json-in', custom_command)
         self.assertNotIn('--split-json-out', custom_command)
         self.assertIn('--enable-ao', custom_command)
@@ -539,6 +554,19 @@ class FeatureAblationRunnerTests(unittest.TestCase):
         self.assertNotIn('--enable-ao', sdf_command)
         self.assertNotIn('--pos-weight', sdf_command)
 
+        debug_command = build_train_command(
+            spec=EXPERIMENT_SPECS['control14'],
+            dataset='custom.pt',
+            run_dir=Path('runs') / 'debug',
+            split_json=Path('splits') / 'seed_7.json',
+            seed=7,
+            resolution_tag='all',
+            epochs=3,
+            patience=15,
+            mean_debug=True,
+        )
+        self.assertIn('--mean_debug', debug_command)
+
     def test_meshcnn_subprocess_command_construction(self):
         command = build_train_command(
             spec=EXPERIMENT_SPECS['ao_sdf'],
@@ -549,23 +577,24 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             seed=7,
             resolution_tag='all',
             epochs=3,
+            patience=15,
             model='sparsemeshcnn',
         )
 
         self.assertEqual(command[0], sys.executable)
-        self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), command)
-        self.assertNotIn(str(Path('tools') / 'run_baseline.py'), command)
+        self.assertIn(str(Path('tools') / 'run_training.py'), command)
         for flag in ('--dataset', '--run-dir', '--epochs', '--seed', '--split-json-in'):
             self.assertIn(flag, command)
         self.assertNotIn('--group-mode', command)
         self.assertEqual(command[command.index('--dataset') + 1], 'meshcnn_superset.pt')
+        self.assertEqual(command[command.index('--model') + 1], 'sparsemeshcnn')
         self.assertEqual(command[command.index('--feature-group') + 1], 'custom')
         self.assertIn('--enable-ao', command)
         self.assertIn('--enable-thickness-sdf', command)
         self.assertNotIn('--enable-dihedral', command)
         self.assertNotIn('--enable-symmetry', command)
         self.assertNotIn('--enable-density', command)
-        for forbidden in ('--model', '--preset', '--pos-weight'):
+        for forbidden in ('--preset', '--pos-weight'):
             self.assertNotIn(forbidden, command)
 
     def test_run_experiment_reuses_existing_split_jsons(self):
@@ -579,6 +608,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             commands = []
 
             def fake_runner(command, check):
+                del check
                 commands.append(command)
                 seed = int(command[command.index('--seed') + 1])
                 run_dir = Path(command[command.index('--run-dir') + 1])
@@ -593,6 +623,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[1, 2],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='gatv2',
             )
@@ -601,6 +632,8 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             records = run_experiment(args=args, spec=spec, runner=fake_runner)
 
         self.assertEqual([record['status'] for record in records], ['completed', 'completed'])
+        self.assertEqual(records[0]['resolution_tag'], 'all')
+        self.assertNotIn('resolution_selector', records[0])
         self.assertEqual(
             records[0]['run_dir'],
             str(root / 'gatv2' / 'experiments' / 'control14' / 'seed_1'),
@@ -618,6 +651,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             commands = []
 
             def fake_runner(command, check):
+                del check
                 commands.append(command)
                 run_dir = Path(command[command.index('--run-dir') + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
@@ -632,6 +666,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[33],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='gatv2',
             )
@@ -654,6 +689,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 split_path_for_seed(splits_dir, seed).write_text('{}')
 
             def fake_runner(command, check):
+                del check
                 raise AssertionError('control14 should be reused, not trained')
 
             args = Namespace(
@@ -665,6 +701,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[11, 22],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='gatv2',
             )
@@ -685,12 +722,14 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[33],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='graphsage',
             )
             spec = EXPERIMENT_SPECS['control14']
 
             def fake_runner(command, check):
+                del check
                 raise subprocess.CalledProcessError(9, command)
 
             records = run_experiment(args=args, spec=spec, runner=fake_runner)
@@ -708,6 +747,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             commands = []
 
             def fake_runner(command, check):
+                del check
                 commands.append(command)
                 run_dir = Path(command[command.index('--run-dir') + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
@@ -720,6 +760,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
                 seeds=[1],
                 resolution_tag='all',
                 epochs=1,
+                patience=15,
                 keep_going=False,
                 model='sparsemeshcnn',
             )
@@ -731,7 +772,7 @@ class FeatureAblationRunnerTests(unittest.TestCase):
             records[0]['run_dir'],
             str(root / 'sparsemeshcnn' / 'experiments' / 'control14' / 'seed_1'),
         )
-        self.assertIn(str(Path('models') / 'meshcnn_full' / 'train.py'), commands[0])
+        self.assertIn(str(Path('tools') / 'run_training.py'), commands[0])
 
     def test_sparsemeshcnn_payload_reports_public_model_name(self):
         args = Namespace(

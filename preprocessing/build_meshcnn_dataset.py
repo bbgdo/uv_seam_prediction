@@ -2,46 +2,34 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning)
-import trimesh  # noqa: E402
+try:
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ensure_repo_root_on_path()
 
-from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency
-from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection
-from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-from preprocessing.obj_parser import parse_obj
-from preprocessing.seam_labels import extract_seam_truth
-from preprocessing.topology import WeldConfig, build_topology
+from models.meshcnn_full.mesh import SPARSE_MESHCNN_SAMPLE_FORMAT, MeshCNNSample, build_mesh_adjacency  # noqa: E402
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order  # noqa: E402
+from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection  # noqa: E402
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.label_sources import EXACT_OBJ_LABEL_SOURCE  # noqa: E402
+from preprocessing.obj_parser import parse_obj  # noqa: E402
+from preprocessing.seam_labels import extract_seam_truth  # noqa: E402
+from preprocessing.topology import WeldConfig, build_topology  # noqa: E402
 
 
 DEFAULT_OUTPUT = 'dataset_sparsemeshcnn_paper14.pt'
 
 
-def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:
-    if endpoint_order != 'auto':
-        return endpoint_order
-    return 'random' if feature_group == 'paper14' else 'fixed'
-
-
 def manifest_path_for_dataset(dataset_path: Path) -> Path:
     return dataset_path.with_name(f'{dataset_path.stem}_manifest.json')
-
-
-def _build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
-    vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
-    faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
-    if len(vertices) == 0 or len(faces) == 0:
-        raise ValueError('exact OBJ MeshCNN samples require a non-empty triangle mesh')
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
 def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:
@@ -108,11 +96,14 @@ def build_meshcnn_sample(
     seam_truth = extract_seam_truth(topology)
     if seam_truth.audit.missing_uv_occurrences:
         raise ValueError(
-            f'exact_obj requires vt indices for every face corner; '
+            f'{EXACT_OBJ_LABEL_SOURCE} requires vt indices for every face corner; '
             f'missing occurrences={seam_truth.audit.missing_uv_occurrences}'
         )
 
-    feature_mesh = _build_feature_mesh_from_topology(topology)
+    feature_mesh = build_feature_mesh_from_topology(
+        topology,
+        empty_message='exact OBJ MeshCNN samples require a non-empty triangle mesh',
+    )
     edge_features, unique_edges, _ = compute_edge_features_for_selection(
         feature_mesh,
         feature_selection,
@@ -144,12 +135,11 @@ def build_meshcnn_sample(
         boundary_mask=torch.from_numpy(boundary_mask.astype(bool)),
         file_path=str(file_path),
         feature_group=feature_selection.feature_group,
-        feature_preset=feature_selection.feature_preset,
         feature_names=feature_names,
         feature_flags=feature_selection.feature_flags.as_dict(),
         density_config=dict(feature_selection.density_config) if feature_selection.density_config else None,
         endpoint_order=endpoint_order,
-        label_source='exact_obj',
+        label_source=EXACT_OBJ_LABEL_SOURCE,
         weld_mode=topology.weld_audit.mode,
         seam_edge_count=int(seam_truth.audit.seam_edges),
         boundary_edge_count=int(seam_truth.audit.boundary_edges),
@@ -180,10 +170,9 @@ def build_dataset_manifest(samples: list[MeshCNNSample], dataset_path: Path) -> 
 
     manifest = {
         'dataset_path': str(dataset_path),
-        'sample_format': 'meshcnn_full_v2',
-        'label_source': 'exact_obj',
+        'sample_format': SPARSE_MESHCNN_SAMPLE_FORMAT,
+        'label_source': EXACT_OBJ_LABEL_SOURCE,
         'feature_group': first.feature_group,
-        'feature_preset': first.feature_preset,
         'feature_names': list(first.feature_names),
         'feature_flags': dict(first.feature_flags),
         'feature_dim': int(first.edge_features.shape[1]),
@@ -264,7 +253,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.error(f'no .obj files found in {mesh_dir}')
 
     print(f'found {len(obj_files)} OBJ file(s)')
-    print(f'label source: exact_obj')
+    print(f'label source: {EXACT_OBJ_LABEL_SOURCE}')
     print(f'features: {feature_selection.feature_group} ({feature_selection.feature_count})')
     print(f'endpoint order: {endpoint_order}')
 

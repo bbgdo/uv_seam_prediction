@@ -1,18 +1,8 @@
-"""Extract body mesh from Autodesk Character Generator FBX exports.
-
-Finds the 'H_DDS_MidRes' mesh, unparents from rig (keeping transforms),
-and exports as OBJ with UVs preserved.
-
-Usage:
-    blender --background --python preprocessing/autodesk_char_gen/fbx_to_obj.py -- <fbx_dir> [--out <output_dir>]
-"""
-
 import os
 import sys
 import re
 import bpy
 
-# MidRes, HighRes, LowRes,
 MESH_NAME_PATTERN = re.compile(r'H_DDS_(MidRes|HighRes|LowRes)')
 
 
@@ -26,7 +16,7 @@ def reset_scene():
     for pool in (bpy.data.meshes, bpy.data.materials, bpy.data.textures,
                  bpy.data.images, bpy.data.armatures, bpy.data.libraries,
                  bpy.data.lights, bpy.data.cameras):
-        for item in pool:
+        for item in list(pool):
             try:
                 pool.remove(item)
             except Exception:
@@ -34,7 +24,6 @@ def reset_scene():
 
 
 def find_body_mesh():
-    """Find the H_DDS_MidRes mesh object in the scene."""
     for obj in bpy.data.objects:
         if obj.type == 'MESH' and MESH_NAME_PATTERN.search(obj.name):
             return obj

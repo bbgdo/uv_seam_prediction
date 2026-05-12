@@ -146,7 +146,6 @@ def augment_obj_file(
     shift_strength: float,
     rng: np.random.Generator,
 ) -> list[Path]:
-    """Directly manipulates OBJ text to guarantee UV preservation."""
     text = obj_path.read_text(encoding='utf-8', errors='replace')
     lines, vertex_indices, face_indices = _parse_obj_lines(text)
 
@@ -196,14 +195,14 @@ def main():
     parser.add_argument('--copies', type=int, default=3, help='Augmented copies per mesh (default: 3)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default: 42)')
 
-    parser.add_argument('--enable-noise', '--enable_noise', action='store_true', help='Enable density-aware Gaussian vertex noise')
+    parser.add_argument('--enable-noise', action='store_true', help='Enable density-aware Gaussian vertex noise')
     parser.add_argument('--noise', type=float, default=None, help='Gaussian noise as fraction of local mean edge length')
 
-    parser.add_argument('--enable-shift', '--enable_shift', action='store_true', help='Enable smooth regional vertex shifts')
-    parser.add_argument('--shift-zones', '--shift_zones', type=int, default=4, help='Number of random shift zones per copy (default: 4)')
-    parser.add_argument('--shift-radius', '--shift_radius', type=float, default=0.15, help='Shift zone radius in mesh units (default: 0.15)')
-    parser.add_argument('--shift-falloff', '--shift_falloff', type=float, default=2.0, help='Shift falloff exponent; larger values localize the shift more strongly (default: 2.0)')
-    parser.add_argument('--shift-strength', '--shift_strength', type=float, default=0.02, help='Gaussian shift vector std in mesh units (default: 0.02)')
+    parser.add_argument('--enable-shift', action='store_true', help='Enable smooth regional vertex shifts')
+    parser.add_argument('--shift-zones', type=int, default=4, help='Number of random shift zones per copy (default: 4)')
+    parser.add_argument('--shift-radius', type=float, default=0.15, help='Shift zone radius in mesh units (default: 0.15)')
+    parser.add_argument('--shift-falloff', type=float, default=2.0, help='Shift falloff exponent; larger values localize the shift more strongly (default: 2.0)')
+    parser.add_argument('--shift-strength', type=float, default=0.02, help='Gaussian shift vector std in mesh units (default: 0.02)')
     args = parser.parse_args()
 
     if not args.enable_noise and not args.enable_shift:

@@ -18,7 +18,7 @@ class SeamApplyResult:
 
 
 def load_predicted_edge_keys(json_path):
-    with open(json_path, 'r', encoding='utf-8') as file:
+    with open(json_path, encoding='utf-8') as file:
         payload = json.load(file)
 
     if not isinstance(payload, dict):
@@ -51,7 +51,7 @@ def load_accepted_bridge_edge_keys(json_path):
 
 
 def load_accepted_bridge_debug_entries(json_path):
-    with open(json_path, 'r', encoding='utf-8') as file:
+    with open(json_path, encoding='utf-8') as file:
         payload = json.load(file)
 
     if not isinstance(payload, dict):
@@ -91,7 +91,7 @@ def load_accepted_bridge_debug_entries(json_path):
                 path_report_by_edge_id[int(edge_id)] = (path_id, report)
 
     entries = []
-    for fallback_index, (edge_id, key) in enumerate(sorted(keys_by_edge_id.items(), key=lambda item: item[0])):
+    for edge_id, key in sorted(keys_by_edge_id.items(), key=lambda item: item[0]):
         path_id, path_report = path_report_by_edge_id.get(edge_id, (None, {}))
         final_report = final_presence_by_edge_id.get(edge_id, {})
         entries.append({
@@ -435,7 +435,7 @@ def _bounded_editable_paths(adjacency, source, target, max_hops):
     return paths
 
 
-def _editable_gap_candidate(mesh, path, kind, start, target, *, same_component_loop_closure=False):
+def _editable_gap_candidate(mesh, path, kind, start, target, *, same_component_loop_closure):
     edge_keys = _path_edge_keys(path)
     consumed_endpoint_vertices = [] if kind == 'junction_gap_closure' else [int(start)]
     if kind == 'endpoint_to_endpoint':
@@ -1137,10 +1137,10 @@ def _mesh_edge_lookup(mesh):
     edge_items = []
     edge_by_key = {}
     adjacency = {}
-    for fallback_index, edge in enumerate(mesh.edges):
+    for enumerated_index, edge in enumerate(mesh.edges):
         v0, v1 = edge.vertices
         key = (min(v0, v1), max(v0, v1))
-        edge_index = int(getattr(edge, 'index', fallback_index))
+        edge_index = int(getattr(edge, 'index', enumerated_index))
         edge_items.append((edge_index, key, edge))
         edge_by_key[key] = (edge_index, edge)
         adjacency.setdefault(key[0], set()).add(key[1])

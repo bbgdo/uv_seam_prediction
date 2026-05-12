@@ -4,12 +4,11 @@ from torch_geometric.nn import SAGEConv
 from torch_geometric.utils import sort_edge_index
 
 
-class DualGraphSAGE(nn.Module):
-    """GraphSAGE for edge classification via dual graph node classification.
+GRAPH_SAGE_AGGREGATION = 'lstm'
+SUPPORTED_GRAPH_SAGE_AGGREGATIONS = ('lstm', 'mean')
 
-    Same dual-graph approach as DualGATv2 but with SAGEConv aggregation.
-    Enables fair architecture comparison on identical data.
-    """
+
+class DualGraphSAGE(nn.Module):
 
     def __init__(
         self,
@@ -17,13 +16,14 @@ class DualGraphSAGE(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 3,
         dropout: float = 0.3,
-        aggr: str = 'lstm',
         skip_connections: str = 'hidden',
+        aggr: str = GRAPH_SAGE_AGGREGATION,
     ):
         super().__init__()
+        if aggr not in SUPPORTED_GRAPH_SAGE_AGGREGATIONS:
+            raise ValueError(f'aggr must be one of {SUPPORTED_GRAPH_SAGE_AGGREGATIONS}, got {aggr!r}')
         self.num_layers = num_layers
         self.dropout = dropout
-        self.aggr = aggr
         self.skip_connections = skip_connections
 
         self.convs = nn.ModuleList()
@@ -47,8 +47,7 @@ class DualGraphSAGE(nn.Module):
         )
 
     def forward(self, x, edge_index):
-        if self.aggr == 'lstm':
-            edge_index = sort_edge_index(edge_index, sort_by_row=False)
+        edge_index = sort_edge_index(edge_index, sort_by_row=False)
 
         for i, (conv, norm, skip) in enumerate(zip(self.convs, self.norms, self.skips)):
             residual = x

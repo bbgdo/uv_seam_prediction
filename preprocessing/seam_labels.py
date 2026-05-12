@@ -5,23 +5,20 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from preprocessing.obj_parser import ObjCorner, parse_obj
-    from preprocessing.topology import (
-        CanonicalTopology,
-        EdgeKey,
-        FaceEdgeOccurrence,
-        WeldConfig,
-        build_topology,
-    )
-except ModuleNotFoundError:  # pragma: no cover - supports `python preprocessing/seam_labels.py`
-    from obj_parser import ObjCorner, parse_obj
-    from topology import (
-        CanonicalTopology,
-        EdgeKey,
-        FaceEdgeOccurrence,
-        WeldConfig,
-        build_topology,
-    )
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
+from preprocessing.obj_parser import ObjCorner, parse_obj  # noqa: E402
+from preprocessing.topology import (  # noqa: E402
+    CanonicalTopology,
+    EdgeKey,
+    FaceEdgeOccurrence,
+    WeldConfig,
+    build_topology,
+)
 
 
 class SeamLabelError(ValueError):
@@ -54,12 +51,6 @@ def aligned_uv_signature(
     occurrence: FaceEdgeOccurrence,
     topology: CanonicalTopology,
 ) -> UVSignature:
-    """Return UV ids aligned to the canonical geometric edge endpoint order.
-
-    OBJ UV indices are the seam truth because UV splits are represented by
-    different face-corner `vt` ids. Missing UVs use a deterministic sentinel so
-    no tolerance or coordinate comparison is hidden in this path.
-    """
     gid_a = topology.original_vertex_to_canonical_gid[occurrence.corner_a.vertex_index]
     gid_b = topology.original_vertex_to_canonical_gid[occurrence.corner_b.vertex_index]
     local_key = (gid_a, gid_b)
@@ -123,7 +114,6 @@ def _corner_to_dict(corner: ObjCorner) -> dict[str, int | None]:
         'normal_index': corner.normal_index,
     }
 
-
 def seam_truth_to_jsonable(truth: SeamTruth) -> dict[str, Any]:
     return {
         'audit': truth.audit.__dict__,
@@ -186,16 +176,18 @@ def main() -> None:
     topology = build_topology(mesh, weld_config)
     truth = extract_seam_truth(topology)
 
-    print(f'file: {mesh.file_path}')
+    print(f'file: {Path(args.obj_path)}')
     print(f'edges: {truth.audit.edge_count}')
-    print(f'seams: {truth.audit.seam_edges}')
+    print(f'seam edges: {truth.audit.seam_edges}')
     print(f'boundary edges: {truth.audit.boundary_edges}')
-    print(f'missing uv occurrences: {truth.audit.missing_uv_occurrences}')
+    print(f'nonmanifold edges: {truth.audit.non_manifold_edges}')
 
     if args.json_out:
         write_seam_truth_json(truth, args.json_out)
+        print(f'wrote {args.json_out}')
     if args.txt_out:
         write_seam_edges_txt(truth, args.txt_out)
+        print(f'wrote {args.txt_out}')
 
 
 if __name__ == '__main__':

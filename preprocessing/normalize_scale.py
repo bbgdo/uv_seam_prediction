@@ -22,10 +22,10 @@ def reset_scene():
     bpy.ops.object.delete()
 
     for collection in [bpy.data.meshes, bpy.data.materials, bpy.data.textures, bpy.data.images, bpy.data.libraries]:
-        for item in collection:
+        for item in list(collection):
             try:
                 collection.remove(item)
-            except:
+            except Exception:
                 pass
 
 
@@ -66,24 +66,26 @@ def normalize_objects():
     if not vertices_found:
         return False
 
-    center = (min_v + max_v) / 2
     dimensions = max_v - min_v
     diagonal = dimensions.length
 
     if diagonal == 0:
         return False
 
-    # center + scale to unit diagonal
-    for obj in selected_objects:
-        obj.location -= center
-
+    bottom_center = mathutils.Vector((
+        (min_v.x + max_v.x) / 2,
+        (min_v.y + max_v.y) / 2,
+        min_v.z,
+    ))
     scale_factor = 1.0 / diagonal
-    for obj in selected_objects:
-        obj.scale *= scale_factor
 
-    # bake transforms so .obj has raw coords in [-0.5, 0.5]
-    bpy.context.view_layer.objects.active = selected_objects[0]
-    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    for obj in selected_objects:
+        mesh = obj.data
+        matrix_world = obj.matrix_world.copy()
+        for vertex in mesh.vertices:
+            vertex.co = (matrix_world @ vertex.co - bottom_center) * scale_factor
+        obj.matrix_world = mathutils.Matrix.Identity(4)
+        mesh.update()
 
     return True
 
@@ -123,7 +125,7 @@ def process_directory(input_path_arg):
 
     files = [f for f in os.listdir(input_dir) if f.lower().endswith('.obj')]
 
-    print(f"\n=== Normalization Pipeline ===")
+    print("\n=== Normalization Pipeline ===")
     print(f"Input: {input_dir}")
     print(f"Output: {output_dir}")
     print(f"Files: {len(files)}")
@@ -165,7 +167,7 @@ def process_directory(input_path_arg):
             print("FAIL (Empty/Error)")
             fail_count += 1
 
-    print(f"\n=== Done ===")
+    print("\n=== Done ===")
     print(f"Processed: {success_count}")
     print(f"Failed: {fail_count}")
 

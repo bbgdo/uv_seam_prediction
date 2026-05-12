@@ -65,7 +65,6 @@ class FeatureFlags:
 @dataclass(frozen=True)
 class FeatureGroup:
     name: str
-    feature_preset: str
     feature_names: tuple[str, ...]
     feature_flags: FeatureFlags
 
@@ -77,7 +76,6 @@ class FeatureGroup:
 @dataclass(frozen=True)
 class ResolvedFeatureSet:
     feature_group: str
-    feature_preset: str
     feature_names: tuple[str, ...]
     feature_flags: FeatureFlags
     density_config: dict | None = None
@@ -87,33 +85,25 @@ class ResolvedFeatureSet:
         return len(self.feature_names)
 
 
-FEATURE_GROUPS = {
-    'paper14': FeatureGroup(
-        name='paper14',
-        feature_preset='paper14',
-        feature_names=PAPER14_FEATURE_NAMES,
-        feature_flags=FeatureFlags(),
-    ),
-    'custom': FeatureGroup(
-        name='custom',
-        feature_preset='custom',
-        feature_names=PAPER14_FEATURE_NAMES,
-        feature_flags=FeatureFlags(),
-    ),
-}
+PAPER14_FEATURE_GROUP = FeatureGroup(
+    name='paper14',
+    feature_names=PAPER14_FEATURE_NAMES,
+    feature_flags=FeatureFlags(),
+)
 
 
 def _normalize_group_name(name: str | None) -> str:
     group = name or 'paper14'
-    if group == 'paper':
-        group = 'paper14'
-    if group not in FEATURE_GROUPS:
+    if group not in FEATURE_GROUP_NAMES:
         raise ValueError(f"unknown feature group {group!r}; choose one of {FEATURE_GROUP_NAMES}")
     return group
 
 
 def get_feature_group(name: str) -> FeatureGroup:
-    return FEATURE_GROUPS[_normalize_group_name(name)]
+    group_name = _normalize_group_name(name)
+    if group_name != 'paper14':
+        raise ValueError("custom requires resolve_feature_selection with at least one optional feature")
+    return PAPER14_FEATURE_GROUP
 
 
 def _custom_feature_names(flags: FeatureFlags) -> tuple[str, ...]:
@@ -139,22 +129,18 @@ def resolve_feature_selection(
     *,
     enable_ao: bool = False,
     enable_dihedral: bool = False,
-    enable_signed_dihedral: bool | None = None,
     enable_symmetry: bool = False,
     enable_density: bool = False,
     enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
-    """Resolve a named bundle plus explicit extras into ordered feature names."""
     group_name = _normalize_group_name(feature_group)
-    signed_dihedral = enable_dihedral if enable_signed_dihedral is None else enable_signed_dihedral
     requested_flags = FeatureFlags(
         ao=bool(enable_ao),
-        signed_dihedral=bool(signed_dihedral),
+        signed_dihedral=bool(enable_dihedral),
         symmetry=bool(enable_symmetry),
         density=bool(enable_density),
         thickness_sdf=bool(enable_thickness_sdf),
     )
-
     if group_name != 'custom':
         if requested_flags.any_enabled():
             enabled = ', '.join(name for name, value in requested_flags.as_dict().items() if value)
@@ -166,16 +152,17 @@ def resolve_feature_selection(
         density_config = dict(DENSITY_CONFIG) if group.feature_flags.density else None
         return ResolvedFeatureSet(
             feature_group=group.name,
-            feature_preset=group.feature_preset,
             feature_names=group.feature_names,
             feature_flags=group.feature_flags,
             density_config=density_config,
         )
 
+    if not requested_flags.any_enabled():
+        raise ValueError("feature_group='custom' requires at least one optional feature toggle")
+
     names = _custom_feature_names(requested_flags)
     return ResolvedFeatureSet(
         feature_group='custom',
-        feature_preset='custom',
         feature_names=names,
         feature_flags=requested_flags,
         density_config=dict(DENSITY_CONFIG) if requested_flags.density else None,

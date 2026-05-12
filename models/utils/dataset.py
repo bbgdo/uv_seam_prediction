@@ -1,13 +1,10 @@
 import json
-import sys
 from pathlib import Path
 
 import torch
 from torch_geometric.data import Data
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from models.utils.filename_parsing import FilenameParseConfig, parse_mesh_name
+from models.utils.filename_parsing import parse_mesh_name
 
 
 SPLIT_GROUP_KEYS = {
@@ -15,6 +12,7 @@ SPLIT_GROUP_KEYS = {
     'val': 'val_group_ids',
     'test': 'test_group_ids',
 }
+MAX_POS_WEIGHT = 100.0
 
 
 def load_dataset(path: str | Path) -> list[Data]:
@@ -64,20 +62,17 @@ def _normalize_dataset_path(path: str | Path | None) -> str | None:
     return str(Path(path).expanduser().resolve(strict=False))
 
 
-def _group_name(d: Data, filename_config: FilenameParseConfig | None = None) -> str:
+def _group_name(d: Data) -> str:
     path_or_name = getattr(d, 'file_path', '')
     if not path_or_name:
         return str(id(d))
-    return parse_mesh_name(path_or_name, filename_config).family_id
+    return parse_mesh_name(path_or_name).family_id
 
 
-def _group_dataset(
-    dataset: list[Data],
-    filename_config: FilenameParseConfig | None = None,
-) -> dict[str, list[Data]]:
+def _group_dataset(dataset: list[Data]) -> dict[str, list[Data]]:
     groups: dict[str, list[Data]] = {}
     for d in dataset:
-        groups.setdefault(_group_name(d, filename_config), []).append(d)
+        groups.setdefault(_group_name(d), []).append(d)
     return groups
 
 
@@ -230,7 +225,6 @@ def _weighted_split_group_keys(
 def _validate_no_split_leakage(
     split_keys: dict[str, list[str]],
     groups: dict[str, list[Data]],
-    filename_config: FilenameParseConfig | None = None,
 ) -> None:
     assigned = split_keys['train'] + split_keys['val'] + split_keys['test']
     duplicate_ids = sorted({group_id for group_id in assigned if assigned.count(group_id) > 1})
@@ -258,7 +252,7 @@ def _validate_no_split_leakage(
         for group_id in group_ids:
             for graph in groups[group_id]:
                 path_or_name = getattr(graph, 'file_path', '')
-                family_id = parse_mesh_name(path_or_name, filename_config).family_id if path_or_name else group_id
+                family_id = parse_mesh_name(path_or_name).family_id if path_or_name else group_id
                 family_splits[split].add(family_id)
 
     for left, right in (('train', 'val'), ('train', 'test'), ('val', 'test')):
@@ -335,14 +329,12 @@ def split_dataset(
     val_ratio: float = 0.15,
     test_ratio: float = 0.10,
     seed: int = 42,
-    filename_config: FilenameParseConfig | None = None,
     split_json_in: str | Path | None = None,
     split_json_out: str | Path | None = None,
     dataset_path: str | Path | None = None,
     resolution_tag: str | None = None,
 ) -> tuple[list[Data], list[Data], list[Data], dict]:
-    """Grouped by mesh family to prevent augmentation and resolution leakage."""
-    groups = _group_dataset(dataset, filename_config)
+    groups = _group_dataset(dataset)
 
     if split_json_in:
         payload = load_split_json_metadata(split_json_in)
@@ -365,7 +357,6 @@ def split_dataset(
     _validate_no_split_leakage(
         {'train': train_keys, 'val': val_keys, 'test': test_keys},
         groups,
-        filename_config,
     )
 
     train = [d for k in train_keys for d in groups[k]]
@@ -378,17 +369,11 @@ def split_dataset(
     return train, val, test, split_info
 
 
-def load_dual_dataset(path: str | Path) -> list[Data]:
-    from preprocessing.build_gnn_dataset import build_dual_data
-    original = load_dataset(path)
-    return [build_dual_data(d) for d in original]
-
-
-def compute_pos_weight(dataset: list[Data], max_weight: float = 100.0) -> torch.Tensor:
+def compute_pos_weight(dataset: list[Data]) -> torch.Tensor:
     total_seam = sum(d.y.sum().item() for d in dataset)
     total_nonseam = sum((d.y == 0).sum().item() for d in dataset)
     weight = total_nonseam / max(total_seam, 1)
-    if weight > max_weight:
-        print(f"compute_pos_weight: clipping weight {weight:.4f} -> {max_weight:.4f}")
-        weight = max_weight
+    if weight > MAX_POS_WEIGHT:
+        print(f"compute_pos_weight: clipping weight {weight:.4f} -> {MAX_POS_WEIGHT:.4f}")
+        weight = MAX_POS_WEIGHT
     return torch.tensor([weight], dtype=torch.float32)

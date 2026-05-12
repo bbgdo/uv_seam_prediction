@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from models.utils.filename_parsing import FilenameParseConfig, parse_mesh_name
+from models.utils.filename_parsing import parse_mesh_name
 
 
 class FilenameParsingTests(unittest.TestCase):
@@ -35,14 +35,6 @@ class FilenameParsingTests(unittest.TestCase):
     def test_strips_repeated_resolution_and_augmentation_suffixes(self):
         self.assertEqual(parse_mesh_name('chair_10000f_aug2.obj').family_id, 'chair')
         self.assertEqual(parse_mesh_name('house_lod3_aug0.obj').family_id, 'house')
-
-    def test_custom_resolution_suffix(self):
-        config = FilenameParseConfig(resolution_patterns=(r'_lod\d+$',))
-        info = parse_mesh_name('house_lod3_aug0.obj', config)
-
-        self.assertEqual(info.family_id, 'house')
-        self.assertEqual(info.resolution_tag, 'lod3')
-        self.assertTrue(info.is_augmented)
 
 if __name__ == '__main__':
     unittest.main()

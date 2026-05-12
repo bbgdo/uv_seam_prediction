@@ -1,5 +1,6 @@
 import json
 import unittest
+from argparse import Namespace
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -7,18 +8,19 @@ import tempfile
 
 import numpy as np
 import torch
+import trimesh
 
-from models.meshcnn_full.mesh import MeshCNNSample, MutableMeshTopology, build_mesh_adjacency
+from models.meshcnn_full.mesh import MeshCNNSample, build_mesh_adjacency, load_meshcnn_dataset
 from models.meshcnn_full.model import MeshCNNSegmenter
-from models.meshcnn_full.pool import MeshPool
-from models.meshcnn_full.train import slice_meshcnn_dataset_features
-from models.meshcnn_full.unpool import MeshUnpool
+from models.meshcnn_full.train import train_sparsemeshcnn
+from models.meshcnn_full.training_data import slice_meshcnn_dataset_features
 from preprocessing.build_meshcnn_dataset import (
     DEFAULT_OUTPUT,
     build_dataset_manifest,
     build_meshcnn_sample,
     validate_saved_meshcnn_feature_metadata,
 )
+from preprocessing.compute_features import build_edge_topology, compute_edge_sdf
 from preprocessing.feature_registry import PAPER14_FEATURE_NAMES, resolve_feature_selection
 
 
@@ -59,49 +61,6 @@ def _obj_file(text: str):
         yield path
 
 
-def _valid_collapse_mesh():
-    vertices = np.asarray([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [-1.0, 1.0, 0.2],
-        [1.0, 1.0, 0.5],
-        [1.0, 0.0, 1.0],
-        [-0.5, 0.0, 1.0],
-    ], dtype=np.float32)
-    faces = np.asarray([
-        [0, 1, 2],
-        [1, 0, 3],
-        [0, 2, 4],
-        [2, 1, 5],
-        [1, 3, 6],
-        [3, 0, 7],
-    ], dtype=np.int64)
-    return vertices, faces
-
-
-def _nonmanifold_result_mesh():
-    vertices = np.asarray([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 1.0, 1.0],
-        [-1.0, 1.0, 0.2],
-        [0.5, 1.5, 1.0],
-        [1.0, 1.0, 1.0],
-    ], dtype=np.float32)
-    faces = np.asarray([
-        [0, 1, 2],
-        [1, 0, 3],
-        [0, 4, 5],
-        [4, 0, 6],
-        [1, 4, 7],
-    ], dtype=np.int64)
-    return vertices, faces
-
-
 def _full_custom_selection():
     return resolve_feature_selection(
         'custom',
@@ -130,7 +89,6 @@ def _sample_with_features(feature_names: list[str] | tuple[str, ...] | None = No
         boundary_mask=torch.ones(edge_count, dtype=torch.bool),
         file_path='toy.obj',
         feature_group='custom',
-        feature_preset='custom',
         feature_names=names,
         feature_flags=_full_custom_selection().feature_flags.as_dict(),
         endpoint_order='random',
@@ -140,6 +98,16 @@ def _sample_with_features(feature_names: list[str] | tuple[str, ...] | None = No
 
 
 class MeshCNNFullTests(unittest.TestCase):
+    def test_thickness_sdf_requires_real_ray_intersector(self):
+        with _obj_file(OBJ_TETRA) as path:
+            mesh = trimesh.load_mesh(path, process=False)
+
+        unique_edges, edge_to_faces = build_edge_topology(mesh)
+
+        with patch('preprocessing.compute_features._build_ray_intersector', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'thickness_sdf raycasting requires'):
+                compute_edge_sdf(mesh, unique_edges, edge_to_faces)
+
     def test_topology_reconstruction_matches_cached_arrays(self):
         with _obj_file(OBJ_TWO_TRIANGLES) as path:
             sample = build_meshcnn_sample(
@@ -157,54 +125,6 @@ class MeshCNNFullTests(unittest.TestCase):
             self.assertTrue(np.array_equal(rebuilt[3], sample.edge_neighbors.numpy()))
             self.assertTrue(np.array_equal(rebuilt[4], sample.boundary_mask.numpy()))
 
-    def test_invalid_edge_collapses_are_rejected(self):
-        vertices, faces = _valid_collapse_mesh()
-        topology = MutableMeshTopology(vertices, faces)
-        boundary_idx = int(np.flatnonzero(topology.boundary_mask)[0])
-        self.assertEqual(topology.collapse_error(boundary_idx), 'boundary edge')
-
-        vertices, faces = _nonmanifold_result_mesh()
-        topology = MutableMeshTopology(vertices, faces)
-        collapse_idx = topology.edge_key_to_idx[(0, 1)]
-        self.assertEqual(topology.collapse_error(collapse_idx), 'non-manifold result')
-
-    def test_valid_collapse_history_unpools_to_original_shape(self):
-        vertices, faces = _valid_collapse_mesh()
-        topology = MutableMeshTopology(vertices, faces)
-        x = torch.randn(topology.edge_count, 8, requires_grad=True)
-        pool = MeshPool(channels=8, target_ratio=0.5, min_edges=1, max_collapses=1)
-        pooled, _, history = pool(x, topology)
-        restored = MeshUnpool()(pooled, history)
-        pooled.sum().backward()
-
-        self.assertLessEqual(pooled.shape[0], x.shape[0])
-        self.assertEqual(restored.shape, x.shape)
-        self.assertEqual(history.old_edge_count, x.shape[0])
-        self.assertEqual(history.new_edge_count, pooled.shape[0])
-        self.assertTrue(any(param.grad is not None for param in pool.scorer.parameters()))
-
-    def test_pool_exhausts_invalid_candidates_without_spinning(self):
-        vertices = np.asarray([
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-        ], dtype=np.float32)
-        faces = np.asarray([[0, 1, 2]], dtype=np.int64)
-        topology = MutableMeshTopology(vertices, faces)
-        x = torch.randn(topology.edge_count, 4)
-        pool = MeshPool(channels=4, target_ratio=0.1, min_edges=1, max_collapses=None)
-
-        pooled, pooled_topology, history = pool(x, topology)
-        debug = pool.get_last_debug()
-
-        self.assertEqual(pooled.shape[0], topology.edge_count)
-        self.assertEqual(pooled_topology.edge_count, topology.edge_count)
-        self.assertEqual(history.new_edge_count, topology.edge_count)
-        self.assertEqual(debug['attempted_collapses'], topology.edge_count)
-        self.assertEqual(debug['successful_collapses'], 0)
-        self.assertEqual(debug['rejected_collapses'], topology.edge_count)
-        self.assertEqual(debug['stop_reason'], 'stagnated_no_valid_collapses')
-
     def test_forward_pass_on_cached_meshcnn_sample(self):
         with _obj_file(OBJ_TETRA) as path:
             sample = build_meshcnn_sample(
@@ -217,7 +137,6 @@ class MeshCNNFullTests(unittest.TestCase):
                 hidden_channels=16,
                 pool_ratios=(0.9, 0.9),
                 min_edges=1,
-                max_pool_collapses=4,
             )
             logits = model(sample)
             self.assertEqual(logits.shape, sample.edge_labels.shape)
@@ -233,7 +152,6 @@ class MeshCNNFullTests(unittest.TestCase):
             )
 
         self.assertEqual(sample.feature_group, 'custom')
-        self.assertEqual(sample.feature_preset, 'custom')
         self.assertEqual(tuple(sample.feature_names), selection.feature_names)
         self.assertEqual(sample.feature_flags, selection.feature_flags.as_dict())
         self.assertEqual(sample.endpoint_order, 'random')
@@ -253,9 +171,8 @@ class MeshCNNFullTests(unittest.TestCase):
             )
             manifest = build_dataset_manifest([sample], path.with_suffix('.pt'))
 
-        self.assertEqual(manifest['sample_format'], 'meshcnn_full_v2')
+        self.assertEqual(manifest['sample_format'], 'sparsemeshcnn_v2')
         self.assertEqual(manifest['feature_group'], 'custom')
-        self.assertEqual(manifest['feature_preset'], 'custom')
         self.assertEqual(manifest['feature_names'], list(selection.feature_names))
         self.assertEqual(manifest['feature_flags'], selection.feature_flags.as_dict())
         self.assertEqual(manifest['feature_dim'], len(selection.feature_names))
@@ -263,14 +180,13 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(manifest['label_source'], 'exact_obj')
         self.assertEqual(manifest['density_config'], selection.density_config)
 
-    def test_slice_meshcnn_dataset_to_control14(self):
+    def test_slice_meshcnn_dataset_to_paper14(self):
         sample = _sample_with_features()
-        _, metadata = slice_meshcnn_dataset_features(
-            [sample],
-            resolve_feature_selection('custom'),
-        )
+        selection = resolve_feature_selection('paper14')
+        _, metadata = slice_meshcnn_dataset_features([sample], selection)
 
         self.assertEqual(sample.edge_features.shape[1], 14)
+        self.assertEqual(selection.feature_group, 'paper14')
         self.assertEqual(tuple(sample.feature_names), PAPER14_FEATURE_NAMES)
         self.assertEqual(metadata['feature_names'], list(PAPER14_FEATURE_NAMES))
         self.assertEqual(metadata['feature_dim'], 14)
@@ -316,14 +232,14 @@ class MeshCNNFullTests(unittest.TestCase):
         second.feature_names = list(reversed(second.feature_names))
 
         with self.assertRaisesRegex(ValueError, 'feature_names differ'):
-            slice_meshcnn_dataset_features([first, second], resolve_feature_selection('custom'))
+            slice_meshcnn_dataset_features([first, second], resolve_feature_selection('paper14'))
 
     def test_slice_meshcnn_dataset_feature_dim_mismatch_raises(self):
         source = _sample_with_features()
         source.edge_features = source.edge_features[:, :-1]
 
         with self.assertRaisesRegex(ValueError, 'edge_features dim'):
-            slice_meshcnn_dataset_features([source], resolve_feature_selection('custom'))
+            slice_meshcnn_dataset_features([source], resolve_feature_selection('paper14'))
 
     def test_saved_meshcnn_feature_metadata_validation_rejects_dim_mismatch(self):
         sample = _sample_with_features()
@@ -356,13 +272,47 @@ class MeshCNNFullTests(unittest.TestCase):
         self.assertEqual(metadata['feature_flags'], target_selection.feature_flags.as_dict())
         self.assertEqual(metadata['endpoint_order'], 'random')
         self.assertEqual(metadata['label_source'], 'exact_obj')
-        self.assertEqual(metadata['sample_format'], 'meshcnn_full_v2')
+        self.assertEqual(metadata['sample_format'], 'sparsemeshcnn_v2')
+
+    def test_load_meshcnn_dataset_ignores_legacy_feature_preset_attribute(self):
+        sample = _sample_with_features()
+        sample.feature_preset = 'custom'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_path = Path(tmp) / 'legacy_meshcnn.pt'
+            torch.save([sample], dataset_path)
+
+            loaded = load_meshcnn_dataset(dataset_path)
+
+        self.assertEqual(len(loaded), 1)
+        self.assertFalse(hasattr(loaded[0], 'feature_preset'))
+        self.assertEqual(loaded[0].feature_names, sample.feature_names)
+        self.assertEqual(loaded[0].edge_features.device.type, 'cpu')
+
+    def test_load_meshcnn_dataset_defaults_missing_legacy_label_source(self):
+        sample = _sample_with_features()
+        del sample.label_source
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_path = Path(tmp) / 'legacy_meshcnn.pt'
+            torch.save([sample], dataset_path)
+
+            loaded = load_meshcnn_dataset(dataset_path)
+
+        self.assertEqual(loaded[0].label_source, 'exact_obj')
+
+    def test_meshcnn_sample_to_ignores_legacy_feature_preset_attribute(self):
+        sample = _sample_with_features()
+        sample.feature_preset = 'custom'
+
+        moved = sample.to('cpu')
+
+        self.assertFalse(hasattr(moved, 'feature_preset'))
+        self.assertEqual(moved.feature_names, sample.feature_names)
 
 
 class TrainConfigMetadataTests(unittest.TestCase):
     def test_train_config_writes_sparsemeshcnn_model_name(self):
-        from models.meshcnn_full import train as train_module
-
         sample = _sample_with_features(list(PAPER14_FEATURE_NAMES))
         samples = [sample]
         fake_metrics = {'f1': 0.5, 'precision': 0.5, 'recall': 0.5}
@@ -374,14 +324,14 @@ class TrainConfigMetadataTests(unittest.TestCase):
             run_dir = Path(tmp) / 'run'
 
             with (
-                patch.object(train_module, 'load_meshcnn_dataset', return_value=samples),
-                patch.object(train_module, '_validate_dataset_tensors_cpu'),
-                patch.object(train_module, '_load_manifest', return_value={}),
-                patch.object(train_module, 'split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
-                patch.object(train_module, 'compute_pos_weight', return_value=torch.tensor([1.0])),
-                patch.object(train_module, '_run_epoch', return_value=(0.5, fake_metrics, {})),
-                patch.object(train_module, '_predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
-                patch.object(train_module, 'threshold_sweep', return_value=fake_sweep),
+                patch('models.meshcnn_full.train.load_meshcnn_dataset', return_value=samples),
+                patch('models.meshcnn_full.train.validate_dataset_tensors_cpu'),
+                patch('models.meshcnn_full.train.load_manifest', return_value={}),
+                patch('models.meshcnn_full.train.split_dataset', return_value=(samples, samples, samples, {'train': [], 'val': [], 'test': []})),
+                patch('models.meshcnn_full.train.compute_pos_weight', return_value=torch.tensor([1.0])),
+                patch('models.meshcnn_full.train.run_epoch', return_value=(0.5, fake_metrics, {})),
+                patch('models.meshcnn_full.train.predict_logits_labels', return_value=(torch.zeros(1), torch.zeros(1))),
+                patch('models.meshcnn_full.train.threshold_sweep', return_value=fake_sweep),
                 patch('torch.save'),
                 patch('torch.load', return_value={
                     'model_state': {},
@@ -391,19 +341,39 @@ class TrainConfigMetadataTests(unittest.TestCase):
                     'best_epoch': 1,
                     'best_val_f1': 0.5,
                 }),
-                patch.object(train_module.MeshCNNSegmenter, 'load_state_dict'),
+                patch.object(MeshCNNSegmenter, 'load_state_dict'),
             ):
-                train_module.main([
-                    '--dataset', str(dataset_pt),
-                    '--run-dir', str(run_dir),
-                    '--epochs', '1',
-                    '--hidden', '16',
-                    '--pool-ratios', '0.85,0.75',
-                ])
+                train_sparsemeshcnn(Namespace(
+                    dataset=str(dataset_pt),
+                    run_dir=str(run_dir),
+                    epochs=1,
+                    lr=1e-3,
+                    weight_decay=1e-4,
+                    hidden=16,
+                    dropout=0.2,
+                    pool_ratios='0.85,0.75',
+                    min_edges=32,
+                    focal_gamma=2.0,
+                    pos_weight=None,
+                    grad_accum_steps=1,
+                    patience=50,
+                    val_ratio=0.15,
+                    test_ratio=0.10,
+                    seed=42,
+                    split_json_in=None,
+                    split_json_out=None,
+                    resolution_tag='all',
+                    feature_group='paper14',
+                    enable_ao=False,
+                    enable_dihedral=False,
+                    enable_symmetry=False,
+                    enable_density=False,
+                    enable_thickness_sdf=False,
+                ))
 
             config = json.loads((run_dir / 'config.json').read_text(encoding='utf-8'))
             self.assertEqual(config['model'], 'sparsemeshcnn')
-            self.assertEqual(config['internal_model_type'], 'meshcnn_full')
+            self.assertNotIn('internal_model_type', config)
 
 
 class BuilderDefaultOutputTests(unittest.TestCase):

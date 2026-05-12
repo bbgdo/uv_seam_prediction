@@ -1,42 +1,33 @@
 import json
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch_geometric.data import Data
 
-warnings.filterwarnings('ignore', category=UserWarning)
-import trimesh  # noqa: E402
+import trimesh
 
-# support running both as `python preprocessing/build_gnn_dataset.py` and as a module
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from preprocessing.compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
-    from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-    from preprocessing.obj_parser import parse_obj
-    from preprocessing.seam_labels import extract_seam_truth
-    from preprocessing.topology import WeldConfig, build_topology, canonical_edge_key
-except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
-    from compute_features import ENDPOINT_ORDERS, FEATURE_PRESETS, compute_edge_features_for_selection
-    from feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection
-    from obj_parser import parse_obj
-    from seam_labels import extract_seam_truth
-    from topology import WeldConfig, build_topology, canonical_edge_key
+    from preprocessing._bootstrap import ensure_repo_root_on_path
+except ModuleNotFoundError:
+    from _bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
+from preprocessing.canonical_mesh import build_feature_mesh_from_topology, resolve_endpoint_order  # noqa: E402
+from preprocessing.compute_features import ENDPOINT_ORDERS, compute_edge_features_for_selection  # noqa: E402
+from preprocessing.feature_registry import FEATURE_GROUP_NAMES, ResolvedFeatureSet, resolve_feature_selection  # noqa: E402
+from preprocessing.label_sources import EXACT_OBJ_LABEL_SOURCE  # noqa: E402
+from preprocessing.obj_parser import parse_obj  # noqa: E402
+from preprocessing.seam_labels import extract_seam_truth  # noqa: E402
+from preprocessing.topology import WeldConfig, build_topology  # noqa: E402
 
 EXACT_DATASET_OUTPUT = 'dataset_v2_exact_labels.pt'
 
 
-def resolve_endpoint_order(feature_group: str, endpoint_order: str) -> str:
-    if endpoint_order != 'auto':
-        return endpoint_order
-    return 'random' if feature_group == 'paper14' else 'fixed'
-
-
 def resolve_feature_cli_selection(
-    feature_preset: str = 'paper14',
-    feature_group: str | None = None,
+    feature_group: str = 'paper14',
     enable_ao: bool = False,
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
@@ -44,75 +35,13 @@ def resolve_feature_cli_selection(
     enable_thickness_sdf: bool = False,
 ) -> ResolvedFeatureSet:
     return resolve_feature_selection(
-        feature_group or feature_preset,
+        feature_group,
         enable_ao=enable_ao,
         enable_dihedral=enable_dihedral,
         enable_symmetry=enable_symmetry,
         enable_density=enable_density,
         enable_thickness_sdf=enable_thickness_sdf,
     )
-
-
-def _detect_seam_edges(mesh: trimesh.Trimesh) -> dict:
-    faces = mesh.faces
-    has_uv = (
-        hasattr(mesh, 'visual')
-        and hasattr(mesh.visual, 'uv')
-        and mesh.visual.uv is not None
-        and len(mesh.visual.uv) > 0
-    )
-
-    edge_to_faces: dict[tuple, list] = {}
-    for f_idx, face in enumerate(faces):
-        for k in range(3):
-            vi = face[k]
-            vj = face[(k + 1) % 3]
-            key = canonical_edge_key(int(vi), int(vj))
-            edge_to_faces.setdefault(key, []).append(f_idx)
-
-    seam_map: dict[tuple, bool] = {}
-
-    if not has_uv:
-        for edge, face_list in edge_to_faces.items():
-            seam_map[edge] = (len(face_list) == 1)
-        return seam_map
-
-    uv = mesh.visual.uv
-    # trimesh may give UV per face-corner instead of per merged vertex when the mesh has UV splits
-    uv_is_per_face_corner = (len(uv) == len(faces) * 3)
-
-    def get_uv_for_vertex_in_face(face_idx: int, geom_vertex: int) -> np.ndarray:
-        if uv_is_per_face_corner:
-            face = faces[face_idx]
-            local_pos = np.where(face == geom_vertex)[0]
-            if len(local_pos) == 0:
-                return np.array([0.0, 0.0])
-            fc_idx = face_idx * 3 + local_pos[0]
-            return uv[fc_idx]
-        else:
-            if geom_vertex < len(uv):
-                return uv[geom_vertex]
-            return np.array([0.0, 0.0])
-
-    UV_EPS = 1e-5
-
-    for edge, face_list in edge_to_faces.items():
-        vi, vj = edge
-        if len(face_list) == 1:
-            seam_map[edge] = True
-        elif len(face_list) == 2:
-            f0, f1 = face_list
-            uv_vi_f0 = get_uv_for_vertex_in_face(f0, vi)
-            uv_vi_f1 = get_uv_for_vertex_in_face(f1, vi)
-            uv_vj_f0 = get_uv_for_vertex_in_face(f0, vj)
-            uv_vj_f1 = get_uv_for_vertex_in_face(f1, vj)
-            split_i = np.linalg.norm(uv_vi_f0 - uv_vi_f1) > UV_EPS
-            split_j = np.linalg.norm(uv_vj_f0 - uv_vj_f1) > UV_EPS
-            seam_map[edge] = bool(split_i or split_j)
-        else:
-            seam_map[edge] = True
-
-    return seam_map
 
 
 def _build_graph_data(
@@ -125,7 +54,6 @@ def _build_graph_data(
     file_path: Path,
     feature_selection: ResolvedFeatureSet,
     endpoint_order: str,
-    label_source: str,
 ) -> Data:
     feature_names = _feature_names_for_edge_features(feature_selection, edge_features, file_path)
     vert_nrms = np.asarray(mesh.vertex_normals, dtype=np.float32)
@@ -149,8 +77,7 @@ def _build_graph_data(
     )
     data.faces = torch.from_numpy(faces)
     data.file_path = str(file_path)
-    data.label_source = label_source
-    data.feature_preset = feature_selection.feature_preset
+    data.label_source = EXACT_OBJ_LABEL_SOURCE
     data.feature_group = feature_selection.feature_group
     data.feature_names = feature_names
     data.feature_flags = feature_selection.feature_flags.as_dict()
@@ -230,7 +157,6 @@ def _saved_graph_feature_dim(data: Data) -> int:
 
 
 def validate_saved_gnn_feature_metadata(dataset: list[Data]) -> None:
-    """Ensure saved PyG graphs expose edge features as data.x with matching names."""
     for graph_idx, data in enumerate(dataset):
         feature_names = list(getattr(data, 'feature_names', []))
         x = getattr(data, 'x', None)
@@ -260,7 +186,6 @@ def _extract_unique_edges(data: Data) -> np.ndarray:
 
 
 def build_dual_edge_index_from_unique_edges(unique_edges: np.ndarray) -> torch.LongTensor:
-    """Build line-graph adjacency for canonical undirected mesh edges."""
     unique_edges = np.asarray(unique_edges, dtype=np.int64)
     if unique_edges.ndim != 2 or unique_edges.shape[1] != 2:
         raise ValueError(f'unique_edges must have shape [E, 2], got {unique_edges.shape}')
@@ -285,7 +210,6 @@ def build_dual_edge_index_from_unique_edges(unique_edges: np.ndarray) -> torch.L
 
 
 def build_dual_data(original_data: Data) -> Data:
-    """Convert an original-graph mesh sample into its dual-graph PyG view."""
     unique_edges = _extract_unique_edges(original_data)
     dual_edges = build_dual_edge_index_from_unique_edges(unique_edges)
     num_unique = int(unique_edges.shape[0])
@@ -299,13 +223,12 @@ def build_dual_data(original_data: Data) -> Data:
         num_nodes=num_unique,
     )
     dual.file_path = getattr(original_data, 'file_path', '')
-    dual.label_source = getattr(original_data, 'label_source', '')
-    dual.feature_preset = getattr(original_data, 'feature_preset', '')
-    dual.feature_group = getattr(original_data, 'feature_group', getattr(original_data, 'feature_preset', ''))
+    dual.label_source = EXACT_OBJ_LABEL_SOURCE
+    dual.feature_group = getattr(original_data, 'feature_group', '')
     dual.feature_names = list(getattr(original_data, 'feature_names', []))
     dual.feature_flags = dict(getattr(original_data, 'feature_flags', {}))
     if hasattr(original_data, 'density_config'):
-        dual.density_config = dict(getattr(original_data, 'density_config'))
+        dual.density_config = dict(original_data.density_config)
     dual.endpoint_order = getattr(original_data, 'endpoint_order', '')
     dual.weld_mode = getattr(original_data, 'weld_mode', '')
     dual.seam_edge_count = getattr(original_data, 'seam_edge_count', int(dual_y.sum().item()))
@@ -319,9 +242,7 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
     if not dataset:
         raise ValueError('cannot build a manifest for an empty dataset')
 
-    label_source = getattr(dataset[0], 'label_source', '')
-    feature_preset = getattr(dataset[0], 'feature_preset', '')
-    feature_group = getattr(dataset[0], 'feature_group', feature_preset)
+    feature_group = getattr(dataset[0], 'feature_group', '')
     feature_names = list(getattr(dataset[0], 'feature_names', []))
     feature_flags = dict(getattr(dataset[0], 'feature_flags', {}))
     density_config = getattr(dataset[0], 'density_config', None)
@@ -339,8 +260,7 @@ def build_dataset_manifest(dataset: list[Data], dataset_path: Path) -> dict:
 
     manifest = {
         'dataset_path': str(dataset_path),
-        'label_source': label_source,
-        'feature_preset': feature_preset,
+        'label_source': EXACT_OBJ_LABEL_SOURCE,
         'feature_group': feature_group,
         'feature_flags': feature_flags,
         'feature_names': feature_names,
@@ -371,17 +291,6 @@ def write_dataset_manifest(dataset: list[Data], dataset_path: Path) -> Path:
     return manifest_path
 
 
-def build_feature_mesh_from_topology(topology) -> trimesh.Trimesh:
-    vertices = np.asarray(topology.canonical_vertices, dtype=np.float64)
-    faces = np.asarray([face.vertex_ids for face in topology.canonical_faces], dtype=np.int64)
-    if len(vertices) == 0 or len(faces) == 0:
-        raise ValueError('exact_obj requires a non-empty OBJ mesh')
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-
-
-_build_feature_mesh_from_topology = build_feature_mesh_from_topology
-
-
 def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, file_path: Path) -> None:
     expected_edges = np.asarray(canonical_edges, dtype=np.int64).reshape((-1, 2))
     if np.array_equal(unique_edges, expected_edges):
@@ -397,7 +306,7 @@ def _assert_exact_edge_order(unique_edges: np.ndarray, canonical_edges: tuple, f
         detail = f'; features shape={unique_edges.shape}, topology shape={expected_edges.shape}'
 
     raise ValueError(
-        f'exact_obj edge order mismatch for {file_path.name}: '
+        f'{EXACT_OBJ_LABEL_SOURCE} edge order mismatch for {file_path.name}: '
         f'feature_edges={len(unique_edges)}, topology_edges={len(expected_edges)}{detail}'
     )
 
@@ -413,7 +322,7 @@ def _process_mesh_exact_obj(
     seam_truth = extract_seam_truth(topology)
     if seam_truth.audit.missing_uv_occurrences:
         raise ValueError(
-            f'exact_obj requires vt indices for every face corner; '
+            f'{EXACT_OBJ_LABEL_SOURCE} requires vt indices for every face corner; '
             f'missing occurrences={seam_truth.audit.missing_uv_occurrences}'
         )
     feature_mesh = build_feature_mesh_from_topology(topology)
@@ -441,7 +350,6 @@ def _process_mesh_exact_obj(
         file_path=file_path,
         feature_selection=feature_selection,
         endpoint_order=endpoint_order,
-        label_source='exact_obj',
     )
     data.seam_edge_count = int(seam_truth.audit.seam_edges)
     data.boundary_edge_count = int(seam_truth.audit.boundary_edges)
@@ -451,8 +359,7 @@ def _process_mesh_exact_obj(
 
 def process_mesh(
     file_path: str | Path,
-    feature_preset: str = 'paper14',
-    feature_group: str | None = None,
+    feature_group: str = 'paper14',
     enable_ao: bool = False,
     enable_dihedral: bool = False,
     enable_symmetry: bool = False,
@@ -461,10 +368,8 @@ def process_mesh(
     endpoint_order: str = 'auto',
     endpoint_seed: int = 42,
 ) -> Data | None:
-    """Load an .obj file and return a PyG Data object with exact OBJ seam labels."""
     file_path = Path(file_path)
     feature_selection = resolve_feature_cli_selection(
-        feature_preset=feature_preset,
         feature_group=feature_group,
         enable_ao=enable_ao,
         enable_dihedral=enable_dihedral,
@@ -491,7 +396,7 @@ def print_stats(data: Data, file_name: str) -> None:
     print(f"  unique edges  : {num_unique_edges}")
     print(f"  directed edges: {num_edges}  (both directions)")
     print(f"  edge features : {data.edge_attr.shape[1]}  ({data.edge_attr.shape[1]}-dim feature vector)")
-    print(f"  --- class balance ---")
+    print("  --- class balance ---")
     print(f"  seam  (1): {num_seams:>8d}  ({seam_pct:.2f}%)")
     print(f"  other (0): {num_nonseams:>8d}  ({100 - seam_pct:.2f}%)")
     print(f"  pos_weight: {pos_weight:.4f}")
@@ -507,7 +412,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description='Build PyG UV-seam dataset from .obj files.')
     parser.add_argument('mesh_dir', nargs='?', default='./meshes', help='Directory with .obj files (default: ./meshes)')
-    parser.add_argument('--max-meshes', type=int, default=5, help='Max meshes to process (default: 5)')
+    parser.add_argument('--max-meshes', type=int, default=None, help='Max meshes to process')
     parser.add_argument('--save', action='store_true', help='Save the dataset')
     parser.add_argument(
         '--output',
@@ -515,13 +420,7 @@ def main(argv: list[str] | None = None) -> None:
         help='Output path when --save is set; exact_obj defaults to dataset_v2_exact_labels.pt',
     )
     parser.add_argument('--overwrite', action='store_true', help='Replace an existing output file')
-    parser.add_argument(
-        '--feature-preset',
-        choices=FEATURE_PRESETS,
-        default='paper14',
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default=None)
+    parser.add_argument('--feature-group', choices=FEATURE_GROUP_NAMES, default='paper14')
     parser.add_argument('--enable-ao', action='store_true', help='Enable AO endpoint features for custom group')
     parser.add_argument('--enable-dihedral', action='store_true', help='Enable signed dihedral for custom group')
     parser.add_argument('--enable-symmetry', action='store_true', help='Enable symmetry distance for custom group')
@@ -532,7 +431,6 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         feature_selection = resolve_feature_cli_selection(
-            feature_preset=args.feature_preset,
             feature_group=args.feature_group,
             enable_ao=args.enable_ao,
             enable_dihedral=args.enable_dihedral,
@@ -559,17 +457,19 @@ def main(argv: list[str] | None = None) -> None:
         f"features: {feature_selection.feature_group} "
         f"({feature_selection.feature_count}) [{', '.join(feature_selection.feature_names)}]"
     )
-    print(f"processing first {min(args.max_meshes, len(obj_files))} ...\n")
+    if args.max_meshes is not None and args.max_meshes < 1:
+        parser.error('--max-meshes must be positive')
+    selected_obj_files = obj_files[:args.max_meshes] if args.max_meshes is not None else obj_files
+    print(f"processing {len(selected_obj_files)} mesh(es) ...\n")
 
     dataset: list[Data] = []
     outliers: list[str] = []
     failed = 0
 
-    for obj_file in obj_files[:args.max_meshes]:
+    for obj_file in selected_obj_files:
         print(f"processing: {obj_file.name} ...", end=" ", flush=True)
         data = process_mesh(
             obj_file,
-            feature_preset=args.feature_preset,
             feature_group=args.feature_group,
             enable_ao=args.enable_ao,
             enable_dihedral=args.enable_dihedral,
@@ -603,7 +503,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  total directed edges: {total_edges}")
         print(f"  total seam edges    : {int(total_seams)}  ({100*total_seams/max(total_edges,1):.2f}%)")
         print(f"  aggregate pos_weight: {agg_pos_weight:.4f}")
-        print(f"\n  train with: python tools/run_baseline.py --dataset <output.pt> --pos-weight {agg_pos_weight:.4f}")
+        print(f"\n  train with: python tools/run_training.py --model <graphsage|gatv2> --dataset <output.pt> --pos-weight {agg_pos_weight:.4f}")
         print(f"{'#'*60}\n")
 
     if args.save and dataset:
@@ -622,11 +522,6 @@ def main(argv: list[str] | None = None) -> None:
         print(f"dataset saved -> {out_path.resolve()}  ({len(dataset_to_save)} dual graphs)")
         manifest_path = write_dataset_manifest(dataset_to_save, out_path)
         print(f"manifest saved -> {manifest_path.resolve()}")
-        print(
-            "sanity check: "
-            f"python tools/validate_seam_truth.py --mesh-dir {mesh_dir} --max-meshes {len(dataset)}"
-        )
-
     if outliers:
         print(f"\n{'!'*60}")
         print(f"  outliers - {len(outliers)} file(s) with 0 seam edges (excluded):")

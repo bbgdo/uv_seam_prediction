@@ -1,15 +1,8 @@
 import torch
 
-from models.common.config import DEFAULT_THRESHOLD_VALUES
 
-
+DEFAULT_THRESHOLD_VALUES = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95)
 RECALL_TPR_LABEL = 'rec(tpr)'
-
-
-def metric_display_label(metric: str) -> str:
-    if metric == 'recall':
-        return RECALL_TPR_LABEL
-    return metric
 
 
 @torch.no_grad()
@@ -18,7 +11,6 @@ def threshold_sweep(
     labels: torch.Tensor,
     thresholds: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
 ) -> dict:
-    """Evaluate F1 across thresholds, return best threshold and full results."""
     results = []
     for t in thresholds:
         m = edge_f1(logits, labels, threshold=t)
@@ -48,7 +40,7 @@ def binary_metrics_from_probs(probs: torch.Tensor, labels: torch.Tensor, thresho
     f1 = 2 * precision * recall / max(precision + recall, 1e-8)
     accuracy = (tp + tn) / max(len(gt), 1)
     fpr = fp / max(fp + tn, 1)
-    tpr = recall  # same as recall
+    tpr = recall
 
     return {
         'f1': f1, 'precision': precision, 'recall': recall, 'accuracy': accuracy,
