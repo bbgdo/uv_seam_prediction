@@ -69,13 +69,88 @@ def best_threshold_index(
     return int(order[-1])
 
 
-def compute_threshold_metrics_fast(probs: np.ndarray, labels: np.ndarray) -> dict[str, Any]:
+def _compute_threshold_metrics_on_grid(
+    prob_arr: np.ndarray,
+    label_arr: np.ndarray,
+    threshold_decimals: int,
+) -> dict[str, Any]:
+    if threshold_decimals < 0:
+        raise ValueError('--threshold-decimals must be non-negative')
+
+    step = 10.0 ** (-threshold_decimals)
+    thresholds = np.round(np.arange(0.0, 1.0, step, dtype=np.float64), threshold_decimals)
+    thresholds = thresholds[thresholds < 1.0]
+    if thresholds.size == 0:
+        raise ValueError('threshold grid is empty after excluding threshold 1.0')
+
+    labels_bool = label_arr.astype(bool)
+    order = np.argsort(-prob_arr, kind='mergesort')
+    sorted_probs = prob_arr[order]
+    sorted_labels = labels_bool[order]
+    cumulative_pos = np.cumsum(sorted_labels, dtype=np.int64)
+
+    predicted_positive = np.searchsorted(-sorted_probs, -thresholds, side='right').astype(np.int64)
+    tp = np.zeros_like(predicted_positive, dtype=np.int64)
+    nonzero = predicted_positive > 0
+    tp[nonzero] = cumulative_pos[predicted_positive[nonzero] - 1]
+    fp = predicted_positive - tp
+
+    total = int(prob_arr.size)
+    total_pos = int(np.count_nonzero(labels_bool))
+    total_neg = total - total_pos
+    fn = total_pos - tp
+    tn = total_neg - fp
+
+    precision = safe_divide(tp.astype(np.float64), (tp + fp).astype(np.float64))
+    recall = safe_divide(tp.astype(np.float64), (tp + fn).astype(np.float64))
+    f1 = (2.0 * precision * recall) / np.maximum(precision + recall, 1e-8)
+    fpr = safe_divide(fp.astype(np.float64), (fp + tn).astype(np.float64))
+    accuracy = (tp + tn).astype(np.float64) / max(total, 1)
+
+    best_index = best_threshold_index(
+        f1=f1,
+        fpr=fpr,
+        precision=precision,
+        thresholds=thresholds,
+    )
+    best_metrics = {
+        'f1': float(f1[best_index]),
+        'precision': float(precision[best_index]),
+        'recall': float(recall[best_index]),
+        'accuracy': float(accuracy[best_index]),
+        'fpr': float(fpr[best_index]),
+        'tpr': float(recall[best_index]),
+        'tp': int(tp[best_index]),
+        'fp': int(fp[best_index]),
+        'fn': int(fn[best_index]),
+        'tn': int(tn[best_index]),
+        'threshold': float(thresholds[best_index]),
+    }
+    return {
+        'threshold': float(thresholds[best_index]),
+        'metrics': best_metrics,
+        'candidate_count': int(thresholds.size),
+        'candidate_source': (
+            f'fixed decimal threshold grid with {threshold_decimals} digit(s) after the decimal; '
+            'threshold 1.0 excluded'
+        ),
+        'tie_breaking': list(TIE_BREAKING),
+    }
+
+
+def compute_threshold_metrics_fast(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    threshold_decimals: int | None = None,
+) -> dict[str, Any]:
     prob_arr = np.asarray(probs, dtype=np.float64).reshape(-1)
     label_arr = np.asarray(labels).reshape(-1)
     if prob_arr.size == 0:
         raise ValueError('cannot search threshold on an empty validation set')
     if prob_arr.size != label_arr.size:
         raise ValueError('probabilities and labels must have the same number of elements')
+    if threshold_decimals is not None:
+        return _compute_threshold_metrics_on_grid(prob_arr, label_arr, int(threshold_decimals))
 
     labels_bool = label_arr.astype(bool)
     order = np.argsort(-prob_arr, kind='mergesort')
@@ -150,7 +225,11 @@ def compute_threshold_metrics_fast(probs: np.ndarray, labels: np.ndarray) -> dic
     }
 
 
-def exact_validation_threshold(probs: torch.Tensor, labels: torch.Tensor) -> dict[str, Any]:
+def exact_validation_threshold(
+    probs: torch.Tensor,
+    labels: torch.Tensor,
+    threshold_decimals: int | None = None,
+) -> dict[str, Any]:
     flat_probs = probs.detach().flatten().cpu().numpy()
     flat_labels = labels.detach().flatten().cpu().numpy()
-    return compute_threshold_metrics_fast(flat_probs, flat_labels)
+    return compute_threshold_metrics_fast(flat_probs, flat_labels, threshold_decimals)

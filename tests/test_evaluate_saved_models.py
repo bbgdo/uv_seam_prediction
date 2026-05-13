@@ -11,11 +11,11 @@ from tools.evaluate_saved_models import (
     aggregate_reevaluations,
     build_report_grid,
     compute_threshold_metrics_fast,
-    discover_saved_runs,
+    discover_saved_gnn_runs,
     exact_validation_threshold,
     load_reference_control_reevaluations,
 )
-from tools.utils.reeval_runs import feature_selection_from_config, load_state_dict, runtime_config_from_saved
+from tools.utils.reeval_gnn import feature_selection_from_config, load_state_dict, runtime_config_from_saved
 from tools.utils.reeval_thresholds import best_threshold_index
 
 
@@ -263,6 +263,16 @@ class EvaluateSavedModelsTests(unittest.TestCase):
         self.assertAlmostEqual(result['threshold'], 0.97, places=6)
         self.assertAlmostEqual(result['metrics']['f1'], 1.0)
 
+    def test_threshold_search_can_use_three_decimal_grid(self):
+        probs = torch.tensor([0.7364, 0.7356, 0.2])
+        labels = torch.tensor([1, 0, 0])
+
+        result = exact_validation_threshold(probs, labels, threshold_decimals=3)
+
+        self.assertEqual(result['candidate_count'], 1000)
+        self.assertAlmostEqual(result['threshold'], 0.736, places=6)
+        self.assertAlmostEqual(result['metrics']['f1'], 1.0)
+
     def test_exact_threshold_tie_breaks_by_lower_fpr(self):
         probs = torch.tensor([0.2, 0.8])
         labels = torch.tensor([0, 0])
@@ -311,7 +321,7 @@ class EvaluateSavedModelsTests(unittest.TestCase):
             splits_dir.mkdir()
             (splits_dir / 'seed_7.json').write_text('{}')
 
-            targets = discover_saved_runs(Namespace(
+            targets = discover_saved_gnn_runs(Namespace(
                 runs_root=str(root),
                 splits_dir=str(splits_dir),
                 gnn_dataset='custom_override.pt',

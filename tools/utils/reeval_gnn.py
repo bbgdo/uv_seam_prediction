@@ -14,8 +14,8 @@ from preprocessing.feature_registry import resolve_feature_selection
 from tools.utils.ablation_specs import EXPERIMENT_SPECS
 from tools.utils.ablation_splits import split_path_for_seed
 from tools.utils.json_io import read_json
-from tools.utils.reeval_common import SavedRun, metric_delta, split_identity
-from tools.utils.reeval_thresholds import exact_validation_threshold, metrics_at_threshold, threshold_table
+from tools.utils.reeval_common import SavedRun
+from tools.utils.reeval_payloads import build_reevaluation_payload
 
 
 def infer_experiment(run_dir: Path, runs_root: Path) -> str | None:
@@ -66,7 +66,7 @@ def select_dataset_path(
     return Path(dataset)
 
 
-def require_config(config: dict, run_dir: Path) -> None:
+def require_gnn_config(config: dict, run_dir: Path) -> None:
     required = ['model_name', 'in_dim', 'hidden_dim', 'num_layers', 'dropout', 'dataset', 'seed']
     missing = [key for key in required if config.get(key) is None]
     if missing:
@@ -76,7 +76,7 @@ def require_config(config: dict, run_dir: Path) -> None:
             raise ValueError(f'{run_dir / "config.json"} missing required field: skip_connections')
 
 
-def discover_saved_runs(args) -> list[SavedRun]:
+def discover_saved_gnn_runs(args) -> list[SavedRun]:
     runs_root = Path(args.runs_root)
     if not runs_root.exists():
         raise ValueError(f'--runs-root does not exist: {runs_root}')
@@ -102,7 +102,7 @@ def discover_saved_runs(args) -> list[SavedRun]:
         summary = read_json(summary_path)
         if not isinstance(config, dict) or not isinstance(summary, dict):
             raise ValueError(f'{run_dir} config.json and summary.json must contain objects')
-        require_config(config, run_dir)
+        require_gnn_config(config, run_dir)
 
         seed = parse_seed(run_dir, config, summary)
         if requested_seeds is not None and seed not in requested_seeds:
@@ -132,7 +132,7 @@ def discover_saved_runs(args) -> list[SavedRun]:
         ))
 
     if not targets:
-        raise ValueError('no matching runs with best_model.pth were found')
+        raise ValueError('no matching GNN runs with best_model.pth were found')
     return targets
 
 
@@ -186,7 +186,13 @@ def old_validation_best_metrics(run_dir: Path) -> dict | None:
     return None
 
 
-def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: list[float]) -> dict:
+def evaluate_saved_gnn_run(
+    target: SavedRun,
+    *,
+    device: torch.device,
+    report_grid: list[float],
+    threshold_decimals: int | None = None,
+) -> dict:
     config = target.config
     selection = feature_selection_from_config(config)
     runtime_config = runtime_config_from_saved(config)
@@ -213,94 +219,27 @@ def evaluate_saved_run(target: SavedRun, *, device: torch.device, report_grid: l
 
     val_logits, val_labels = collect_logits_labels(model, val, device)
     test_logits, test_labels = collect_logits_labels(model, test, device)
-    val_probs = torch.sigmoid(val_logits)
-    test_probs = torch.sigmoid(test_logits)
 
-    exact = exact_validation_threshold(val_probs, val_labels)
-    exact_threshold = float(exact['threshold'])
-    old_validation_best = old_validation_best_metrics(target.run_dir)
-    old_threshold = target.summary.get('best_validation_threshold')
-    if old_threshold is None and old_validation_best:
-        old_threshold = old_validation_best.get('threshold')
-
-    val_metrics = {
-        'threshold_0_5': metrics_at_threshold(val_probs, val_labels, 0.5),
-        'exact_val_best': exact['metrics'],
-    }
-    test_metrics = {
-        'threshold_0_5': metrics_at_threshold(test_probs, test_labels, 0.5),
-        'exact_val_best': metrics_at_threshold(test_probs, test_labels, exact_threshold),
-    }
-    if old_threshold is not None:
-        old_threshold = float(old_threshold)
-        val_metrics['old_val_best'] = metrics_at_threshold(val_probs, val_labels, old_threshold)
-        test_metrics['old_val_best'] = metrics_at_threshold(test_probs, test_labels, old_threshold)
-    else:
-        val_metrics['old_val_best'] = None
-        test_metrics['old_val_best'] = None
-
-    old_stored = {
-        'validation_val_best': old_validation_best,
-        'test_val_best': target.summary.get('test_metrics_best_validation_threshold'),
-        'test_0_5': target.summary.get('test_metrics_threshold_0_5'),
-    }
-
-    payload = {
-        'status': 'completed',
-        'run_identity': {
-            'experiment': target.experiment,
-            'seed': target.seed,
-            'run_dir': str(target.run_dir),
-        },
-        'checkpoint_path': str(target.checkpoint_path),
-        'split_path': str(target.split_path),
-        'dataset_path': str(target.dataset_path),
-        'model_family': {
-            'model_name': runtime_config.model_name,
-            'display_name': definition.display_name,
-        },
-        'feature_selection': {
+    return build_reevaluation_payload(
+        target=target,
+        model_name=runtime_config.model_name,
+        display_name=definition.display_name,
+        feature_selection={
             'feature_group': selection.feature_group,
             'feature_flags': selection.feature_flags.as_dict(),
             'feature_names': list(selection.feature_names),
         },
-        'split': {
-            'seed': split_info.get('seed'),
-            'resolution_tag': split_info.get('resolution_tag'),
-            'val_graphs': len(val),
-            'test_graphs': len(test),
-        },
-        'threshold_search': {
-            'method': 'exact_validation_f1_over_score_breakpoints',
-            'candidate_source': exact['candidate_source'],
-            'candidate_count': exact['candidate_count'],
-            'tie_breaking': exact['tie_breaking'],
-            'dense_report_grid': report_grid,
-        },
-        'old_threshold': old_threshold,
-        'exact_validation_optimal_threshold': exact_threshold,
-        'metrics': {
-            'validation': val_metrics,
-            'test': test_metrics,
-        },
-        'dense_grid': {
-            'validation': threshold_table(val_probs, val_labels, report_grid),
-            'test': threshold_table(test_probs, test_labels, report_grid),
-        },
-        'old_stored_metrics': old_stored,
-        'comparison': {
-            'delta_vs_old_stored_val_best': {
-                'validation': metric_delta(val_metrics['exact_val_best'], old_stored['validation_val_best']),
-                'test': metric_delta(test_metrics['exact_val_best'], old_stored['test_val_best']),
-            },
-            'delta_vs_0_5': {
-                'validation': metric_delta(val_metrics['exact_val_best'], val_metrics['threshold_0_5']),
-                'test': metric_delta(test_metrics['exact_val_best'], test_metrics['threshold_0_5']),
-            },
-        },
-    }
-    payload['split_identity'] = split_identity(payload)
-    return payload
+        split_info=split_info,
+        val_graphs=len(val),
+        test_graphs=len(test),
+        val_logits=val_logits,
+        val_labels=val_labels,
+        test_logits=test_logits,
+        test_labels=test_labels,
+        report_grid=report_grid,
+        threshold_decimals=threshold_decimals,
+        old_validation_best=old_validation_best_metrics(target.run_dir),
+    )
 
 
 def resolve_device(name: str) -> torch.device:
